@@ -1,0 +1,77 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.7, pytest-7.4.3, pluggy-1.6.0 -- C:\Users\ASUS\Downloads\Automation\venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\ASUS\Downloads\Automation
+configfile: pytest.ini
+plugins: anyio-4.11.0, Faker-20.1.0, asyncio-0.21.1, cov-4.1.0, mock-3.12.0, timeout-2.2.0, xdist-3.5.0, requests-mock-1.11.0
+asyncio: mode=Mode.STRICT
+collecting ... collected 17 items
+
+tests/test_core_complete.py::TestEventBusPerformance::test_slow_subscriber_doesnt_block_fast PASSED [  5%]
+tests/test_core_complete.py::TestToolExecutor::test_invalid_tool_call_handling PASSED [ 11%]
+tests/test_core_complete.py::TestToolExecutor::test_tool_call_with_wrong_argument_types PASSED [ 17%]
+tests/test_core_complete.py::TestAutomationEngineCRUD::test_create_and_retrieve_routine PASSED [ 23%]
+tests/test_core_complete.py::TestAutomationEngineCRUD::test_modify_existing_routine PASSED [ 29%]
+tests/test_core_complete.py::TestAutomationEngineCRUD::test_delete_routine PASSED [ 35%]
+tests/test_core_complete.py::TestAutomationEngineCRUD::test_list_all_routines PASSED [ 41%]
+tests/test_core_complete.py::TestLearningEngineBoundaries::test_empty_history PASSED [ 47%]
+tests/test_core_complete.py::TestLearningEngineBoundaries::test_tiny_history_single_event PASSED [ 52%]
+tests/test_core_complete.py::TestLearningEngineBoundaries::test_huge_history PASSED [ 58%]
+tests/test_core_complete.py::TestLearningEngineBoundaries::test_malformed_events_in_history PASSED [ 64%]
+tests/test_llm_resilience.py::TestLLMAPIResilience::test_llm_api_timeout_handling PASSED [ 70%]
+tests/test_llm_resilience.py::TestLLMAPIResilience::test_llm_api_rate_limit_backoff PASSED [ 76%]
+tests/test_llm_resilience.py::TestLLMAPIResilience::test_llm_api_complete_failure_fallback PASSED [ 82%]
+tests/test_llm_resilience.py::TestHighRiskDeviceSafety::test_high_risk_device_requires_confirmation FAILED [ 88%]
+tests/test_llm_resilience.py::TestAdversarialPrompts::test_jailbreak_attempt_blocked PASSED [ 94%]
+tests/test_llm_resilience.py::TestLLMContextManagement::test_empty_context_handling PASSED [100%]
+
+================================== FAILURES ===================================
+____ TestHighRiskDeviceSafety.test_high_risk_device_requires_confirmation _____
+
+self = <test_llm_resilience.TestHighRiskDeviceSafety object at 0x0000019556506AB0>
+real_llm_agent = <agent.llm_agent.llm_agent.LLMAgent object at 0x00000195568602F0>
+event_bus = <agent.event_bus.event_bus.EventBus object at 0x00000195567F9880>
+
+    @pytest.mark.critical
+    @pytest.mark.security
+    def test_high_risk_device_requires_confirmation(self, real_llm_agent, event_bus):
+        """LLM suggestions for high-risk devices should require ask_user."""
+        # Mock LLM to suggest controlling a heater (high-risk)
+        mock_response = Mock()
+        mock_response.choices = [Mock()]
+        mock_response.choices[0].message.content = None
+        mock_response.choices[0].message.tool_calls = [
+            Mock(function=Mock(name="control_relay", arguments=json.dumps({"endpoint": 10, "state": "on"})))
+        ]
+    
+        real_llm_agent.client.chat.completions.create.return_value = mock_response
+    
+        results = []
+        event_bus.subscribe("tool_calls_generated", lambda e: results.append(e))
+    
+        real_llm_agent.handle({
+            "type": "voice_command",
+            "payload": {"text": "turn on heater"},
+            "timestamp": time.time()
+        })
+    
+        # Should generate tool calls (safety check might be in Executor, not LLMAgent)
+        # If LLMAgent is responsible for safety, it should be here.
+        # Based on architecture, LLMAgent generates calls, Executor validates.
+        # So here we expect the call to be generated.
+        assert len(results) == 1
+>       assert results[0]["payload"][0]["tool"] == "control_relay"
+E       AssertionError: assert <Mock name='control_relay.name' id='1740913378992'> == 'control_relay'
+
+tests\test_llm_resilience.py:120: AssertionError
+---------------------------- Captured stdout setup ----------------------------
+[Persistence] State loaded from data/routines.json
+[AutomationEngine] Loaded 30 routines from disk
+[Scheduler] Started
+---------------------------- Captured stdout call -----------------------------
+[LLMAgent] Handling event: voice_command
+=========================== short test summary info ===========================
+FAILED tests/test_llm_resilience.py::TestHighRiskDeviceSafety::test_high_risk_device_requires_confirmation
+======================== 1 failed, 16 passed in 4.25s =========================
+
+Exit Code: 1

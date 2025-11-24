@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Env
+venv/
+env/
+.env
+
+# Testing
+.pytest_cache/
+.benchmarks/
+.coverage
+htmlcov/
+*.tmp
+*.backup
+
+# Runtime Data
+data/state.json
+data/routines.json
+data/*.backup
+data/*.tmp
+logs/
+
+# IDEs
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Reports (Optional - keep if you want to commit reports)
+# test_results.txt
+# test_report.md
+# system_implementation_report.md

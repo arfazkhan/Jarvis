@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Home Agent Dashboard</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 20px;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 25px;
+            border-radius: 16px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 12px 48px rgba(0, 0, 0, 0.15);
+        }
+
+        .card.full-width {
+            grid-column: 1 / -1;
+        }
+
+        h2 {
+            color: #667eea;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        h2:before {
+            content: '●';
+            font-size: 0.6em;
+        }
+
+        .device {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px;
+            margin-bottom: 10px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+
+        .device:last-child {
+            margin-bottom: 0;
+        }
+
+        .status-on {
+            color: #10b981;
+            font-weight: bold;
+            font-size: 0.9em;
+        }
+
+        .status-off {
+            color: #9ca3af;
+            font-size: 0.9em;
+        }
+
+        .log-entry {
+            font-family: 'Courier New', monospace;
+            font-size: 0.85em;
+            padding: 8px;
+            margin-bottom: 8px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            border-left: 3px solid #667eea;
+        }
+
+        .log-entry strong {
+            color: #667eea;
+        }
+
+        .controls {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            gap: 10px;
+        }
+
+        button {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            font-weight: 600;
+            font-size: 0.9em;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        button.secondary {
+            background: linear-gradient(135deg, #6c757d 0%, #495057 100%);
+            box-shadow: 0 4px 12px rgba(108, 117, 125, 0.3);
+        }
+
+        button.green {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        }
+
+        button.red {
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+        }
+
+        .insight-card {
+            background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            border-left: 4px solid #f59e0b;
+        }
+
+        .insight-card h4 {
+            color: #92400e;
+            margin-bottom: 8px;
+            font-size: 1em;
+        }
+
+        .insight-card p {
+            color: #78350f;
+            font-size: 0.9em;
+            line-height: 1.5;
+        }
+
+        .anomaly-alert {
+            background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            border-left: 4px solid #ef4444;
+        }
+
+        .anomaly-alert .severity-high {
+            color: #dc2626;
+            font-weight: bold;
+        }
+
+        .anomaly-alert .severity-medium {
+            color: #f59e0b;
+            font-weight: bold;
+        }
+
+        .anomaly-alert .severity-low {
+            color: #6b7280;
+        }
+
+        .trend-badge {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 0.85em;
+            font-weight: 600;
+            margin: 5px 5px 5px 0;
+        }
+
+        .trend-significant {
+            background: #fee2e2;
+            color: #dc2626;
+        }
+
+        .trend-normal {
+            background: #dbeafe;
+            color: #2563eb;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #9ca3af;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 30px;
+            color: #9ca3af;
+            font-style: italic;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="header">
+        <h1>🏠 Home Agent Intelligence Dashboard</h1>
+        <p>AI-Powered Smart Home Automation with Pattern Learning</p>
+    </div>
+
+    <div class="container">
+        <!-- Devices Card -->
+        <div class="card">
+            <h2>Connected Devices</h2>
+            <div id="devices-list">Loading...</div>
+        </div>
+
+        <!-- Simulation Controls -->
+        <div class="card">
+            <h2>Simulation & Controls</h2>
+            <div class="controls">
+                <button onclick="runScenario('morning')">Morning</button>
+                <button onclick="runScenario('leaving')">Leaving</button>
+                <button onclick="runScenario('evening')">Evening</button>
+                <button class="secondary" onclick="injectEvent('motion')">Motion</button>
+                <button class="green" onclick="generateHistory()">Gen Data</button>
+                <button class="red" onclick="triggerLearning()">Learn Now</button>
+            </div>
+        </div>
+
+        <!-- Pattern Insights -->
+        <div class="card">
+            <h2>Pattern Insights</h2>
+            <div id="patterns-list">
+                <div class="loading">Analyzing patterns...</div>
+            </div>
+        </div>
+
+        <!-- Anomaly Alerts -->
+        <div class="card">
+            <h2>Anomaly Alerts</h2>
+            <div id="anomalies-list">
+                <div class="loading">Checking for anomalies...</div>
+            </div>
+        </div>
+
+        <!-- Habit Drift Trends -->
+        <div class="card full-width">
+            <h2>Habit Drift Trends</h2>
+            <div id="trends-display">
+                <div class="loading">Detecting habits...</div>
+            </div>
+        </div>
+
+        <!-- Recent History -->
+        <div class="card full-width">
+            <h2>Recent Activity</h2>
+            <div id="history-list">Loading...</div>
+        </div>
+    </div>
+
+    <script>
+        function updateState() {
+            fetch('/api/state')
+                .then(r => r.json())
+                .then(data => {
+                    // Update Devices
+                    const devicesDiv = document.getElementById('devices-list');
+                    let devicesHtml = '';
+                    for (const [devId, endpoints] of Object.entries(data.devices)) {
+                        for (const [ep, state] of Object.entries(endpoints)) {
+                            devicesHtml += `
+                                <div class="device">
+                                    <span><strong>${devId}</strong> EP ${ep}</span>
+                                    <span class="status-${state}">${state.toUpperCase()}</span>
+                                </div>
+                            `;
+                        }
+                    }
+                    devicesDiv.innerHTML = devicesHtml || '<div class="empty-state">No devices active</div>';
+
+                    // Update History
+                    const historyDiv = document.getElementById('history-list');
+                    let historyHtml = '';
+                    const history = [...data.history].reverse().slice(0, 15);
+                    for (const event of history) {
+                        const time = new Date(event.timestamp * 1000).toLocaleTimeString();
+                        let details = JSON.stringify(event.payload);
+                        if (event.type === 'tool_calls_generated') {
+                            details = event.payload.map(tc => `${tc.tool}(${JSON.stringify(tc.args)})`).join(', ');
+                        }
+                        historyHtml += `
+                            <div class="log-entry">
+                                <strong>${time}</strong> [${event.type}] ${details}
+                            </div>
+                        `;
+                    }
+                    historyDiv.innerHTML = historyHtml || '<div class="empty-state">No history</div>';
+                });
+        }
+
+        function updatePatterns() {
+            fetch('/api/patterns')
+                .then(r => r.json())
+                .then(data => {
+                    const patternsDiv = document.getElementById('patterns-list');
+                    if (data.error) {
+                        patternsDiv.innerHTML = '<div class="empty-state">Learning engine not ready</div>';
+                        return;
+                    }
+
+                    const patterns = data.patterns || [];
+                    if (patterns.length === 0) {
+                        patternsDiv.innerHTML = '<div class="empty-state">No patterns detected yet</div>';
+                        return;
+                    }
+
+                    let html = '';
+                    patterns.forEach((pattern, i) => {
+                        const duration = Math.round(pattern.duration_seconds / 60);
+                        html += `
+                            <div class="insight-card">
+                                <h4>Pattern Cluster #${i + 1}</h4>
+                                <p><strong>${pattern.event_count} events</strong> over ${duration} minutes</p>
+                                <p style="font-size: 0.8em; margin-top: 5px;">Types: ${pattern.event_types.join(', ')}</p>
+                            </div>
+                        `;
+                    });
+                    patternsDiv.innerHTML = html;
+                })
+                .catch(err => console.error('Pattern fetch error:', err));
+        }
+
+        function updateAnomalies() {
+            fetch('/api/anomalies')
+                .then(r => r.json())
+                .then(data => {
+                    const anomaliesDiv = document.getElementById('anomalies-list');
+                    if (data.error) {
+                        anomaliesDiv.innerHTML = '<div class="empty-state">Learning engine not ready</div>';
+                        return;
+                    }
+
+                    const anomalies = data.anomalies || [];
+                    if (anomalies.length === 0) {
+                        anomaliesDiv.innerHTML = '<div class="empty-state">✅ No anomalies detected</div>';
+                        return;
+                    }
+
+                    let html = '';
+                    anomalies.forEach(anomaly => {
+                        html += `
+                            <div class="anomaly-alert">
+                                <span class="severity-${anomaly.severity}">[${anomaly.severity.toUpperCase()}]</span>
+                                <p style="margin-top: 5px;">${anomaly.description}</p>
+                            </div>
+                        `;
+                    });
+                    anomaliesDiv.innerHTML = html;
+                })
+                .catch(err => console.error('Anomaly fetch error:', err));
+        }
+
+        function updateTrends() {
+            fetch('/api/trends')
+                .then(r => r.json())
+                .then(data => {
+                    const trendsDiv = document.getElementById('trends-display');
+                    if (data.error) {
+                        trendsDiv.innerHTML = '<div class="empty-state">Learning engine not ready</div>';
+                        return;
+                    }
+
+                    const wake = data.wake_time;
+                    const bed = data.bedtime;
+
+                    let html = '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">';
+
+                    // Wake Time Trend
+                    if (wake && wake.current_avg) {
+                        const wakeHour = Math.floor(wake.current_avg);
+                        const wakeMin = Math.round((wake.current_avg - wakeHour) * 60);
+                        const driftMin = Math.round(Math.abs(wake.drift_hours) * 60);
+                        const significant = wake.significant ? 'trend-significant' : 'trend-normal';
+
+                        html += `
+                            <div class="insight-card">
+                                <h4>⏰ Wake Time Pattern</h4>
+                                <p><strong>Average: ${wakeHour}:${String(wakeMin).padStart(2, '0')}</strong></p>
+                                <span class="${significant}">
+                                    ${wake.direction.toUpperCase()} by ${driftMin} min
+                                </span>
+                            </div>
+                        `;
+                    } else {
+                        html += '<div class="empty-state">Not enough wake time data</div>';
+                    }
+
+                    // Bedtime Trend
+                    if (bed && bed.current_avg) {
+                        const bedHour = Math.floor(bed.current_avg);
+                        const bedMin = Math.round((bed.current_avg - bedHour) * 60);
+                        const driftMin = Math.round(Math.abs(bed.drift_hours) * 60);
+                        const significant = bed.significant ? 'trend-significant' : 'trend-normal';
+
+                        html += `
+                            <div class="insight-card">
+                                <h4>🌙 Bedtime Pattern</h4>
+                                <p><strong>Average: ${bedHour}:${String(bedMin).padStart(2, '0')}</strong></p>
+                                <span class="${significant}">
+                                    ${bed.direction.toUpperCase()} by ${driftMin} min
+                                </span>
+                            </div>
+                        `;
+                    } else {
+                        html += '<div class="empty-state">Not enough bedtime data</div>';
+                    }
+
+                    html += '</div>';
+                    trendsDiv.innerHTML = html;
+                })
+                .catch(err => console.error('Trends fetch error:', err));
+        }
+
+        function runScenario(name) {
+            fetch('/api/simulate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ scenario: name })
+            });
+        }
+
+        function injectEvent(type) {
+            const event = {
+                type: type === 'motion' ? 'presence_update' : 'user_action',
+                payload: { location: 'living_room', value: 'detected' },
+                timestamp: Date.now() / 1000
+            };
+            fetch('/api/event', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(event)
+            });
+        }
+
+        function generateHistory() {
+            fetch('/api/generate_history', { method: 'POST' });
+        }
+
+        function triggerLearning() {
+            fetch('/api/trigger_learning', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    console.log('Learning triggered:', data);
+                    // Refresh insights after learning
+                    setTimeout(() => {
+                        updatePatterns();
+                        updateAnomalies();
+                        updateTrends();
+                    }, 1000);
+                });
+        }
+
+        // Poll state every 2 seconds
+        setInterval(updateState, 2000);
+        updateState();
+
+        // Update insights every 5 seconds
+        setInterval(() => {
+            updatePatterns();
+            updateAnomalies();
+            updateTrends();
+        }, 5000);
+
+        // Initial load
+        updatePatterns();
+        updateAnomalies();
+        updateTrends();
+    </script>
+</body>
+
+</html>
