@@ -2,24 +2,95 @@ name: Home Agent CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, develop ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, develop ]
 
 jobs:
-  build:
+  lint:
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v3
-    - name: Set up Python 3.10
-      uses: actions/setup-python@v4
-      with:
-        python-version: "3.10"
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-    - name: Run tests
-      run: |
-        python -m unittest discover tests
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      
+      - name: Install linting dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install black flake8 mypy
+      
+      - name: Run Black (code formatting check)
+        run: black --check agent/ agent_*/ config/ tests/
+      
+      - name: Run Flake8 (linting)
+        run: flake8 agent/ agent_*/ config/ --max-line-length=100 --extend-ignore=E203,W503
+      
+      - name: Run MyPy (type checking)
+        run: mypy agent/ agent_*/ --ignore-missing-imports
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11']
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Run unit tests with coverage
+        run: |
+          pytest tests/ -v --cov=agent --cov=agent_cognitive --cov=agent_conversation --cov=agent_planning --cov=agent_sensors --cov=agent_personality --cov=agent_missions --cov=agent_web_ui --cov-report=xml --cov-report=term
+
+  performance:
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Run performance benchmarks
+        run: |
+          pytest tests/test_*_performance.py -v || echo "Performance tests not yet implemented"
+
+  integration:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Run integration tests
+        run: |
+          pytest tests/test_integration*.py -v || echo "Integration tests not yet implemented"

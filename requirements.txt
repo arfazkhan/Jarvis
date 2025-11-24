@@ -2,16 +2,57 @@ groq
 openai
 pydantic
 python-dotenv
-flask
+requests
 
-# Testing dependencies
-pytest==7.4.3
-pytest-asyncio==0.21.1
-pytest-cov==4.1.0
+# Phase 1: Cognitive Layer (Memory + Prediction)
+faiss-cpu                    # Vector similarity search
+sentence-transformers        # Text embeddings
+chromadb                     # Alternative vector store
+numpy                        # Numerical operations
+scikit-learn                 # ML utilities
+
+# Phase 2: Natural Interaction (Conversation + Voice)
+openai-whisper              # Speech-to-text (local)
+pyttsx3                     # Text-to-speech (local)
+textblob                    # Sentiment analysis
+nltk                        # NLP utilities
+SpeechRecognition           # Voice recognition abstraction
+
+# Phase 3: Autonomous Planning (Multi-step Execution)
+networkx                    # Graph operations for dependency management
+graphviz                    # Plan visualization
+# pydantic is already listed as a core dependency, but also relevant here for data validation
+
+# Phase 4: Sensor Fusion (Perception)
+scipy                       # Scientific computing
+filterpy                    # Bayesian filters (Kalman, particle filters)
+pandas                      # Data manipulation for sensors
+
+# Phase 5: Personality (Emotional AI)
+transformers                # Advanced sentiment models
+
+# Phase 6: Missions (Long-running Autonomy)
+apscheduler                 # Mission scheduling
+python-crontab              # Cron-style scheduling
+croniter==2.0.1             # Existing croniter dependency
+
+# Phase 7: Web UI (Reasoning Console)
+flask                       # Web framework
+flask-cors                  # CORS support
+flask-socketio              # Real-time updates
+plotly                      # Interactive visualizations
+dash                        # Dashboard framework
+
+# Testing & Quality
+pytest==7.4.3               # Testing framework
+pytest-cov==4.1.0           # Coverage reporting
+pytest-asyncio==0.21.1      # Async testing
+black                       # Code formatting
+flake8                      # Linting
+mypy                        # Type checking
 pytest-xdist==3.5.0
 pytest-timeout==2.2.0
 pytest-mock==3.12.0
 requests-mock==1.11.0
 faker==20.1.0
-psutil==5.9.6
 croniter==2.0.1
