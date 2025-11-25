@@ -1,0 +1,27 @@
+# Heavy ML/AI packages - Install separately when needed
+# These are LARGE downloads and can take 5-10 minutes
+
+# Phase 1: Cognitive Layer (~ 500 MB)
+faiss-cpu
+sentence-transformers
+chromadb
+
+# Phase 2: Conversation (~ 1.5 GB for Whisper!)
+openai-whisper
+pyttsx3
+textblob
+nltk
+SpeechRecognition
+
+# Phase 3: Planning
+graphviz
+
+# Phase 4: Sensors
+filterpy
+
+# Phase 5: Personality (~ 2+ GB for full transformers!)
+transformers
+
+# Phase 7: Web UI
+plotly
+dash

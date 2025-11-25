@@ -1,0 +1,20 @@
+{
+  "directed": true,
+  "multigraph": true,
+  "graph": {},
+  "nodes": [
+    {
+      "type": "location",
+      "id": "home"
+    },
+    {
+      "type": "unknown",
+      "id": "user"
+    },
+    {
+      "type": "unknown",
+      "id": "cooking"
+    }
+  ],
+  "links": []
+}
