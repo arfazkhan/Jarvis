@@ -1,0 +1,22 @@
+
+[Test] State Hysteresis Stability
+DEBUG: Current=None, Raw=sleeping, Now=2000.0
+DEBUG: Current=sleeping, Raw=None, Now=1764178083.7616932
+DEBUG: Current=None, Raw=snacking, Now=2010.0
+F
+======================================================================
+FAIL: test_state_hysteresis_prevents_oscillation (tests.test_phase4_extra.test_state_hysteresis_stability.TestStateHysteresisStability.test_state_hysteresis_prevents_oscillation)
+Scenario:
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\ASUS\Downloads\Automation\tests\test_phase4_extra\test_state_hysteresis_stability.py", line 58, in test_state_hysteresis_prevents_oscillation
+    self.assertEqual(new_state, "sleeping")
+AssertionError: 'snacking' != 'sleeping'
+- snacking
++ sleeping
+
+
+----------------------------------------------------------------------
+Ran 1 test in 0.005s
+
+FAILED (failures=1)

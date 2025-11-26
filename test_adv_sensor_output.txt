@@ -1,0 +1,33 @@
+
+[Test] Quiet User
+✅ Quiet user detected via lights
+.
+[Test] Long Inactivity
+✅ Long inactivity detected as Away
+.
+[Test] Stress Ingestion
+Ingested 1000 events in 0.0118s
+✅ Stress test passed
+.
+[Test] Two Room Conflict
+✅ Active room overrides sleep state in activity hint
+.
+[Test] WiFi Flapping
+✅ WiFi Flapping handled (Grace Period)
+F
+======================================================================
+FAIL: test_wifi_flapping_behavior (tests.test_phase4_advanced.TestPhase4Advanced.test_wifi_flapping_behavior)
+Test WiFi disconnect grace period
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\ASUS\Downloads\Automation\tests\test_phase4_advanced.py", line 49, in test_wifi_flapping_behavior
+    self.assertEqual(situation.home_presence.state, "unknown")
+AssertionError: 'home' != 'unknown'
+- home
++ unknown
+
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.025s
+
+FAILED (failures=1)

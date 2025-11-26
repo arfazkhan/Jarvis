@@ -1,0 +1,36 @@
+
+[Test] Scenario 1: Normal Evening
+F
+[Test] Scenario 2: Going to Sleep
+✅ Scenario 2 Passed
+.
+[Test] Scenario 3: Nobody Home
+✅ Scenario 3 Passed
+.
+[Test] Scenario 4: Midnight Snack
+F
+======================================================================
+FAIL: test_scenario_1_normal_evening (tests.test_phase4_end_to_end.TestPhase4EndToEnd.test_scenario_1_normal_evening)
+Scenario 1: Normal Evening
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\ASUS\Downloads\Automation\tests\test_phase4_end_to_end.py", line 99, in test_scenario_1_normal_evening
+    self.assertTrue(situation.room_occupancy["living_room"].is_occupied)
+AssertionError: False is not true
+
+======================================================================
+FAIL: test_scenario_4_midnight_snack (tests.test_phase4_end_to_end.TestPhase4EndToEnd.test_scenario_4_midnight_snack)
+Scenario 4: Midnight Snack
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\ASUS\Downloads\Automation\tests\test_phase4_end_to_end.py", line 211, in test_scenario_4_midnight_snack
+    self.assertEqual(situation.activity_hint, "snacking")
+AssertionError: 'sleeping' != 'snacking'
+- sleeping
++ snacking
+
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.011s
+
+FAILED (failures=2)
