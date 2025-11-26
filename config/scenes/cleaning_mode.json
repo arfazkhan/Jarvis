@@ -1,0 +1,26 @@
+{
+    "id": "cleaning_mode",
+    "name": "Cleaning Mode",
+    "category": "utility",
+    "tags": [
+        "clean",
+        "bright",
+        "utility"
+    ],
+    "conditions": {},
+    "targets": [
+        {
+            "type": "lighting",
+            "intent": {
+                "brightness": 1.0,
+                "color_temp": "cool"
+            }
+        },
+        {
+            "type": "climate",
+            "intent": {
+                "temperature": 22
+            }
+        }
+    ]
+}

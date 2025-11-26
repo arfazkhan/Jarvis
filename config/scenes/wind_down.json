@@ -1,0 +1,41 @@
+{
+    "id": "wind_down",
+    "name": "Wind Down",
+    "category": "sleep",
+    "tags": [
+        "calm",
+        "sleep",
+        "night",
+        "relax",
+        "soft",
+        "dim"
+    ],
+    "conditions": {
+        "time_range": [
+            "21:00",
+            "03:00"
+        ]
+    },
+    "targets": [
+        {
+            "type": "lighting",
+            "intent": {
+                "brightness": 0.05,
+                "color_temp": "warm"
+            }
+        },
+        {
+            "type": "climate",
+            "intent": {
+                "temperature": 24
+            }
+        },
+        {
+            "type": "media",
+            "intent": {
+                "playlist": "sleep",
+                "volume": 0.1
+            }
+        }
+    ]
+}

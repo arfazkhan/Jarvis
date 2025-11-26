@@ -1,0 +1,41 @@
+{
+    "id": "romantic_dinner",
+    "name": "Romantic Dinner",
+    "category": "mood",
+    "tags": [
+        "romantic",
+        "intimate",
+        "warm",
+        "soft",
+        "date"
+    ],
+    "conditions": {
+        "time_range": [
+            "18:00",
+            "23:00"
+        ],
+        "min_presence": 2
+    },
+    "targets": [
+        {
+            "type": "lighting",
+            "intent": {
+                "brightness": 0.2,
+                "color_temp": "warm"
+            }
+        },
+        {
+            "type": "media",
+            "intent": {
+                "playlist": "romantic",
+                "volume": 0.25
+            }
+        },
+        {
+            "type": "climate",
+            "intent": {
+                "temperature": 25
+            }
+        }
+    ]
+}

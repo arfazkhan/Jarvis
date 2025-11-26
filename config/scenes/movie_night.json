@@ -1,0 +1,40 @@
+{
+    "id": "movie_night",
+    "name": "Movie Night",
+    "category": "entertainment",
+    "tags": [
+        "movie",
+        "cinema",
+        "dark",
+        "immersive"
+    ],
+    "conditions": {
+        "time_range": [
+            "17:00",
+            "23:59"
+        ],
+        "min_presence": 1
+    },
+    "targets": [
+        {
+            "type": "lighting",
+            "intent": {
+                "brightness": 0.1,
+                "color_temp": "warm"
+            }
+        },
+        {
+            "type": "media",
+            "intent": {
+                "mode": "movie",
+                "volume": 0.5
+            }
+        },
+        {
+            "type": "curtains",
+            "intent": {
+                "position": "closed"
+            }
+        }
+    ]
+}

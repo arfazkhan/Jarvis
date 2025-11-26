@@ -1,0 +1,28 @@
+
+[Test] Adaptive Planning
+✅ Adapted brightness from 80 to 30
+.
+[Test] Feedback Loop (Correction)
+DEBUG: FeedbackLoop received action_execution: {'type': 'action_execution', 'payload': {'status': 'completed', 'action': {'action': 'set_light', 'params': {'device': 'light_living', 'brightness': 50}}}}
+DEBUG: FeedbackLoop received state_change: {'type': 'state_change', 'payload': {'source': 'user', 'device_id': 'light_living', 'attribute': 'brightness', 'value': 20}}
+DEBUG: CorrectionDetector checking event: {'type': 'state_change', 'payload': {'source': 'user', 'device_id': 'light_living', 'attribute': 'brightness', 'value': 20}}
+DEBUG: Checking against 1 recent actions
+DEBUG: Comparing with agent action: {'status': 'completed', 'action': {'action': 'set_light', 'params': {'device': 'light_living', 'brightness': 50}}}
+DEBUG: Learned pref: None
+F
+[Test] Preference Storage
+✅ Stored and retrieved preference
+.
+======================================================================
+FAIL: test_feedback_loop_correction (__main__.TestPhase3Sprint3.test_feedback_loop_correction)
+Verify learning from user correction
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\ASUS\Downloads\Automation\test_phase3_sprint3_root.py", line 99, in test_feedback_loop_correction
+    self.assertIsNotNone(pref, "Preference was not learned (None)")
+AssertionError: unexpectedly None : Preference was not learned (None)
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.028s
+
+FAILED (failures=1)

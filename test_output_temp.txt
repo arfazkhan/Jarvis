@@ -1,0 +1,34 @@
+DEBUG: Entering setUp
+DEBUG: Init EventBus
+DEBUG: Init PreferenceStore
+DEBUG: Init Updater
+DEBUG: Init AdaptiveEngine
+DEBUG: Init FeedbackLoop
+DEBUG: setUp Complete
+
+[Test] Preference Storage
+DEBUG: Test Failed: no such table: preferences
+Traceback (most recent call last):
+  File "C:\Users\ASUS\Downloads\Automation\test_temp.py", line 31, in test_preference_storage
+    self.store.set("lighting", "brightness", 40, 0.8)
+  File "C:\Users\ASUS\Downloads\Automation\agent_preferences\preference_store.py", line 70, in set
+    cursor.execute("""
+sqlite3.OperationalError: no such table: preferences
+E
+======================================================================
+ERROR: test_preference_storage (__main__.TestTemp.test_preference_storage)
+Verify we can store and retrieve preferences
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\ASUS\Downloads\Automation\test_temp.py", line 42, in test_preference_storage
+    raise e
+  File "C:\Users\ASUS\Downloads\Automation\test_temp.py", line 31, in test_preference_storage
+    self.store.set("lighting", "brightness", 40, 0.8)
+  File "C:\Users\ASUS\Downloads\Automation\agent_preferences\preference_store.py", line 70, in set
+    cursor.execute("""
+sqlite3.OperationalError: no such table: preferences
+
+----------------------------------------------------------------------
+Ran 1 test in 0.018s
+
+FAILED (errors=1)

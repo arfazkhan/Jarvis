@@ -1,0 +1,41 @@
+{
+    "id": "work_focus",
+    "name": "Work Focus",
+    "category": "productivity",
+    "tags": [
+        "work",
+        "focus",
+        "study",
+        "bright",
+        "day",
+        "desk"
+    ],
+    "conditions": {
+        "time_range": [
+            "07:00",
+            "22:00"
+        ]
+    },
+    "targets": [
+        {
+            "type": "lighting",
+            "intent": {
+                "brightness": 0.9,
+                "color_temp": "cool"
+            }
+        },
+        {
+            "type": "climate",
+            "intent": {
+                "temperature": 23
+            }
+        },
+        {
+            "type": "media",
+            "intent": {
+                "playlist": "focus",
+                "volume": 0.2
+            }
+        }
+    ]
+}

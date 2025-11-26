@@ -1,0 +1,43 @@
+{
+    "id": "cozy_evening",
+    "name": "Cozy Evening",
+    "category": "mood",
+    "tags": [
+        "cozy",
+        "warm",
+        "relax",
+        "evening",
+        "dim",
+        "comfortable"
+    ],
+    "conditions": {
+        "time_range": [
+            "18:00",
+            "23:59"
+        ],
+        "min_presence": 1
+    },
+    "targets": [
+        {
+            "type": "lighting",
+            "intent": {
+                "brightness": 0.3,
+                "color_temp": "warm"
+            }
+        },
+        {
+            "type": "climate",
+            "intent": {
+                "mode": "cool",
+                "temperature": 25
+            }
+        },
+        {
+            "type": "media",
+            "intent": {
+                "playlist": "chill",
+                "volume": 0.3
+            }
+        }
+    ]
+}

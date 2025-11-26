@@ -1,0 +1,28 @@
+{
+    "id": "rainy_day",
+    "name": "Rainy Day",
+    "category": "mood",
+    "tags": [
+        "rain",
+        "cozy",
+        "soft",
+        "snug"
+    ],
+    "conditions": {},
+    "targets": [
+        {
+            "type": "lighting",
+            "intent": {
+                "brightness": 0.4,
+                "color_temp": "warm"
+            }
+        },
+        {
+            "type": "media",
+            "intent": {
+                "playlist": "rainy",
+                "volume": 0.25
+            }
+        }
+    ]
+}
