@@ -1,0 +1,11 @@
+tone_rules:
+  # Rules for rewriting text based on emotion/persona
+  # This is a placeholder for Sprint 2
+  neutral:
+    modifiers: ["concise", "direct"]
+  
+  stressed:
+    modifiers: ["calm", "reassuring", "brief"]
+    
+  tired:
+    modifiers: ["soft", "gentle", "quiet"]

@@ -1,0 +1,18 @@
+safety_blocks:
+  # Phrases or topics to block or redirect
+  blocked_topics:
+    - "self-harm"
+    - "suicide"
+    - "medical diagnosis"
+    - "financial advice"
+    - "legal advice"
+    
+  blocked_phrases:
+    - "I love you"
+    - "I need you"
+    - "You are my everything"
+    - "I am sentient"
+    
+  redirect_messages:
+    medical: "I'm not able to help with medical issues. Please consult a professional."
+    mental_health: "I'm not equipped to help with this. Please reach out to a professional or a trusted person."
