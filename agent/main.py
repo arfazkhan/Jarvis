@@ -115,10 +115,13 @@ def main():
     interaction_loop = InteractionLoop(event_bus, dialogue_manager)
     logger.info("✅ Dialogue System & Interaction Loop initialized")
     
-    # 9. Cognitive Loop (The Brain)
-    cognitive_loop = CognitiveLoop(event_bus)
-    cognitive_loop.start()
-    logger.info("✅ Cognitive Loop started")
+    # 9. Unified Cognitive Loop (The Meta-Agent)
+    from agent.agent_cognitive.meta_agent import MetaAgent
+    # We pass safety_validator=None for now as it's not yet fully decoupled, 
+    # but MetaAgent is designed to accept it.
+    meta_agent = MetaAgent(event_bus, state_engine, mission_manager, safety_validator=None)
+    meta_agent.start()
+    logger.info("✅ MetaAgent (Unified Cognitive Loop) started")
     
     # 10. Web Dashboard
     try:
@@ -148,7 +151,7 @@ def main():
             
     except KeyboardInterrupt:
         logger.info("🛑 ARVIS stopping...")
-        cognitive_loop.stop()
+        meta_agent.stop()
 
 if __name__ == "__main__":
     main()
