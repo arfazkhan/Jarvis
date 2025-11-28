@@ -386,6 +386,31 @@ class MissionExecutor:
 
         await self.start_execution(mission_id, plan)
 
+    async def recover_active_missions(self):
+        """
+        Recover and resume any missions that were executing before shutdown.
+        """
+        print("🔍 Checking for interrupted missions...")
+        active_missions = self.store.list_missions(status=MissionStatus.EXECUTING)
+        
+        count = 0
+        for mission in active_missions:
+            if mission.mission_id not in self.active_states:
+                print(f"♻️ Recovering interrupted mission: {mission.mission_id}")
+                # We assume it was interrupted, so we resume it.
+                # Ideally, we might want to pause it first to let user decide, 
+                # but for resilience we'll auto-resume.
+                try:
+                    await self.resume_execution(mission.mission_id)
+                    count += 1
+                except Exception as e:
+                    print(f"❌ Failed to recover mission {mission.mission_id}: {e}")
+        
+        if count > 0:
+            print(f"✅ Recovered {count} interrupted missions")
+        else:
+            print("✅ No interrupted missions found")
+
     def _run_async(self, coro):
         """Helper to run coroutine"""
         try:

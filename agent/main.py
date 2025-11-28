@@ -112,6 +112,33 @@ def main():
         planner=mission_planner
     )
     logger.info("✅ Mission Control initialized")
+
+    # 7.5 Recover Interrupted Missions
+    # We run this in the background or wait for it? 
+    # Since it's async, we should probably schedule it on the event loop if we had one running,
+    # but main.py is synchronous until the end.
+    # However, MissionExecutor._run_async handles task creation if loop exists.
+    # But here we don't have a loop yet? 
+    # Actually, we likely need to start a loop or rely on the fact that other components might start one.
+    # For now, let's just log that we would do it, or try to schedule it.
+    # Wait, `InteractionLoop` or `CognitiveLoop` might use threads.
+    # Let's try to run it if we can, or rely on a startup event.
+    # Better approach: Publish a "system_started" event and let MissionExecutor handle it?
+    # Or just call it and let it fail gracefully if no loop.
+    # But MissionExecutor._run_async catches RuntimeError.
+    
+    # Let's assume we want to trigger it. 
+    # Since we are in main(), we can't await. 
+    # We'll create a startup task.
+    def startup_recovery():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(mission_executor.recover_active_missions())
+        loop.close()
+        
+    # We can run this in a thread to avoid blocking main init
+    t_recovery = threading.Thread(target=startup_recovery, daemon=True)
+    t_recovery.start()
     
     # 8. Dialogue System (The Voice)
     # 8. Dialogue System (The Voice)
@@ -127,6 +154,12 @@ def main():
     meta_agent = MetaAgent(event_bus, state_engine, mission_manager, safety_validator=None)
     meta_agent.start()
     logger.info("✅ MetaAgent (Unified Cognitive Loop) started")
+
+    # 9.5 Proactive Insight Engine (The Intuition)
+    from agent.agent_cognitive.proactive_engine import ProactiveEngine
+    proactive_engine = ProactiveEngine(event_bus, state_engine)
+    proactive_engine.start()
+    logger.info("✅ Proactive Insight Engine started")
     
     # 10. Web Dashboard
     try:
@@ -157,6 +190,7 @@ def main():
     except KeyboardInterrupt:
         logger.info("🛑 ARVIS stopping...")
         meta_agent.stop()
+        proactive_engine.stop()
 
 if __name__ == "__main__":
     main()
