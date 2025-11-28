@@ -3,9 +3,10 @@ import time
 
 
 class StateEngine:
-    def __init__(self, event_bus, persist_path="data/state.json"):
+    def __init__(self, event_bus, persist_path="data/state.json", max_history_size=1000):
         self.event_bus = event_bus
         self.persistence = StatePersistence(persist_path)
+        self.max_history_size = max_history_size
         
         # Load state from disk or use defaults
         loaded_state = self.persistence.load_state()
@@ -29,11 +30,12 @@ class StateEngine:
         event_bus.subscribe("routine_triggered", self.handle_event)
 
     def handle_event(self, event):
-        # Keep history limited to avoid memory issues long term (TODO: implement rotation/persistence)
+        # Keep history limited to avoid memory issues long term
         self.state["history"].append(event)
         # self.history is a reference to self.state["history"], so it updates automatically
         
-        if len(self.state["history"]) > 1000:
+        # Rotate history if it exceeds the limit
+        while len(self.state["history"]) > self.max_history_size:
             self.state["history"].pop(0)
 
         state_changed = False

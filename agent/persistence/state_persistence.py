@@ -30,6 +30,9 @@ class StatePersistence:
         Returns:
             bool: True if successful
         """
+        if self.state_file == ":memory:":
+            return True
+
         try:
             # Write to temp file first (atomic)
             temp_file = f"{self.state_file}.tmp"
@@ -56,6 +59,9 @@ class StatePersistence:
         Returns:
             dict: Loaded state or default state if file doesn't exist
         """
+        if self.state_file == ":memory:":
+            return self.get_default_state()
+
         if not os.path.exists(self.state_file):
             print(f"[Persistence] No state file found, using defaults")
             return self.get_default_state()

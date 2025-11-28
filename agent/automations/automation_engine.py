@@ -107,15 +107,32 @@ class AutomationEngine:
             elif action == "if_no_motion":
                 # Conditional: only proceed if no motion detected
                 location = step.get("location")
-                # TODO: Check state engine for motion status
-                # For now, just execute the then_action
-                then_action = step.get("then_action")
-                then_args = step.get("args", [])
-                if then_action == "control_relay" and len(then_args) >= 2:
-                    relay, state = then_args[0], then_args[1]
-                    print(f"[AutomationEngine] Step {i+1}: Conditional - Control relay {relay} -> {state}")
-                    if self.device_controller:
-                        self.device_controller.control_relay(relay, state)
+                
+                # Check state engine for motion status
+                has_motion = False
+                if self.state_engine:
+                    # Assume state engine tracks motion sensors in "devices" or a dedicated "sensors" section
+                    # For now, we iterate devices to find motion sensors in the location
+                    # This is a simplification; a real system might have a spatial index
+                    for dev_id, dev_state in self.state_engine.get_state().items():
+                        # Check if device is in location and is a motion sensor (heuristic)
+                        # In a real app, we'd check metadata. Here we assume naming convention or specific attributes.
+                        if location.lower() in dev_id.lower() and "motion" in dev_id.lower():
+                            if dev_state.get("motion") == "detected" or dev_state.get("occupancy") == "occupied":
+                                has_motion = True
+                                break
+                
+                if has_motion:
+                    print(f"[AutomationEngine] Motion detected in {location}, skipping conditional action")
+                else:
+                    # No motion, execute
+                    then_action = step.get("then_action")
+                    then_args = step.get("args", [])
+                    if then_action == "control_relay" and len(then_args) >= 2:
+                        relay, state = then_args[0], then_args[1]
+                        print(f"[AutomationEngine] Step {i+1}: Conditional - Control relay {relay} -> {state}")
+                        if self.device_controller:
+                            self.device_controller.control_relay(relay, state)
             
             elif action == "log_note":
                 text = step.get("text", "")
@@ -193,8 +210,40 @@ class AutomationEngine:
         self.scheduler.tick()
         
         # Check event-based triggers
-        # TODO: Implement event matching logic here
-        pass
+        for name, routine in self.routines.items():
+            if not routine.get("enabled", True):
+                continue
+                
+            trigger = routine.get("trigger", {})
+            if trigger.get("type") == "event":
+                if self._match_event(trigger, event):
+                    print(f"[AutomationEngine] Trigger matched for routine: {name}")
+                    self.run(name)
+
+    def _match_event(self, trigger, event):
+        """
+        Match a trigger definition against an event.
+        
+        Trigger format:
+        {
+            "type": "event",
+            "event_type": "relay_toggled",
+            "payload": {"device": "light1", "state": "on"} # Optional partial match
+        }
+        """
+        # 1. Match event type
+        if trigger.get("event_type") != event.get("type"):
+            return False
+            
+        # 2. Match payload (if specified)
+        trigger_payload = trigger.get("payload", {})
+        event_payload = event.get("payload", {})
+        
+        for key, value in trigger_payload.items():
+            if event_payload.get(key) != value:
+                return False
+                
+        return True
     
     def _save_to_disk(self):
         """Persist routines to disk."""
