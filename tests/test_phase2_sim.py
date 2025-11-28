@@ -53,8 +53,14 @@ class TestPhase2Simulation(unittest.TestCase):
         
         # Verify Response (TTS)
         self.assertEqual(len(responses), 1)
-        self.assertIn("Turning on", responses[0]["payload"]["text"])
-        print(f"[Sim] Response Verified: {responses[0]['payload']['text']}")
+        response_text = responses[0]["payload"]["text"]
+        
+        # Valid responses from ActionToneAdapter (Casual/Formal/Urgent)
+        valid_phrases = ["Turning on", "Lights up", "Sure thing", "You got it", "Activating", "Executing"]
+        
+        matched = any(phrase in response_text for phrase in valid_phrases)
+        self.assertTrue(matched, f"Response '{response_text}' did not match any expected phrases: {valid_phrases}")
+        print(f"[Sim] Response Verified: {response_text}")
 
     def test_chat_flow(self):
         """Test Voice -> LLM -> TTS"""
