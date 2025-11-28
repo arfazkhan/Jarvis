@@ -145,6 +145,10 @@ def main():
     from agent.agent_conversation.conversation_bridge import ConversationBridge
     conversation_bridge = ConversationBridge(event_bus)
     
+    # 9. Closed Loop Intelligence
+    from agent.agent_core.state_feedback_loop import StateFeedbackLoop
+    feedback_loop = StateFeedbackLoop(event_bus, state_engine)
+    
     dialogue_manager = DialogueManager(personality_manager, mission_manager) # Added mission_manager arg
     from agent_conversation.interaction_loop import InteractionLoop
     interaction_loop = InteractionLoop(event_bus, dialogue_manager)

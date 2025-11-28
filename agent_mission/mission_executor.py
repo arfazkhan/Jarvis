@@ -270,7 +270,13 @@ class MissionExecutor:
                 
                 self.event_bus.publish({
                     "type": "mission_step_completed",
-                    "payload": {"mission_id": context.metadata.get("mission_id"), "step_id": step.step_id, "result": result}
+                    "payload": {
+                        "mission_id": context.metadata.get("mission_id"), 
+                        "step_id": step.step_id, 
+                        "step_type": step.step_type.value,
+                        "parameters": step.parameters,
+                        "result": result
+                    }
                 })
                 print(f"  ✅ Step {step.step_id} success")
                 return True, None

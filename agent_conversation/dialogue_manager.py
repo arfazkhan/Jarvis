@@ -36,6 +36,7 @@ Example: {"intent": "prepare_date_night", "steps": ["dim lights", "play music"]}
 """
 
 from agent_conversation.intent_classifier import IntentClassifier
+from agent.agent_feedback.action_tone_adapter import ActionToneAdapter
 
 from dataclasses import dataclass, field
 
@@ -54,6 +55,7 @@ class DialogueManager:
         self.history: List[Dict[str, str]] = []
         self.last_interaction_time = 0
         self.classifier = IntentClassifier()
+        self.tone_adapter = ActionToneAdapter(personality_manager)
         
         # Initialize Groq client
         api_key = os.environ.get("GROQ_API_KEY")
@@ -130,7 +132,7 @@ class DialogueManager:
         
         # Generate simple confirmation response
         if intent == "turn_on":
-            result.response_text = f"Turning on {slots.get('device', 'device')} in {slots.get('location', 'here')}."
+            result.response_text = self.tone_adapter.get_confirmation("turn_on", slots)
             result.action_request = {
                 "intent": intent,
                 "target": slots.get("device") or slots.get("location") or "unknown",
@@ -139,7 +141,7 @@ class DialogueManager:
                 "confidence": confidence
             }
         elif intent == "turn_off":
-            result.response_text = f"Turning off {slots.get('device', 'device')}."
+            result.response_text = self.tone_adapter.get_confirmation("turn_off", slots)
             result.action_request = {
                 "intent": intent,
                 "target": slots.get("device") or "unknown",
@@ -148,7 +150,7 @@ class DialogueManager:
                 "confidence": confidence
             }
         elif intent == "set_routine":
-            result.response_text = f"Activating {slots.get('routine', 'routine')} mode."
+            result.response_text = self.tone_adapter.get_confirmation("set_routine", slots)
             result.action_request = {
                 "intent": intent,
                 "target": slots.get("routine") or "unknown",
