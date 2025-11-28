@@ -11,7 +11,22 @@ Tests for:
 
 import pytest
 import time
-from conftest import create_pattern_history
+
+def create_pattern_history(pattern_type="consistent_morning"):
+    """Create history with specific patterns."""
+    history = []
+    base_time = time.time() - (30 * 24 * 3600)
+    
+    if pattern_type == "consistent_morning":
+        for day in range(30):
+            timestamp = base_time + (day * 24 * 3600) + (7 * 3600)
+            history.append({
+                "type": "relay_toggled",
+                "payload": {"device": "switch_1", "endpoint": 1, "state": "on"},
+                "timestamp": timestamp
+            })
+    
+    return history
 
 
 class TestPatternMisalignment:

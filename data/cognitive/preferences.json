@@ -1,0 +1,10 @@
+{
+  "user_1": {
+    "preferred_temp": {
+      "value": 22,
+      "confidence": 0.2,
+      "last_updated": 1764310924.2980793,
+      "source": "learned"
+    }
+  }
+}

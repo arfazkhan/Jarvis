@@ -31,8 +31,9 @@ Example: {"intent": "prepare_date_night", "steps": ["dim lights", "play music"]}
 from agent_conversation.intent_classifier import IntentClassifier
 
 class DialogueManager:
-    def __init__(self, event_bus: EventBus):
+    def __init__(self, event_bus: EventBus, personality_manager=None):
         self.event_bus = event_bus
+        self.personality_manager = personality_manager
         self.history: List[Dict[str, str]] = []
         self.last_interaction_time = 0
         self.classifier = IntentClassifier()
@@ -116,6 +117,23 @@ class DialogueManager:
         elif intent == "query_status":
             return f"Checking status of {slots.get('device', 'device')}."
             
+        elif intent == "start_mission":
+            mission_type = slots.get("mission_type", "unknown")
+            # Publish mission_started event for MissionExecutor
+            self.event_bus.publish({
+                "type": "mission_started",
+                "source": "dialogue_manager",
+                "payload": {
+                    "mission_id": mission_type,
+                    "trigger": "voice_command"
+                }
+            })
+            return f"Starting mission: {mission_type}."
+        elif intent == "stop_mission":
+            return "Stopping current mission."
+        elif intent == "mission_status":
+            return "Checking mission status."
+            
         return "I understood the command but don't know how to execute it yet."
 
     def _generate_response(self) -> str:
@@ -130,7 +148,7 @@ class DialogueManager:
             ] + self.history[-5:] # Keep last 5 turns
             
             completion = self.client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
                 messages=messages,
                 temperature=0.7,
                 max_tokens=150
@@ -165,6 +183,21 @@ class DialogueManager:
 
     def _get_system_prompt(self) -> str:
         """Construct system prompt with personality"""
+        if self.personality_manager:
+            try:
+                context = self.personality_manager.get_personality_context()
+                persona = context.get("persona", {})
+                emotion = context.get("emotion", {})
+                
+                prompt = f"You are {persona.get('name', 'Jarvis')}. {persona.get('description', '')}\n"
+                prompt += f"Current Emotion: {emotion.get('state', 'neutral')} (Confidence: {emotion.get('confidence', 0.5):.2f})\n"
+                prompt += f"Style: {persona.get('style_instructions', '')}\n"
+                prompt += "\n" + BASE_SYSTEM_PROMPT
+                return prompt
+            except Exception as e:
+                print(f"[DialogueManager] Error getting personality context: {e}")
+        
+        # Fallback
         profile = PERSONALITY_CONFIG.get("profiles", {}).get("default_user", {})
         
         prompt = BASE_SYSTEM_PROMPT

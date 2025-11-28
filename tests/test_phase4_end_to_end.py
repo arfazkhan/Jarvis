@@ -177,7 +177,8 @@ class TestPhase4EndToEnd(unittest.TestCase):
         
         # 4. Time = Night
         # Patch time.time to be close to events so occupancy is active
-        mock_now = ts + 1.0
+        # Advance > 60s to bypass hysteresis check in StateEstimator
+        mock_now = ts + 65.0
         
         with unittest.mock.patch('time.time', return_value=mock_now):
             with unittest.mock.patch('agent_sensors.state_estimator.infer_time_of_day', return_value="night"):

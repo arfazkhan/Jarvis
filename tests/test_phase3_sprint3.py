@@ -18,7 +18,10 @@ class TestPhase3Sprint3(unittest.TestCase):
             print("DEBUG: Init EventBus")
             self.event_bus = EventBus()
             print("DEBUG: Init PreferenceStore")
-            self.store = PreferenceStore(":memory:") # Use in-memory DB for testing
+            self.db_path = "test_prefs_sprint3.db"
+            if os.path.exists(self.db_path):
+                os.remove(self.db_path)
+            self.store = PreferenceStore(self.db_path)
             print("DEBUG: Init Updater")
             self.updater = PreferenceUpdater(self.store)
             print("DEBUG: Init AdaptiveEngine")
@@ -30,7 +33,16 @@ class TestPhase3Sprint3(unittest.TestCase):
             print(f"DEBUG: setUp Failed: {e}")
             import traceback
             traceback.print_exc()
+            import traceback
+            traceback.print_exc()
             raise e
+
+    def tearDown(self):
+        if hasattr(self, 'db_path') and os.path.exists(self.db_path):
+            try:
+                os.remove(self.db_path)
+            except:
+                pass
 
     def test_preference_storage(self):
         """Verify we can store and retrieve preferences"""

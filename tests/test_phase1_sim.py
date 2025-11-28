@@ -56,7 +56,7 @@ class TestPhase1Simulation(unittest.TestCase):
             "source": "gps",
             "payload": {"user_id": "user_alice", "location": "home"}
         })
-        time.sleep(0.1) # Wait for processing
+        time.sleep(0.5) # Wait for processing
         
         # Verify Context Update
         context = self.loop.context.get_context("user_alice")
@@ -72,7 +72,7 @@ class TestPhase1Simulation(unittest.TestCase):
             "source": "sensors",
             "payload": {"user_id": "user_alice", "location": "living_room"}
         })
-        time.sleep(0.1)
+        time.sleep(0.5)
         
         # 4. User starts Movie Mode (Routine)
         print("[Sim] User starts movie mode...")
@@ -81,7 +81,7 @@ class TestPhase1Simulation(unittest.TestCase):
             "source": "voice",
             "payload": {"name": "movie_mode", "user_id": "user_alice"}
         })
-        time.sleep(0.1)
+        time.sleep(0.5)
         
         # 5. Trigger Prediction Cycle
         print("[Sim] Triggering prediction cycle...")

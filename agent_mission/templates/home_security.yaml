@@ -1,0 +1,56 @@
+mission_id: home_security
+mission_type: home_security
+
+goals:
+  - protect_home_when_away
+  - simulate_presence
+  - monitor_anomalies
+
+plan_template:
+  - step_id: activate_security_mode
+    step_type: action
+    parameters:
+      lock_devices: []  # Future: door locks
+      enable_motion_alerts: true
+    dependencies: []
+    timeout: 30
+
+  - step_id: create_presence_simulation_scenes
+    step_type: scene
+    parameters:
+      scene_count: 3
+      scene_names: ["evening_activity", "late_night", "morning"]
+      randomize_timing: true
+    dependencies: []
+    timeout: 60
+
+  - step_id: schedule_presence_simulation
+    step_type: automation
+    parameters:
+      trigger_type: "random_interval"
+      time_window: "18:00-23:00"
+      scenes: "from_create_presence_simulation_scenes"
+    dependencies: [create_presence_simulation_scenes]
+    timeout: 30
+
+  - step_id: monitor_motion_anomalies
+    step_type: monitoring
+    parameters:
+      alert_on_motion: true
+      anomaly_threshold: "unexpected_motion"
+      notify_user: true
+    dependencies: [activate_security_mode]
+    continuous: true
+
+metrics:
+  - name: presence_simulation_adherence
+    target: "> 0.9"
+    weight: 0.6
+
+  - name: anomaly_detection_accuracy
+    target: "< 5% false positives"
+    weight: 0.4
+
+adaptive_rules:
+  - condition: "user_returns_home"
+    action: "deactivate_security_mode"

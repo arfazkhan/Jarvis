@@ -10,7 +10,8 @@ from agent_sensors.sensor_models import HomeSituation
 
 def build_personality_prompt(
     persona_context: Dict[str, Any],
-    situation: HomeSituation
+    situation: HomeSituation,
+    active_mission: Dict[str, Any] = None
 ) -> str:
     """
     Build the personality section of the system prompt.
@@ -76,6 +77,14 @@ HOME CONTEXT:
 - Sleep State: {sleep}
 - Emotional Inference: {emotion["state"]} (confidence: {emotion["confidence"]:.2f})
 """
+
+    if active_mission:
+        situation_text += f"""
+ACTIVE MISSION:
+- Type: {active_mission.get('type', 'unknown')}
+- Status: {active_mission.get('status', 'unknown')}
+- Goal: {active_mission.get('goal', 'unknown')}
+"""
     
     # Assemble full prompt section
     prompt = f"""
@@ -107,7 +116,8 @@ SAFETY CONSTRAINTS:
 def build_full_system_prompt(
     persona_context: Dict[str, Any],
     situation: HomeSituation,
-    base_prompt: str = ""
+    base_prompt: str = "",
+    active_mission: Dict[str, Any] = None
 ) -> str:
     """
     Combine base planning prompt with personality prompt.
@@ -120,7 +130,7 @@ def build_full_system_prompt(
     Returns:
         Complete system prompt
     """
-    personality_section = build_personality_prompt(persona_context, situation)
+    personality_section = build_personality_prompt(persona_context, situation, active_mission)
     
     # Combine
     full_prompt = f"""{base_prompt}

@@ -12,7 +12,31 @@ Tests for:
 import pytest
 import time
 import threading
-from conftest import create_valid_event
+
+def create_valid_event(event_type="relay_toggled", **kwargs):
+    """Create a valid event with default values."""
+    defaults = {
+        "type": event_type,
+        "payload": {"device": "switch_1", "endpoint": 1, "state": "on"},
+        "timestamp": time.time()
+    }
+    defaults.update(kwargs)
+    return defaults
+
+def create_out_of_order_events(count=10):
+    """Create events with timestamps out of order."""
+    events = []
+    base_time = time.time()
+    
+    for i in range(count):
+        timestamp = base_time - (count - i) * 10 + (i % 3) * 15
+        events.append(create_valid_event(timestamp=timestamp))
+    
+    return events
+
+def create_duplicate_events(original_event, count=5):
+    """Create duplicate copies of an event."""
+    return [original_event.copy() for _ in range(count)]
 
 
 class TestStateRaceConditions:

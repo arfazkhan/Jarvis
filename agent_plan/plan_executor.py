@@ -17,8 +17,9 @@ from agent_plan.plan_graph import PlanGraph, PlanNode
 from agent_plan.safety_validator import SafetyValidator
 
 class PlanExecutor:
-    def __init__(self, event_bus: EventBus):
+    def __init__(self, event_bus: EventBus, matter_controller=None):
         self.event_bus = event_bus
+        self.matter_controller = matter_controller
         self.validator = SafetyValidator()
         self.running = False
 
@@ -82,8 +83,21 @@ class PlanExecutor:
         try:
             print(f"[PlanExecutor] Running: {node.action} ({node.params})")
             
-            # Simulate execution time
-            time.sleep(0.1)
+            # Physical Actuation
+            if self.matter_controller:
+                device_id = node.params.get("device_id", "unknown")
+                endpoint = node.params.get("endpoint", 1)
+                
+                if node.action == "turn_on":
+                    self.matter_controller.turn_on(device_id, endpoint)
+                elif node.action == "turn_off":
+                    self.matter_controller.turn_off(device_id, endpoint)
+                else:
+                    # Fallback for other actions (scenes, etc.)
+                    time.sleep(0.1)
+            else:
+                # Simulation fallback
+                time.sleep(0.1)
             
             # Publish event
             self.event_bus.publish({
@@ -103,3 +117,12 @@ class PlanExecutor:
             print(f"[PlanExecutor] Error executing node {node.id}: {e}")
             node.status = "failed"
             return False
+
+    def execute_action(self, action: str, params: Dict[str, Any]) -> bool:
+        """
+        Execute a single action immediately (bypass graph).
+        Useful for direct voice commands.
+        """
+        # Create a temporary node
+        node = PlanNode(node_id="direct_action", action=action, params=params)
+        return self._execute_node(node)

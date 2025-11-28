@@ -3,11 +3,7 @@ import time
 import queue
 import json
 from unittest.mock import MagicMock, patch
-import sys
-
-# Mock dependencies
-mock_groq = MagicMock()
-sys.modules["groq"] = mock_groq
+import os
 
 from agent.event_bus.event_bus import EventBus
 from agent_cognitive.cognitive_loop import CognitiveLoop
@@ -62,30 +58,34 @@ class TestPhase3Prep(unittest.TestCase):
         print("\n[Test] Structured LLM Output")
         
         # Mock Groq response with JSON
-        mock_client = MagicMock()
-        mock_groq.Groq.return_value = mock_client
-        mock_completion = MagicMock()
-        mock_completion.choices[0].message.content = '{"intent": "party_mode", "steps": ["music", "lights"]}'
-        mock_client.chat.completions.create.return_value = mock_completion
-        
-        with patch.dict("os.environ", {"GROQ_API_KEY": "fake"}):
-            dm = DialogueManager(self.bus)
+        with patch("agent_conversation.dialogue_manager.Groq") as MockGroq:
+            mock_client = MagicMock()
+            MockGroq.return_value = mock_client
+            mock_completion = MagicMock()
+            mock_completion.choices[0].message.content = '{"intent": "party_mode", "steps": ["music", "lights"]}'
+            mock_client.chat.completions.create.return_value = mock_completion
             
-            # Capture actions
-            actions = []
-            self.bus.subscribe("action_request", lambda e: actions.append(e))
-            
-            # Simulate complex request
-            self.bus.publish({
-                "type": "voice_input",
-                "payload": {"text": "Get ready for a party"}
-            })
-            
-            # Verify action request generated from JSON
-            self.assertEqual(len(actions), 1)
-            self.assertEqual(actions[0]["payload"]["intent"], "party_mode")
-            self.assertEqual(actions[0]["payload"]["target"], "complex_plan")
-            print("✅ DialogueManager parsed JSON from LLM")
+            with patch.dict("os.environ", {"GROQ_API_KEY": "fake"}):
+                dm = DialogueManager(self.bus)
+                # Mock classifier to force LLM path
+                dm.classifier = MagicMock()
+                dm.classifier.classify.return_value = {"intent": "unknown", "confidence": 0.0}
+                
+                # Capture actions
+                actions = []
+                self.bus.subscribe("action_request", lambda e: actions.append(e))
+                
+                # Simulate complex request
+                self.bus.publish({
+                    "type": "voice_input",
+                    "payload": {"text": "Get ready for a party"}
+                })
+                
+                # Verify action request generated from JSON
+                self.assertEqual(len(actions), 1)
+                self.assertEqual(actions[0]["payload"]["intent"], "party_mode")
+                self.assertEqual(actions[0]["payload"]["target"], "complex_plan")
+                print("✅ DialogueManager parsed JSON from LLM")
 
 if __name__ == "__main__":
     unittest.main()

@@ -193,7 +193,7 @@ class PatternAnalyzer:
                 # Find first bedroom light ON
                 for event in sorted(events, key=lambda e: e.get("timestamp", 0)):
                     if event.get("type") == "relay_toggled":
-                        payload = event.get("payload", {})
+                        payload = event.get("payload") or {}
                         if payload.get("endpoint") == 1 and payload.get("state") == "on":
                             hour = datetime.fromtimestamp(event.get("timestamp")).hour
                             minute = datetime.fromtimestamp(event.get("timestamp")).minute
@@ -223,7 +223,7 @@ class PatternAnalyzer:
                 sorted_events = sorted(events, key=lambda e: e.get("timestamp", 0), reverse=True)
                 for event in sorted_events:
                     if event.get("type") == "relay_toggled":
-                        payload = event.get("payload", {})
+                        payload = event.get("payload") or {}
                         if payload.get("state") == "off":
                             hour = datetime.fromtimestamp(event.get("timestamp")).hour
                             minute = datetime.fromtimestamp(event.get("timestamp")).minute

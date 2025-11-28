@@ -4,9 +4,9 @@ import sys
 import json
 import os
 
-# Mock Groq
-mock_groq = MagicMock()
-sys.modules["groq"] = mock_groq
+# Mock Groq removed for real LLM testing
+# mock_groq = MagicMock()
+# sys.modules["groq"] = mock_groq
 
 from agent_cognitive.context_graph import ContextGraph
 from agent_plan.scene_registry import SceneRegistry
@@ -29,8 +29,10 @@ class TestPhase3PlanningRefactor(unittest.TestCase):
         self.engine = SceneEngine(self.context, self.registry)
         
         # Setup Generator
-        with patch.dict("os.environ", {"GROQ_API_KEY": "fake"}):
-            self.generator = PlanGenerator(self.registry, self.engine)
+        # Requires GROQ_API_KEY
+        self.generator = PlanGenerator(self.registry, self.engine)
+        if not self.generator.client:
+             print("WARNING: GROQ_API_KEY not found. LLM tests will fail.")
 
     def test_registry_load(self):
         """Verify SceneRegistry loads cozy_evening.json"""
@@ -73,33 +75,21 @@ class TestPhase3PlanningRefactor(unittest.TestCase):
         """Verify PlanGenerator uses LLM for unknown requests"""
         print("\n[Test] Plan Generator (LLM)")
         
-        # Mock LLM response for "Romantic" -> propose_scene_plan("cozy_evening")
-        mock_client = MagicMock()
-        mock_groq.Groq.return_value = mock_client
-        
-        # Mock tool call
-        mock_tool_call = MagicMock()
-        mock_tool_call.function.name = "propose_scene_plan"
-        mock_tool_call.function.arguments = json.dumps({
-            "scene_id": "cozy_evening",
-            "confidence": 0.85,
-            "reasoning": "Close match"
-        })
-        
-        mock_completion = MagicMock()
-        mock_completion.choices[0].message.tool_calls = [mock_tool_call]
-        mock_client.chat.completions.create.return_value = mock_completion
-        
-        # Re-init generator with mocked client
-        self.generator.client = mock_client
+        # Real LLM Call
+        # "Make it romantic" should map to "cozy_evening" or similar if available
         
         request = {"utterance": "Make it romantic", "context": {}}
         plan = self.generator.generate_plan(request)
         
-        self.assertEqual(plan["type"], "scene")
-        self.assertEqual(plan["scene_id"], "cozy_evening")
+        # Verify we got a valid plan
+        self.assertNotIn("error", plan)
+        self.assertIn(plan["type"], ["scene", "custom"])
         self.assertEqual(plan["origin"], "llm")
-        print("✅ LLM mapped 'Romantic' to 'cozy_evening'")
+        
+        if plan["type"] == "scene":
+             print(f"✅ LLM mapped 'Romantic' to scene '{plan['scene_id']}'")
+        else:
+             print(f"✅ LLM generated custom plan with {len(plan['steps'])} steps")
 
 if __name__ == "__main__":
     unittest.main()

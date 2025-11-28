@@ -1,5 +1,6 @@
 import unittest
 import time
+from unittest.mock import patch
 from agent_sensors.sensor_models import SensorEvent
 from agent_sensors.virtual_sensors.occupancy_sensor import OccupancySensor
 from agent_sensors.virtual_sensors.presence_sensor import PresenceSensor
@@ -35,22 +36,28 @@ class TestVirtualSensors(unittest.TestCase):
     def test_presence_wifi(self):
         sensor = PresenceSensor()
         
-        # WiFi Connect
-        event = SensorEvent("wifi_1", "wifi_presence", None, True, time.time())
-        sensor.update_from_event(event)
+        # Mock time
+        base_time = 100000.0
         
-        presence = sensor.get_home_presence()
-        self.assertEqual(presence.state, "home")
-        self.assertIn("wifi_1", presence.sources)
+        with patch('time.time', return_value=base_time):
+            # WiFi Connect
+            event = SensorEvent("wifi_1", "wifi_presence", None, True, base_time)
+            sensor.update_from_event(event)
+            
+            presence = sensor.get_home_presence()
+            self.assertEqual(presence.state, "home")
+            self.assertIn("wifi_1", presence.sources)
+            
+            # WiFi Disconnect
+            event_off = SensorEvent("wifi_1", "wifi_presence", None, False, base_time)
+            sensor.update_from_event(event_off)
         
-        # WiFi Disconnect
-        event_off = SensorEvent("wifi_1", "wifi_presence", None, False, time.time())
-        sensor.update_from_event(event_off)
-        
-        presence = sensor.get_home_presence()
-        # Should be unknown or home (short timeout)
-        # But we had no motion (ts=0). So > 2 hours -> away.
-        self.assertEqual(presence.state, "away")
+        # Advance time > 60s (grace period)
+        with patch('time.time', return_value=base_time + 65.0):
+            presence = sensor.get_home_presence()
+            # Should be unknown or home (short timeout)
+            # But we had no motion (ts=0). So > 2 hours -> away.
+            self.assertEqual(presence.state, "away")
 
     # --- Sleep ---
     def test_sleep_inference(self):

@@ -85,21 +85,16 @@ def client():
 
 @pytest.fixture
 def mock_llm_client():
-    """Mocked Groq LLM client with configurable responses."""
-    mock = Mock()
+    """Real Groq LLM client (renamed from mock to keep compatibility)."""
+    import os
+    from groq import Groq
     
-    # Default valid response
-    mock_response = Mock()
-    mock_response.choices = [Mock()]
-    mock_response.choices[0].message.content = '''[
-        {
-            "tool_name": "log_note",
-            "arguments": {"text": "Test note"}
-        }
-    ]'''
-    
-    mock.chat.completions.create = Mock(return_value=mock_response)
-    return mock
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        pytest.skip("GROQ_API_KEY not found, skipping real LLM test")
+        
+    client = Groq(api_key=api_key)
+    return client
 
 
 @pytest.fixture

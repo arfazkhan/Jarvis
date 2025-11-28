@@ -41,25 +41,37 @@ class TestPhase3Planning(unittest.TestCase):
         """Verify PlanGenerator parses LLM JSON"""
         print("\n[Test] Plan Generator")
         
-        # Mock Groq response
+        # Mock Groq response with tool calls
         mock_client = MagicMock()
         mock_groq.Groq.return_value = mock_client
         mock_completion = MagicMock()
-        mock_completion.choices[0].message.content = json.dumps({
-            "plan": [
+        
+        # Setup tool call
+        mock_tool_call = MagicMock()
+        mock_tool_call.function.name = "propose_custom_plan"
+        mock_tool_call.function.arguments = json.dumps({
+            "steps": [
                 {"action": "turn_on", "params": {"device": "tv"}},
                 {"action": "dim", "params": {"device": "light_1"}}
-            ]
+            ],
+            "confidence": 0.95
         })
+        
+        mock_completion.choices[0].message.tool_calls = [mock_tool_call]
         mock_client.chat.completions.create.return_value = mock_completion
         
         with patch.dict("os.environ", {"GROQ_API_KEY": "fake"}):
-            generator = PlanGenerator()
-            plan = generator.generate_plan("Watch TV")
+            mock_registry = MagicMock()
+            mock_registry.list_scenes.return_value = [] # Ensure no rule match
+            mock_engine = MagicMock()
+            generator = PlanGenerator(mock_registry, mock_engine)
             
-            self.assertEqual(len(plan), 2)
-            self.assertEqual(plan[0]["action"], "turn_on")
-            self.assertEqual(plan[0]["params"]["device"], "tv")
+            plan = generator.generate_plan({"utterance": "Watch TV"})
+            
+            # PlanGenerator returns a dict with "steps"
+            self.assertEqual(len(plan["steps"]), 2)
+            self.assertEqual(plan["steps"][0]["action"], "turn_on")
+            self.assertEqual(plan["steps"][0]["params"]["device"], "tv")
             print("✅ PlanGenerator parsed JSON plan correctly")
 
 if __name__ == "__main__":

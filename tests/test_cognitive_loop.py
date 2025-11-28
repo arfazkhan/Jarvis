@@ -16,6 +16,7 @@ class TestCognitiveLoop(unittest.TestCase):
     def test_event_handling(self):
         event = {"type": "test", "payload": {}}
         self.loop._on_event(event)
+        self.loop._process_queue()
         
         # Should store in memory
         self.loop.memory.add_event.assert_called_with(event)
@@ -26,6 +27,7 @@ class TestCognitiveLoop(unittest.TestCase):
             "payload": {"user_id": "u1", "location": "kitchen"}
         }
         self.loop._on_event(event)
+        self.loop._process_queue()
         
         # Should update context
         self.loop.context.add_edge.assert_called_with("u1", "kitchen", "is_in")

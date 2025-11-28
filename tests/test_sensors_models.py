@@ -1,5 +1,5 @@
 import unittest
-from agent_sensors.sensor_models import Sensor, SensorEvent, HomeSituation, HomePresence, RoomOccupancy, SleepState
+from agent_sensors.sensor_models import Sensor, SensorEvent, HomeSituation, HomePresence, RoomOccupancy, SleepState, EmotionalState
 
 class TestSensorModels(unittest.TestCase):
     def test_sensor_event_serialization(self):
@@ -26,6 +26,7 @@ class TestSensorModels(unittest.TestCase):
             room_occupancy=occupancy,
             sleep_state=sleep,
             activity_hint="relaxing",
+            emotional_state=EmotionalState("neutral", 0.1, 1000.0),
             updated_ts=1000.0
         )
         

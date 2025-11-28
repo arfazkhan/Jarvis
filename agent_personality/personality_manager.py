@@ -33,14 +33,90 @@ class PersonalityManager:
         """
         When situation updates:
         1. Re-infer emotion
-        2. Publish personality_update (optional, or just store state)
+        2. Publish personality_update
         """
-        pass
+        try:
+            payload = event.get("payload", {})
+            if not payload:
+                return
 
-    def get_personality_context(self, situation: HomeSituation, user_id: str = "default_user") -> Dict[str, Any]:
+            # Reconstruct HomeSituation from dict
+            # We need to handle nested dataclasses manually since they come as dicts
+            from agent_sensors.sensor_models import HomePresence, RoomOccupancy, SleepState, EmotionalState
+            
+            home_presence_data = payload.get("home_presence", {})
+            home_presence = HomePresence(**home_presence_data)
+            
+            sleep_state_data = payload.get("sleep_state", {})
+            sleep_state = SleepState(**sleep_state_data)
+            
+            emotional_state_data = payload.get("emotional_state", {})
+            emotional_state = EmotionalState(**emotional_state_data)
+            
+            room_occupancy_data = payload.get("room_occupancy", {})
+            room_occupancy = {k: RoomOccupancy(**v) for k, v in room_occupancy_data.items()}
+            
+            situation = HomeSituation(
+                time_of_day=payload.get("time_of_day"),
+                home_presence=home_presence,
+                room_occupancy=room_occupancy,
+                sleep_state=sleep_state,
+                activity_hint=payload.get("activity_hint"),
+                emotional_state=emotional_state,
+                updated_ts=payload.get("updated_ts", time.time())
+            )
+            
+            self.last_situation = situation
+            
+            # 1. Infer Emotion
+            new_emotion = self.emotion_engine.infer_emotion(situation)
+            self.current_emotion = new_emotion
+            
+            # 2. Determine Persona
+            # We use default user for now
+            new_persona_id = self.mode_switcher.get_active_persona("default_user", situation, new_emotion)
+            
+            if new_persona_id != self.current_persona_id:
+                print(f"[PersonalityManager] Switching persona: {self.current_persona_id} -> {new_persona_id}")
+                self.current_persona_id = new_persona_id
+                
+                # Publish update
+                self.event_bus.publish({
+                    "type": "personality_update",
+                    "source": "personality_manager",
+                    "payload": {
+                        "persona_id": new_persona_id,
+                        "emotion": new_emotion.state,
+                        "confidence": new_emotion.confidence
+                    }
+                })
+                
+        except Exception as e:
+            print(f"[PersonalityManager] Error processing situation update: {e}")
+
+    def get_personality_context(self, situation: Optional[HomeSituation] = None, user_id: str = "default_user") -> Dict[str, Any]:
         """
         Called by DialogueManager/Planner to get personality context.
         """
+        # Use cached situation if not provided
+        if not situation:
+            situation = getattr(self, "last_situation", None)
+            
+        # If still no situation (startup), use defaults
+        if not situation:
+             # Return default/neutral context
+             persona = self.profiles.get_persona(self.current_persona_id)
+             return {
+                "persona": {
+                    "id": persona.id,
+                    "name": persona.name,
+                    "description": persona.description,
+                    "style_instructions": persona.style_instructions,
+                    "allowed_features": persona.allowed_features
+                },
+                "emotion": {"state": "neutral", "confidence": 0.5}
+            }
+
         # 1. Infer Emotion
         emotion = self.emotion_engine.infer_emotion(situation)
         self.current_emotion = emotion

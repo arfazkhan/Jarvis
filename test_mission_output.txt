@@ -1,0 +1,131 @@
+
+[Test] Get Mission Status
+✅ Mission started: home_security_1764187534
+✅ Mission status retrieved correctly
+.
+[Test] List Active Missions
+✅ Mission started: sleep_optimization_1764187534
+✅ Mission started: energy_saver_1764187534
+✅ Listed 2 active missions
+.
+[Test] Mission Template Loading
+✅ All 4 mission templates loaded correctly
+.
+[Test] Prevent Duplicate Active Missions
+✅ Mission started: sleep_optimization_1764187534
+✅ Duplicate mission prevention works
+.
+[Test] Start Mission
+✅ Mission started: sleep_optimization_1764187534
+✅ Mission started: sleep_optimization_1764187534
+.
+[Test] Stop Mission
+✅ Mission started: energy_saver_1764187535
+✅ Mission stopped: energy_saver_1764187535
+✅ Mission stopped successfully
+.
+[Test] Update Mission Status
+✅ Mission started: focus_productivity_1764187535
+✅ Mission status updated: INIT → PLANNING
+.
+[Test] Archive Mission
+✅ Mission archived successfully
+.
+[Test] Delete Mission
+✅ Mission deleted successfully
+.
+[Test] Get Active Missions
+✅ Retrieved 2 active missions (excluding COMPLETED/ARCHIVED)
+.
+[Test] List Missions by Status
+✅ Mission filtering by status works
+.
+[Test] Save & Load Mission
+✅ Mission saved and loaded correctly
+.
+[Test] Debounce Mechanism (48hr)
+E
+[Test] Energy Saver Inference
+E
+[Test] Focus & Productivity Inference
+✅ Focus productivity recommended (confidence: 0.80)
+.
+[Test] Home Security Inference
+E
+[Test] Low Confidence = No Recommendation
+✅ No recommendations when confidence is low
+.
+[Test] Sleep Optimization Inference
+E
+======================================================================
+ERROR: test_debounce_mechanism (tests.test_mission_inference.TestMissionInference.test_debounce_mechanism)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\ASUS\Downloads\Automation\tests\test_mission_inference.py", line 109, in test_debounce_mechanism
+    recs1 = self.inference.infer_mission(situation, patterns)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ASUS\Downloads\Automation\agent_mission\mission_inference.py", line 62, in infer_mission
+    focus_conf = self._infer_focus_productivity(situation, user_patterns)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ASUS\Downloads\Automation\agent_mission\mission_inference.py", line 137, in _infer_focus_productivity
+    if situation.activity_hint == "working":
+       ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\ProgramData\anaconda3\Lib\unittest\mock.py", line 660, in __getattr__
+    raise AttributeError("Mock object has no attribute %r" % name)
+AttributeError: Mock object has no attribute 'activity_hint'
+
+======================================================================
+ERROR: test_energy_saver_inference (tests.test_mission_inference.TestMissionInference.test_energy_saver_inference)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\ASUS\Downloads\Automation\tests\test_mission_inference.py", line 47, in test_energy_saver_inference
+    recommendations = self.inference.infer_mission(situation, patterns)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ASUS\Downloads\Automation\agent_mission\mission_inference.py", line 62, in infer_mission
+    focus_conf = self._infer_focus_productivity(situation, user_patterns)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ASUS\Downloads\Automation\agent_mission\mission_inference.py", line 137, in _infer_focus_productivity
+    if situation.activity_hint == "working":
+       ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\ProgramData\anaconda3\Lib\unittest\mock.py", line 660, in __getattr__
+    raise AttributeError("Mock object has no attribute %r" % name)
+AttributeError: Mock object has no attribute 'activity_hint'
+
+======================================================================
+ERROR: test_home_security_inference (tests.test_mission_inference.TestMissionInference.test_home_security_inference)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\ASUS\Downloads\Automation\tests\test_mission_inference.py", line 68, in test_home_security_inference
+    recommendations = self.inference.infer_mission(situation, patterns)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ASUS\Downloads\Automation\agent_mission\mission_inference.py", line 62, in infer_mission
+    focus_conf = self._infer_focus_productivity(situation, user_patterns)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ASUS\Downloads\Automation\agent_mission\mission_inference.py", line 137, in _infer_focus_productivity
+    if situation.activity_hint == "working":
+       ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\ProgramData\anaconda3\Lib\unittest\mock.py", line 660, in __getattr__
+    raise AttributeError("Mock object has no attribute %r" % name)
+AttributeError: Mock object has no attribute 'activity_hint'
+
+======================================================================
+ERROR: test_sleep_optimization_inference (tests.test_mission_inference.TestMissionInference.test_sleep_optimization_inference)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\ASUS\Downloads\Automation\tests\test_mission_inference.py", line 25, in test_sleep_optimization_inference
+    recommendations = self.inference.infer_mission(situation, patterns)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ASUS\Downloads\Automation\agent_mission\mission_inference.py", line 62, in infer_mission
+    focus_conf = self._infer_focus_productivity(situation, user_patterns)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ASUS\Downloads\Automation\agent_mission\mission_inference.py", line 137, in _infer_focus_productivity
+    if situation.activity_hint == "working":
+       ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\ProgramData\anaconda3\Lib\unittest\mock.py", line 660, in __getattr__
+    raise AttributeError("Mock object has no attribute %r" % name)
+AttributeError: Mock object has no attribute 'activity_hint'
+
+----------------------------------------------------------------------
+Ran 18 tests in 0.392s
+
+FAILED (errors=4)

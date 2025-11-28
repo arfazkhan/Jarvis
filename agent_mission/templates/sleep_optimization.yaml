@@ -1,0 +1,90 @@
+mission_id: sleep_optimization
+mission_type: sleep_optimization
+
+goals:
+  - reduce_bedtime_variance
+  - improve_wake_stability
+  - optimize_presleep_environment
+
+plan_template:
+  - step_id: collect_sleep_data
+    step_type: collection
+    parameters:
+      data_types: ["bedtime", "wake_time", "night_motion", "bedroom_light"]
+      duration_days: 3
+    dependencies: []
+    timeout: 300
+
+  - step_id: analyze_sleep_patterns
+    step_type: collection
+    parameters:
+      compute_variance: true
+      identify_trends: true
+    dependencies: [collect_sleep_data]
+    timeout: 60
+
+  - step_id: create_bedtime_scene
+    step_type: scene
+    parameters:
+      scene_name: "bedtime"
+      brightness: 20
+      temperature: 24
+      close_blinds: true
+      reduce_noise: true
+    dependencies: [analyze_sleep_patterns]
+    timeout: 30
+
+  - step_id: create_sunrise_scene
+    step_type: scene
+    parameters:
+      scene_name: "sunrise"
+      brightness: 80
+      temperature: 22
+      gradual_increase: true
+      duration_minutes: 20
+    dependencies: [analyze_sleep_patterns]
+    timeout: 30
+
+  - step_id: schedule_bedtime_routine
+    step_type: automation
+    parameters:
+      trigger_time: "inferred_bedtime_minus_30min"
+      scene_id: "bedtime"
+    dependencies: [create_bedtime_scene]
+    timeout: 30
+
+  - step_id: schedule_wake_routine
+    step_type: automation
+    parameters:
+      trigger_time: "inferred_waketime_minus_20min"
+      scene_id: "sunrise"
+    dependencies: [create_sunrise_scene]
+    timeout: 30
+
+  - step_id: monitor_sleep_quality
+    step_type: monitoring
+    parameters:
+      metrics: ["bedtime_variance", "night_motion_count", "wake_time_stability"]
+      evaluation_frequency: "daily"
+    dependencies: [schedule_bedtime_routine, schedule_wake_routine]
+    continuous: true
+
+metrics:
+  - name: bedtime_variance
+    target: "< 30 minutes"
+    weight: 0.4
+
+  - name: wake_time_stability
+    target: "> 0.8"
+    weight: 0.3
+
+  - name: night_motion_reduction
+    target: "< 5 events"
+    weight: 0.3
+
+adaptive_rules:
+  - condition: "bedtime_variance > 45min for 3 days"
+    action: "adjust_bedtime_scene_timing"
+
+  - condition: "night_motion > 10 events"
+    action: "reduce_bedroom_temperature"

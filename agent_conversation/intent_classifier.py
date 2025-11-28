@@ -14,23 +14,48 @@ class IntentClassifier:
         # Define simple regex patterns for common intents
         self.patterns = [
             {
+                "intent": "start_mission",
+                "regex": r"^start (?:the )?([\w\s]+?)(?: mission)?$",
+                "slots": ["mission_type"]
+            },
+            {
+                "intent": "stop_mission",
+                "regex": r"^(?:stop|cancel|abort) (?:the )?(?:current )?mission$",
+                "slots": []
+            },
+            {
+                "intent": "mission_status",
+                "regex": r"^mission status\?*$",
+                "slots": []
+            },
+            {
                 "intent": "turn_on",
-                "regex": r"^turn on (?:the )?(\w+)(?: in (?:the )?(\w+))?$",
+                "regex": r"^turn on (?:the )?([\w\s]+?) in (?:the )?([\w\s]+)$",
+                "slots": ["device", "location"]
+            },
+            {
+                "intent": "turn_on",
+                "regex": r"^turn on (?:the )?([\w\s]+)$",
+                "slots": ["device"]
+            },
+            {
+                "intent": "turn_off",
+                "regex": r"^turn off (?:the )?([\w\s]+?) in (?:the )?([\w\s]+)$",
                 "slots": ["device", "location"]
             },
             {
                 "intent": "turn_off",
-                "regex": r"^turn off (?:the )?(\w+)(?: in (?:the )?(\w+))?$",
-                "slots": ["device", "location"]
+                "regex": r"^turn off (?:the )?([\w\s]+)$",
+                "slots": ["device"]
             },
             {
                 "intent": "set_routine",
-                "regex": r"^(?:start|activate|enable) (?:the )?(\w+)(?: mode| routine)?$",
+                "regex": r"^(?:start|activate|enable) (?:the )?([\w\s]+)(?: mode| routine)?$",
                 "slots": ["routine"]
             },
             {
                 "intent": "query_status",
-                "regex": r"^is (?:the )?(\w+) (?:on|off|open|closed)\?*$",
+                "regex": r"^is (?:the )?([\w\s]+) (?:on|off|open|closed)\?*$",
                 "slots": ["device"]
             },
             {

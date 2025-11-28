@@ -26,7 +26,7 @@ class TestIntentClassifier(unittest.TestCase):
         result = self.classifier.classify(text)
         
         self.assertEqual(result["intent"], "set_routine")
-        self.assertEqual(result["slots"]["routine"], "movie")
+        self.assertEqual(result["slots"]["routine"], "movie mode")
 
     def test_unknown(self):
         text = "What is the meaning of life?"

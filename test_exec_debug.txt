@@ -1,0 +1,31 @@
+E
+======================================================================
+ERROR: test_execute_simple_mission (tests.test_mission_executor.TestMissionExecutor.test_execute_simple_mission)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\ASUS\Downloads\Automation\tests\test_mission_executor.py", line 41, in test_execute_simple_mission
+    asyncio.run(self.executor.execute_mission("exec_test_001", plan))
+  File "C:\ProgramData\anaconda3\Lib\asyncio\runners.py", line 194, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "C:\ProgramData\anaconda3\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\ProgramData\anaconda3\Lib\asyncio\base_events.py", line 687, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\ASUS\Downloads\Automation\agent_mission\mission_executor.py", line 57, in execute_mission
+    node = plan.nodes[node_id]
+           ~~~~~~~~~~^^^^^^^^^
+KeyError: Node(detect_idle_devices, collection)
+
+----------------------------------------------------------------------
+Ran 1 test in 0.040s
+
+FAILED (errors=1)
+
+[Test] Execute Simple Mission
+✅ Generated plan for energy_saver: 5 steps
+🚀 Executing mission exec_test_001: 4 layers
+📍 Layer 1/4: 2 steps
+❌ Mission exec_test_001 failed: Node(detect_idle_devices, collection)

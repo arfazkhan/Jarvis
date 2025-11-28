@@ -1,0 +1,108 @@
+EEEEE....F..
+======================================================================
+ERROR: test_generate_energy_plan (tests.test_mission_planner.TestMissionPlanner.test_generate_energy_plan)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\ASUS\Downloads\Automation\tests\test_mission_planner.py", line 41, in test_generate_energy_plan
+    plan = self.planner.generate_plan("energy_saver", context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ASUS\Downloads\Automation\agent_mission\mission_planner.py", line 55, in generate_plan
+    plan_node = PlanNode(
+                ^^^^^^^^^
+TypeError: PlanNode.__init__() got an unexpected keyword argument 'id'
+
+======================================================================
+ERROR: test_generate_sleep_plan (tests.test_mission_planner.TestMissionPlanner.test_generate_sleep_plan)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\ASUS\Downloads\Automation\tests\test_mission_planner.py", line 22, in test_generate_sleep_plan
+    plan = self.planner.generate_plan("sleep_optimization", context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ASUS\Downloads\Automation\agent_mission\mission_planner.py", line 55, in generate_plan
+    plan_node = PlanNode(
+                ^^^^^^^^^
+TypeError: PlanNode.__init__() got an unexpected keyword argument 'id'
+
+======================================================================
+ERROR: test_plan_has_valid_dag (tests.test_mission_planner.TestMissionPlanner.test_plan_has_valid_dag)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\ASUS\Downloads\Automation\tests\test_mission_planner.py", line 52, in test_plan_has_valid_dag
+    plan = self.planner.generate_plan("sleep_optimization", context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ASUS\Downloads\Automation\agent_mission\mission_planner.py", line 55, in generate_plan
+    plan_node = PlanNode(
+                ^^^^^^^^^
+TypeError: PlanNode.__init__() got an unexpected keyword argument 'id'
+
+======================================================================
+ERROR: test_rebuild_plan (tests.test_mission_planner.TestMissionPlanner.test_rebuild_plan)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\ASUS\Downloads\Automation\tests\test_mission_planner.py", line 81, in test_rebuild_plan
+    old_plan = self.planner.generate_plan("sleep_optimization", context)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ASUS\Downloads\Automation\agent_mission\mission_planner.py", line 55, in generate_plan
+    plan_node = PlanNode(
+                ^^^^^^^^^
+TypeError: PlanNode.__init__() got an unexpected keyword argument 'id'
+
+======================================================================
+ERROR: test_step_types_mapped_correctly (tests.test_mission_planner.TestMissionPlanner.test_step_types_mapped_correctly)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\ASUS\Downloads\Automation\tests\test_mission_planner.py", line 64, in test_step_types_mapped_correctly
+    plan = self.planner.generate_plan("sleep_optimization", context)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ASUS\Downloads\Automation\agent_mission\mission_planner.py", line 55, in generate_plan
+    plan_node = PlanNode(
+                ^^^^^^^^^
+TypeError: PlanNode.__init__() got an unexpected keyword argument 'id'
+
+======================================================================
+FAIL: test_evaluate_sleep_mission (tests.test_mission_monitor.TestMissionMonitor.test_evaluate_sleep_mission)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\ASUS\Downloads\Automation\tests\test_mission_monitor.py", line 68, in test_evaluate_sleep_mission
+    self.assertGreater(evaluation["score"], 0.5)  # Good metrics
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 0.2833333333333333 not greater than 0.5
+
+----------------------------------------------------------------------
+Ran 12 tests in 0.177s
+
+FAILED (failures=1, errors=5)
+
+[Test] Generate Energy Saver Plan
+
+[Test] Generate Sleep Optimization Plan
+
+[Test] Plan is Valid DAG (No Cycles)
+
+[Test] Rebuild Plan with Metrics
+
+[Test] Step Types Mapped Correctly
+
+[Test] Mission Planner Template Loading
+✅ Templates loaded in MissionPlanner
+
+[Test] Check Mission Completion
+✅ Mission completion detected correctly
+
+[Test] Completion Not Triggered Too Early
+✅ Early completion prevented correctly
+
+[Test] Evaluate Energy Mission
+📊 Monitoring started for mission: energy_001
+✅ Energy mission evaluated successfully
+
+[Test] Evaluate Sleep Mission
+📊 Monitoring started for mission: sleep_001
+
+[Test] Mission Monitor Initialization
+📊 Monitoring started for mission: test_mission_001
+✅ Monitor initialized metrics on mission start
+
+[Test] Needs Adaptation Trigger
+📊 Monitoring started for mission: sleep_002
+✅ Adaptation triggered with 2 recommendations
