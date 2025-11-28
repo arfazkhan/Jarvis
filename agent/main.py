@@ -142,7 +142,10 @@ def main():
     
     # 8. Dialogue System (The Voice)
     # 8. Dialogue System (The Voice)
-    dialogue_manager = DialogueManager(personality_manager) # Removed event_bus arg
+    from agent.agent_conversation.conversation_bridge import ConversationBridge
+    conversation_bridge = ConversationBridge(event_bus)
+    
+    dialogue_manager = DialogueManager(personality_manager, mission_manager) # Added mission_manager arg
     from agent_conversation.interaction_loop import InteractionLoop
     interaction_loop = InteractionLoop(event_bus, dialogue_manager)
     logger.info("✅ Dialogue System & Interaction Loop initialized")

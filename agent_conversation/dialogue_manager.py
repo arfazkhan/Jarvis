@@ -48,8 +48,9 @@ class DialogueResult:
     should_speak: bool = True
 
 class DialogueManager:
-    def __init__(self, personality_manager=None):
+    def __init__(self, personality_manager=None, mission_manager=None):
         self.personality_manager = personality_manager
+        self.mission_manager = mission_manager
         self.history: List[Dict[str, str]] = []
         self.last_interaction_time = 0
         self.classifier = IntentClassifier()
@@ -182,7 +183,12 @@ class DialogueManager:
                 "mission_id": "current" # Needs resolution
             }
         elif intent == "mission_status":
-            result.response_text = "Checking mission status."
+            if self.mission_manager:
+                status_summary = self._get_mission_status_summary()
+                result.response_text = status_summary
+            else:
+                result.response_text = "I can't check missions right now (Mission Manager not connected)."
+            
             result.mission_command = {
                 "command": "status"
             }
@@ -267,3 +273,32 @@ class DialogueManager:
             if self.history:
                 print("[DialogueManager] Session timed out. Clearing history.")
                 self.history = []
+
+    def _get_mission_status_summary(self) -> str:
+        """Get natural language summary of active missions."""
+        try:
+            active_missions = self.mission_manager.get_active_missions()
+            if not active_missions:
+                return "There are no active missions right now."
+            
+            summary = "Current active missions:\n"
+            for mission in active_missions:
+                # Assuming mission object has .mission_type and .status
+                # We might need to access .value if status is an Enum
+                status_str = mission.status.value if hasattr(mission.status, 'value') else str(mission.status)
+                summary += f"- {mission.mission_type.replace('_', ' ').title()}: {status_str.upper()}\n"
+                
+                # Add step info if available
+                if mission.runtime_state:
+                    # This assumes runtime_state is a dict
+                    step_status = mission.runtime_state.get("step_status", {})
+                    # Count completed steps
+                    completed = sum(1 for s in step_status.values() if s == "success")
+                    total = len(step_status)
+                    if total > 0:
+                        summary += f"  (Progress: {completed}/{total} steps)\n"
+            
+            return summary
+        except Exception as e:
+            print(f"[DialogueManager] Error getting mission status: {e}")
+            return "I encountered an error while checking mission status."
