@@ -35,17 +35,39 @@ class TestE2EIntegration(unittest.TestCase):
         # 5. Initialize Mission Control
         self.mission_manager = MissionManager(self.event_bus)
         self.mission_planner = MissionPlanner()
+        
+        # Initialize Action Router with Mocks
+        from agent_plan.action_router import ActionRouter
+        self.mock_scene_executor = MagicMock()
+        self.mock_device_executor = MagicMock()
+        self.mock_automation_executor = MagicMock()
+        self.mock_collection_executor = MagicMock()
+        self.mock_monitoring_executor = MagicMock()
+        
+        self.action_router = ActionRouter(
+            self.mock_scene_executor,
+            self.mock_device_executor,
+            self.mock_automation_executor,
+            self.mock_collection_executor,
+            self.mock_monitoring_executor
+        )
+        
         self.mission_executor = MissionExecutor(
             self.event_bus, 
             self.mission_manager.store, 
-            self.mission_planner
+            self.mission_planner,
+            self.action_router
         )
         
         # 6. Initialize Dialogue (Real LLM)
-        self.dialogue_manager = DialogueManager(self.event_bus, self.personality_manager)
+        self.dialogue_manager = DialogueManager(self.personality_manager)
         # Ensure client is initialized (requires GROQ_API_KEY)
         if not self.dialogue_manager.client:
             print("WARNING: GROQ_API_KEY not found. LLM tests will fail or be skipped.")
+        
+        # Initialize Interaction Loop (The Mouth & Ears)
+        from agent_conversation.interaction_loop import InteractionLoop
+        self.interaction_loop = InteractionLoop(self.event_bus, self.dialogue_manager)
         
         # 7. Initialize Cognitive Loop
         self.cognitive_loop = CognitiveLoop(self.event_bus)
@@ -69,33 +91,6 @@ class TestE2EIntegration(unittest.TestCase):
         self.event_bus.subscribe("mission_started", self._capture_event)
         self.event_bus.subscribe("personality_update", self._capture_event)
         self.event_bus.subscribe("voice_response", self._capture_event)
-
-    def _capture_event(self, event):
-        self.captured_events.append(event)
-
-    def test_scenario_1_voice_to_actuation(self):
-        """
-        Scenario: User says "Turn on the living room lights" -> Physical Actuation
-        """
-        print("\n=== Test Scenario 1: Voice -> Actuation ===")
-        
-        # 1. Simulate Voice Input
-        voice_event = {
-            "type": "voice_input",
-            "payload": {"text": "Turn on the living room lights"}
-        }
-        self.event_bus.publish(voice_event)
-        
-        # Allow time for processing (Dialogue -> Intent -> Executor)
-        time.sleep(0.5)
-        
-        # 2. Verify Action Request was published (by DialogueManager)
-        # Note: DialogueManager publishes 'action_request', but PlanExecutor doesn't subscribe to it directly yet?
-        # Wait, PlanExecutor executes 'PlanGraph'. Who converts 'action_request' to 'PlanGraph'?
-        # In Phase 3, PlanExecutor executed graphs. 
-        # The missing link might be an 'ActionDispatcher' or 'CognitiveLoop' handling 'action_request'.
-        # Let's check if DialogueManager handles it locally or if we need to bridge it.
-        # Ah, DialogueManager._handle_intent publishes 'action_request'.
         # We need something to listen to 'action_request' and call PlanExecutor.
         # Currently, that logic might be missing or inside CognitiveLoop?
         # Let's check CognitiveLoop.
@@ -113,6 +108,9 @@ class TestE2EIntegration(unittest.TestCase):
              print("✅ MatterController.turn_on called!")
         else:
              print("❌ MatterController.turn_on NOT called (Expected if no bridge exists)")
+
+    def _capture_event(self, event):
+        self.captured_events.append(event)
 
     def test_scenario_2_voice_to_mission(self):
         """

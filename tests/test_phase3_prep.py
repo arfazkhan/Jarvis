@@ -66,25 +66,18 @@ class TestPhase3Prep(unittest.TestCase):
             mock_client.chat.completions.create.return_value = mock_completion
             
             with patch.dict("os.environ", {"GROQ_API_KEY": "fake"}):
-                dm = DialogueManager(self.bus)
+                dm = DialogueManager() # No bus argument
                 # Mock classifier to force LLM path
                 dm.classifier = MagicMock()
                 dm.classifier.classify.return_value = {"intent": "unknown", "confidence": 0.0}
                 
-                # Capture actions
-                actions = []
-                self.bus.subscribe("action_request", lambda e: actions.append(e))
-                
                 # Simulate complex request
-                self.bus.publish({
-                    "type": "voice_input",
-                    "payload": {"text": "Get ready for a party"}
-                })
+                result = dm.process_input("Get ready for a party")
                 
                 # Verify action request generated from JSON
-                self.assertEqual(len(actions), 1)
-                self.assertEqual(actions[0]["payload"]["intent"], "party_mode")
-                self.assertEqual(actions[0]["payload"]["target"], "complex_plan")
+                self.assertIsNotNone(result.action_request)
+                self.assertEqual(result.action_request["intent"], "party_mode")
+                self.assertEqual(result.action_request["target"], "complex_plan")
                 print("✅ DialogueManager parsed JSON from LLM")
 
 if __name__ == "__main__":

@@ -2,6 +2,10 @@
 
 An AI-driven home automation system using Matter-over-Thread and local LLM reasoning.
 
+## Documentation
+- [Architecture Overview](ARCHITECTURE.md): High-level system design and components.
+- [Task List](task.md): Project roadmap and progress.
+
 ## Setup
 
 ### 1. Create Virtual Environment
@@ -34,13 +38,18 @@ python -m agent.main
 ```
 
 ## Testing
-Run the unit tests to verify everything is working:
+Run the comprehensive test suite (pytest):
 ```bash
-python -m unittest discover tests
+python -m pytest tests/
+```
+Or run specific tests:
+```bash
+python -m pytest tests/test_e2e_integration.py
 ```
 
 ## Directory Structure
-- `agent/`: Core source code.
-- `config/`: Configuration files.
-- `docs/`: Documentation.
-- `tests/`: Unit tests.
+- `agent/`: Core source code (Event Bus, State, Mission, Dialogue, etc.).
+- `config/`: Configuration files (YAML).
+- `docs/`: Additional documentation.
+- `tests/`: Unit and Integration tests.
+

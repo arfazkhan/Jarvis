@@ -16,6 +16,13 @@ from agent.event_bus.event_bus import EventBus
 
 CONFIG = get_config("conversation")
 DIALOGUE_CONFIG = CONFIG.get("dialogue", {})
+print(f"DEBUG: Loading DialogueManager. Initial DIALOGUE_CONFIG type: {type(DIALOGUE_CONFIG)}")
+
+# Fallback for testing if config is mocked
+if not isinstance(DIALOGUE_CONFIG, dict):
+    print("DEBUG: DIALOGUE_CONFIG is not dict, falling back to empty dict")
+    DIALOGUE_CONFIG = {}
+
 PERSONALITY_CONFIG = get_config("personality")
 
 # Basic system prompt for conversation
@@ -30,9 +37,18 @@ Example: {"intent": "prepare_date_night", "steps": ["dim lights", "play music"]}
 
 from agent_conversation.intent_classifier import IntentClassifier
 
+from dataclasses import dataclass, field
+
+@dataclass
+class DialogueResult:
+    """Structured result from DialogueManager"""
+    response_text: Optional[str] = None
+    action_request: Optional[Dict[str, Any]] = None
+    mission_command: Optional[Dict[str, Any]] = None
+    should_speak: bool = True
+
 class DialogueManager:
-    def __init__(self, event_bus: EventBus, personality_manager=None):
-        self.event_bus = event_bus
+    def __init__(self, personality_manager=None):
         self.personality_manager = personality_manager
         self.history: List[Dict[str, str]] = []
         self.last_interaction_time = 0
@@ -46,13 +62,10 @@ class DialogueManager:
         else:
             self.client = Groq(api_key=api_key)
 
-        # Subscribe to voice input
-        self.event_bus.subscribe("voice_input", self.handle_voice_input)
-
-    def handle_voice_input(self, event: Dict[str, Any]):
-        """Handle incoming voice text from STT"""
-        text = event.get("payload", {}).get("text")
-        if not text: return
+    def process_input(self, text: str) -> DialogueResult:
+        """Process natural language input and return structured result"""
+        if not text: 
+            return DialogueResult(should_speak=False)
 
         print(f"[DialogueManager] User said: {text}")
         
@@ -65,76 +78,118 @@ class DialogueManager:
         
         # 3. Check for Intent (NLU)
         intent_res = self.classifier.classify(text)
-        response_text = ""
+        result = DialogueResult()
         
         if intent_res["confidence"] > 0.8 and intent_res["intent"] != "unknown":
             # Handle command locally
             print(f"[DialogueManager] Detected intent: {intent_res['intent']}")
-            response_text = self._handle_intent(intent_res)
+            result = self._handle_intent(intent_res)
         else:
             # Fallback to LLM
             response_text = self._generate_response()
+            result.response_text = response_text
+            
+            # Check if response is JSON (Structured Output)
+            if response_text and response_text.strip().startswith("{"):
+                try:
+                    import json
+                    data = json.loads(response_text)
+                    if "intent" in data:
+                        print(f"[DialogueManager] Parsed JSON Action: {data['intent']}")
+                        result.action_request = {
+                            "intent": data["intent"],
+                            "target": "complex_plan",
+                            "slots": data.get("slots", {}),
+                            "raw_text": text,
+                            "confidence": 1.0
+                        }
+                        # If JSON has explicit response text, use it
+                        if "response_text" in data:
+                            result.response_text = data["response_text"]
+                        else:
+                            result.should_speak = False # Don't read raw JSON
+                except json.JSONDecodeError:
+                    print("[DialogueManager] Failed to parse JSON response")
         
         # 4. Add response to history
-        if response_text:
-            self.history.append({"role": "assistant", "content": response_text})
-            print(f"[DialogueManager] Jarvis says: {response_text}")
+        if result.response_text:
+            self.history.append({"role": "assistant", "content": result.response_text})
+            print(f"[DialogueManager] Jarvis says: {result.response_text}")
             
-            # 5. Publish for TTS
-            self.event_bus.publish({
-                "type": "voice_response",
-                "source": "dialogue_manager",
-                "payload": {"text": response_text}
-            })
+        return result
 
-    def _handle_intent(self, intent_res: Dict[str, Any]) -> str:
+    def _handle_intent(self, intent_res: Dict[str, Any]) -> DialogueResult:
         """Execute system action based on intent"""
         intent = intent_res["intent"]
         slots = intent_res["slots"]
         raw_text = intent_res.get("original_text", "")
         confidence = intent_res.get("confidence", 1.0)
         
-        # Publish standardized action event for Executor (Phase 3)
-        self.event_bus.publish({
-            "type": "action_request",
-            "source": "dialogue_manager",
-            "payload": {
+        result = DialogueResult()
+        
+        # Generate simple confirmation response
+        if intent == "turn_on":
+            result.response_text = f"Turning on {slots.get('device', 'device')} in {slots.get('location', 'here')}."
+            result.action_request = {
                 "intent": intent,
-                "target": slots.get("device") or slots.get("routine") or "unknown",
+                "target": slots.get("device") or slots.get("location") or "unknown",
                 "slots": slots,
                 "raw_text": raw_text,
                 "confidence": confidence
             }
-        })
-        
-        # Generate simple confirmation response
-        if intent == "turn_on":
-            return f"Turning on {slots.get('device', 'device')} in {slots.get('location', 'here')}."
         elif intent == "turn_off":
-            return f"Turning off {slots.get('device', 'device')}."
+            result.response_text = f"Turning off {slots.get('device', 'device')}."
+            result.action_request = {
+                "intent": intent,
+                "target": slots.get("device") or "unknown",
+                "slots": slots,
+                "raw_text": raw_text,
+                "confidence": confidence
+            }
         elif intent == "set_routine":
-            return f"Activating {slots.get('routine', 'routine')} mode."
+            result.response_text = f"Activating {slots.get('routine', 'routine')} mode."
+            result.action_request = {
+                "intent": intent,
+                "target": slots.get("routine") or "unknown",
+                "slots": slots,
+                "raw_text": raw_text,
+                "confidence": confidence
+            }
         elif intent == "query_status":
-            return f"Checking status of {slots.get('device', 'device')}."
+            result.response_text = f"Checking status of {slots.get('device', 'device')}."
+            # Query status might need an action request too, or just immediate response?
+            # For now, let's assume it's an action
+            result.action_request = {
+                "intent": intent,
+                "target": slots.get("device") or "unknown",
+                "slots": slots,
+                "raw_text": raw_text,
+                "confidence": confidence
+            }
             
         elif intent == "start_mission":
             mission_type = slots.get("mission_type", "unknown")
-            # Publish mission_started event for MissionExecutor
-            self.event_bus.publish({
-                "type": "mission_started",
-                "source": "dialogue_manager",
-                "payload": {
-                    "mission_id": mission_type,
-                    "trigger": "voice_command"
-                }
-            })
-            return f"Starting mission: {mission_type}."
+            result.response_text = f"Starting mission: {mission_type}."
+            result.mission_command = {
+                "command": "start",
+                "mission_id": mission_type, # Using type as ID for now/template
+                "trigger": "voice_command"
+            }
         elif intent == "stop_mission":
-            return "Stopping current mission."
+            result.response_text = "Stopping current mission."
+            result.mission_command = {
+                "command": "stop",
+                "mission_id": "current" # Needs resolution
+            }
         elif intent == "mission_status":
-            return "Checking mission status."
+            result.response_text = "Checking mission status."
+            result.mission_command = {
+                "command": "status"
+            }
+        else:
+            result.response_text = "I understood the command but don't know how to execute it yet."
             
-        return "I understood the command but don't know how to execute it yet."
+        return result
 
     def _generate_response(self) -> str:
         """Call LLM to generate response"""
@@ -157,23 +212,20 @@ class DialogueManager:
             response = completion.choices[0].message.content.strip()
             
             # Check if response is JSON (Action Request from LLM)
+            # NOTE: For now, we return string. If we want LLM actions, we'd parse here 
+            # and return DialogueResult with action_request.
+            # But the method signature is -> str.
+            # Let's keep it simple: LLM returns text. 
+            # If we want LLM actions, we should refactor _generate_response to return DialogueResult too.
+            # But for this phase, let's assume LLM is mostly chat unless it outputs JSON.
+            
             if response.startswith("{") and response.endswith("}"):
-                try:
-                    action_data = json.loads(response)
-                    self.event_bus.publish({
-                        "type": "action_request",
-                        "source": "dialogue_manager",
-                        "payload": {
-                            "intent": action_data.get("intent", "unknown"),
-                            "target": "complex_plan",
-                            "slots": action_data,
-                            "raw_text": self.history[-1]["content"],
-                            "confidence": 0.9
-                        }
-                    })
-                    return "I'm working on that plan."
-                except json.JSONDecodeError:
-                    pass
+                # It's a JSON action?
+                # We can't easily return it from here if signature is str.
+                # But process_input calls this.
+                # Let's just return the text for now, and maybe process_input can parse it?
+                # Or better, let's stick to text responses for LLM fallback for now.
+                pass
             
             return response
             
