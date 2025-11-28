@@ -3,8 +3,9 @@ import json
 from agent.controllers.virtual_device import VirtualMatterDevice
 
 class MatterController:
-    def __init__(self, use_virtual=True):
+    def __init__(self, use_virtual=True, arbitration_manager=None):
         self.use_virtual = use_virtual
+        self.arbitration_manager = arbitration_manager
 
         if use_virtual:
             print("[MatterController] Using virtual device")
@@ -44,6 +45,17 @@ class MatterController:
         If real mode:
             - Call chip-tool or Python Matter SDK.
         """
+
+        # Arbitration Check
+        if self.arbitration_manager:
+            # Default to MISSION_EXECUTION priority if not specified (TODO: Pass priority from caller)
+            # For now, we assume standard command
+            from agent.agent_core.arbitration_manager import Priority
+            # We need a way to know the source/priority. 
+            # Ideally, turn_on should accept context.
+            # For now, we'll assume a default check, but this is a partial implementation.
+            # Real implementation needs source passed down.
+            pass
 
         if self.use_virtual:
             return self.device.turn_on(endpoint)

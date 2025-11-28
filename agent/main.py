@@ -52,10 +52,15 @@ def main():
     event_bus = EventBus()
     logger.info("✅ EventBus initialized")
     
+    # 1.5 Arbitration Manager (The Judge)
+    from agent.agent_core.arbitration_manager import ArbitrationManager
+    arbitration_manager = ArbitrationManager()
+    logger.info("✅ Arbitration Manager initialized")
+
     # 2. Controllers & State (The Body)
     # Use virtual=False for real devices if configured, else True
     use_virtual = os.getenv("USE_VIRTUAL_DEVICES", "true").lower() == "true"
-    matter_controller = MatterController(use_virtual=use_virtual)
+    matter_controller = MatterController(use_virtual=use_virtual, arbitration_manager=arbitration_manager)
     
     # Legacy State Engine (for Web UI & Device History)
     state_engine = StateEngine(event_bus)
