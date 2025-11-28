@@ -22,8 +22,12 @@ class MissionStore:
     def save_mission(self, mission: Mission):
         """Save mission to disk"""
         file_path = self._get_mission_file(mission.mission_id)
-        with open(file_path, 'w') as f:
+        temp_path = file_path.with_suffix(".tmp")
+        with open(temp_path, 'w') as f:
             json.dump(mission.to_dict(), f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        temp_path.replace(file_path)
     
     def load_mission(self, mission_id: str) -> Optional[Mission]:
         """Load mission from disk"""

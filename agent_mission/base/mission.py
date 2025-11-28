@@ -36,6 +36,7 @@ class Mission:
     next_run_ts: Optional[float] = None
     confidence: float = 0.0
     user_id: str = "default_user"
+    runtime_state: Optional[Dict[str, Any]] = None  # Runtime execution state
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -49,7 +50,8 @@ class Mission:
             "start_ts": self.start_ts,
             "next_run_ts": self.next_run_ts,
             "confidence": self.confidence,
-            "user_id": self.user_id
+            "user_id": self.user_id,
+            "runtime_state": self.runtime_state
         }
     
     @classmethod

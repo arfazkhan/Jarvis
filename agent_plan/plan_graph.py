@@ -71,3 +71,17 @@ class PlanGraph:
 
     def get_node(self, node_id: str) -> PlanNode:
         return self.nodes.get(node_id)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize graph to dict"""
+        return {
+            "nodes": [
+                {
+                    "id": n.id,
+                    "action": n.action,
+                    "params": n.params,
+                    "depends_on": n.depends_on
+                }
+                for n in self.nodes.values()
+            ]
+        }
