@@ -1,6 +1,12 @@
 import unittest
 import shutil
+import sys
+import os
 from pathlib import Path
+
+# Add project root to path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from agent_cognitive.context_graph import ContextGraph
 
 TEST_GRAPH_PATH = Path("data/test_cognitive/context_graph.json")
@@ -40,7 +46,7 @@ class TestContextGraph(unittest.TestCase):
         self.assertIn("room_1", node_ids)
         
         # Check edges
-        links = context["links"]
+        links = context.get("links", context.get("edges", []))
         self.assertEqual(len(links), 1)
         self.assertEqual(links[0]["source"], "user_1")
         self.assertEqual(links[0]["target"], "room_1")

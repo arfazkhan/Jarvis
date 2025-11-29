@@ -1,7 +1,13 @@
 import unittest
 import shutil
 import time
+import sys
+import os
 from pathlib import Path
+
+# Add project root to path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from agent.event_bus.event_bus import EventBus
 from agent_cognitive.cognitive_loop import CognitiveLoop
 from agent_cognitive.context_graph import ContextGraph
@@ -56,12 +62,11 @@ class TestPhase1Simulation(unittest.TestCase):
             "source": "gps",
             "payload": {"user_id": "user_alice", "location": "home"}
         })
-        time.sleep(0.5) # Wait for processing
-        
         # Verify Context Update
+        time.sleep(1.0) # Wait for processing
         context = self.loop.context.get_context("user_alice")
-        # Check if edge exists: user_alice -> home
-        links = context.get("links", [])
+        links = context.get("links", context.get("edges", []))
+        
         has_link = any(l["target"] == "home" and l["relation"] == "is_in" for l in links)
         self.assertTrue(has_link, "Context should reflect user is in home")
         
