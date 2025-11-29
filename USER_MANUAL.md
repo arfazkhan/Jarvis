@@ -231,6 +231,22 @@ flowchart LR
 
 ---
 
+| Device Type           | Supported  | Notes                           |
+| --------------------- | ---------- | ------------------------------- |
+| Lights (On/Off)       | ✅ Yes      | Relay only                      |
+| Ceiling Fans (On/Off) | ✅ Yes      | Relay; speed not supported      |
+| Sockets / Outlets     | ✅ Yes      | Relay                           |
+| Smart Locks (Matter)  | ⚠️ Partial | Only via existing Matter device |
+| Thermostats (Matter)  | ⚠️ Partial | Needs Matter-ready thermostat   |
+| Sensors (PIR, temp)   | ⚠️ Partial | ESPHome recommended             |
+| Dimmers               | ❌ No       | Triac/MOSFET support coming     |
+| AC/IR Remotes         | ❌ No       | Planned for v0.10+              |
+
+This helps developers instantly see what works.
+
+---
+
+
 # 6. Hardware connection guide (diagrams + concept)
 
 ## 6.1 High-level architecture
