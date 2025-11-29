@@ -104,7 +104,7 @@ flowchart TD
   C -->|ESP-Matter| E[Build + flash ESP-Matter]
   D --> F[Wire relay to ESP]
   E --> F
-  F --> G[Start matter-server (if using Matter)]
+  F --> G[Start matter-server &#40;if using Matter&#41;]
   G --> H[Add device to config/settings.yaml]
   H --> I[Run python agent/main.py]
   I --> J[Test with python agent/control.py]
