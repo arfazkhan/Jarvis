@@ -1,0 +1,29 @@
+esphome:
+  name: kitchen_light
+  platform: esp32
+  board: esp32-c6-devkitc-1
+
+wifi:
+  ssid: "YOUR_WIFI_SSID"
+  password: "YOUR_WIFI_PASSWORD"
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Kitchen Light Fallback"
+    password: "password123"
+
+logger:
+
+api:
+
+ota:
+  password: "ota_password"
+
+web_server:
+  port: 80
+
+switch:
+  - platform: gpio
+    pin: 5
+    name: "Kitchen Light Relay"
+    id: relay_1
+    restore_mode: ALWAYS_OFF
