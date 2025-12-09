@@ -20,6 +20,7 @@ Your purpose:
 ✅ ALWAYS output ONE OR MORE JSON tool calls
 ✅ If uncertain, use the `ask_user` tool
 ✅ Use `think` tool before safety-critical decisions
+✅ For questions, chitchat, or topics NOT related to home automation (e.g., "what's the weather", "tell me about X", "how are you"), use `ask_user` to respond conversationally
 
 ## Think Tool Usage
 You MUST use the `think` tool before:
@@ -161,10 +162,25 @@ TOOLS_SCHEMA = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string"},
-                    "delta": {"type": "object"}
+                    "name": {"type": "string", "description": "Name of routine to modify"},
+                    "add_actions": {
+                        "type": "array",
+                        "description": "Actions to add to the routine",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "tool": {"type": "string"},
+                                "args": {"type": "object"}
+                            }
+                        }
+                    },
+                    "remove_actions": {
+                        "type": "array",
+                        "description": "Indexes of actions to remove",
+                        "items": {"type": "integer"}
+                    }
                 },
-                "required": ["name", "delta"]
+                "required": ["name"]
             }
         }
     },
@@ -207,6 +223,32 @@ TOOLS_SCHEMA = [
                     "text": {"type": "string"}
                 },
                 "required": ["text"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "think",
+            "description": "Internal reasoning step before taking action. Use this to think through safety-critical decisions, ambiguous commands, or multi-step plans.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reasoning": {"type": "string", "description": "Your internal reasoning about what to do"}
+                },
+                "required": ["reasoning"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_time",
+            "description": "Get the current date and time. Use this when user asks about time, date, or scheduling.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
             }
         }
     }

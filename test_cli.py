@@ -43,13 +43,12 @@ from agent.tools.executor import ToolExecutor
 from agent.learning.learning_engine import LearningEngine
 from agent.llm_agent.llm_agent import LLMAgent
 from agent.voice.transcriber import VoiceTranscriber
-from agent.voice.transcriber import VoiceTranscriber
-from agent.voice.transcriber import VoiceTranscriber
-from agent.voice.transcriber import VoiceTranscriber
 from agent.voice.recorder import AudioRecorder
 from agent.voice.wake_word import WakeWordEngine
 from agent.voice.semantic_vad import SemanticVAD
 from agent.voice.speaker import Speaker
+from agent.voice.pipeline import VoicePipeline
+from agent.voice.realtime_voice import RealtimeVoice
 
 # ANSI colors for pretty output
 class Colors:
@@ -123,6 +122,10 @@ class TestCLI:
         self.wake_word_engine = WakeWordEngine()
         self.semantic_vad = SemanticVAD()
         self.speaker = Speaker()
+        
+        # Initialize Voice Pipeline (async streaming with RealtimeTTS)
+        self.voice_pipeline = VoicePipeline(tts_engine="kokoro")
+        self.voice_pipeline.start()
         
         self.llm_agent = LLMAgent(
             self.event_bus,
@@ -305,81 +308,123 @@ class TestCLI:
                 pass
                 
     def _run_chat_mode(self):
-        """Continuous chat loop with Wake Word + VAD"""
-        print(f"\n{Colors.HEADER}{Colors.BOLD}🦜 Chat Mode (Wake Word: 'Hey Jarvis'){Colors.RESET}")
-        print("Say 'Hey Jarvis' to wake me up. Ctrl+C to stop.")
+        """Continuous chat loop using RealtimeSTT (wake word + VAD + transcription)"""
+        from RealtimeSTT import AudioToTextRecorder
         
-        # Initial calibration for VAD
-        self.recorder.calibrate_noise()
+        print(f"\n{Colors.HEADER}{Colors.BOLD}🦜 Chat Mode (RealtimeSTT){Colors.RESET}")
+        print("Say 'Jarvis' to wake me up. Ctrl+C to stop.")
+        print(f"{Colors.YELLOW}Initializing RealtimeSTT...{Colors.RESET}")
+        
+        def process_text(text: str):
+            """Callback when transcription is complete"""
+            if not text or not text.strip():
+                return
+                
+            print(f"\n{Colors.GREEN}You said: \"{text}\"{Colors.RESET}")
+            
+            # Check for exit phrase
+            if "exit" in text.lower() or "stop listening" in text.lower():
+                print("Exiting chat mode...")
+                recorder.stop()
+                return
+            
+            # === STREAMING MODE ===
+            print(f"{Colors.BLUE}🧠 Sending to Groq LLM...{Colors.RESET}")
+            
+            # Create event for streaming LLM
+            event = {
+                "type": "voice_command",
+                "payload": {"text": text, "source": "test_cli"},
+                "timestamp": time.time()
+            }
+            
+            # Create a wrapper to log tokens
+            full_response = []
+            def logged_stream():
+                token_stream = self.llm_agent.handle_streaming(event)
+                for token in token_stream:
+                    full_response.append(token)
+                    # Show first part of each token (colored)
+                    display = token[:50].replace('\n', '↵')
+                    print(f"{Colors.YELLOW}▸ {display}{Colors.RESET}")
+                    yield token
+            
+            # Feed streaming tokens through pipeline
+            print(f"{Colors.BLUE}📤 Streaming response:{Colors.RESET}")
+            self.voice_pipeline.process_llm_stream(logged_stream())
+            
+            # Show full response summary
+            response_text = "".join(full_response)
+            print(f"\n{Colors.GREEN}━━━ Full LLM Response ━━━{Colors.RESET}")
+            print(f"{Colors.CYAN}{response_text[:500]}{'...' if len(response_text) > 500 else ''}{Colors.RESET}")
+            print(f"{Colors.GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━{Colors.RESET}")
+            
+            # Process queued tool calls (execute device commands)
+            tools = self.voice_pipeline.get_pending_tools()
+            if tools:
+                print(f"\n{Colors.BLUE}🔧 Executing {len(tools)} tool(s):{Colors.RESET}")
+            for tool_data in tools:
+                tool_name = tool_data.get('tool', '')
+                args = tool_data.get('args', {})
+                
+                print(f"  {Colors.CYAN}→ {tool_name}({args}){Colors.RESET}")
+                if tool_name in ('turn_on', 'turn_off', 'create_routine', 'run_routine'):
+                    self.event_bus.publish({
+                        "type": "tool_calls_generated",
+                        "payload": [{"tool": tool_name, "args": args}],
+                        "source": "voice_pipeline",
+                        "timestamp": time.time()
+                    })
+            
+            # Wait for audio to finish playing
+            while self.voice_pipeline.is_speaking():
+                time.sleep(0.1)
+            
+            print(f"\n{Colors.CYAN}💤 Listening... (say 'Jarvis'){Colors.RESET}")
+        
+        def on_realtime_update(text: str):
+            """Show real-time transcription updates"""
+            if text.strip():
+                print(f"\r{Colors.YELLOW}[...] {text}{Colors.RESET}", end="", flush=True)
         
         try:
+            # Initialize RealtimeSTT with wake word
+            recorder = AudioToTextRecorder(
+                model="base",  # Whisper model size
+                language="en",
+                device="cuda",  # Force CUDA device
+                compute_type="int8",  # More compatible than float16
+                silero_sensitivity=0.4,
+                webrtc_sensitivity=2,
+                post_speech_silence_duration=0.6,
+                min_length_of_recording=0.5,
+                min_gap_between_recordings=0,
+                enable_realtime_transcription=True,
+                realtime_processing_pause=0.1,
+                on_realtime_transcription_update=on_realtime_update,
+                wakeword_backend="pvporcupine",  # Use Porcupine engine
+                wake_words="jarvis",  # Just "Jarvis" - no "hey" needed!
+                wake_word_activation_delay=0.5,
+            )
+            
+            print(f"{Colors.GREEN}✅ RealtimeSTT ready!{Colors.RESET}")
+            print(f"{Colors.CYAN}💤 Listening... (say 'Jarvis'){Colors.RESET}")
+            
+            # Main listening loop - RealtimeSTT handles everything!
             while True:
-                print(f"\n{Colors.CYAN}💤 Waiting for wake word...{Colors.RESET}")
-                
-                # STAGE 1: Passive Listening (Wake Word)
-                # Stream audio chunks
-                for chunk in self.recorder.stream():
-                    if self.wake_word_engine.detect(chunk):
-                        print(f"\n{Colors.YELLOW}✨ WAKE WORD DETECTED!{Colors.RESET}")
-                        # Dynamic audio acknowledgment - non-blocking (threaded)
-                        import random
-                        import threading
-                        greetings = [
-                            "Hmm?",
-                            "Hey!",
-                            "Yes!",
-                            "Sup!",
-                            "Here!",
-                            "Yep?",
-                        ]
-                        # Play greeting in background so recording can start immediately
-                        greeting_thread = threading.Thread(
-                            target=self.speaker.speak, 
-                            args=(random.choice(greetings),)
-                        )
-                        greeting_thread.start()
-                        break # Exit stream to start recording
-                
-                # STAGE 2: Active Recording (Semantic VAD)
-                # Use semantic recording - waits for complete sentences
-                audio_file = self.recorder.record_semantic(
-                    self.semantic_vad, 
-                    self.transcriber,
-                    output_file="chat_cmd.wav"
-                )
-                
-                if not audio_file:
-                    continue
-                    
-                # Transcribe
-                print(f"{Colors.BLUE}Transcribing...{Colors.RESET}")
-                text = self.transcriber.transcribe(audio_file)
-                
-                if text.startswith("Error"):
-                    print(f"{Colors.RED}{text}{Colors.RESET}")
-                    continue
-                    
-                print(f"{Colors.GREEN}You said: \"{text}\"{Colors.RESET}")
-                
-                # Check for exit phrase
-                if "exit" in text.lower() or "stop" in text.lower():
-                    print("Exiting chat mode...")
-                    break
-                    
-                # Execute
-                self.send_voice_command(text)
-                
-                # Small pause
-                time.sleep(1)
+                text = recorder.text(process_text)
                 
         except KeyboardInterrupt:
             print("\nStopping chat mode...")
+        except Exception as e:
+            print(f"{Colors.RED}Error: {e}{Colors.RESET}")
+            import traceback
+            traceback.print_exc()
         finally:
-            if os.path.exists("chat_cmd.wav"):
-                try:
-                    os.remove("chat_cmd.wav")
-                except:
-                    pass
+            try:
+                recorder.shutdown()
+            except:
+                pass
     
     def run(self):
         """Main CLI loop"""

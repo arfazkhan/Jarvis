@@ -34,6 +34,11 @@ SUSPICIOUS_PATTERNS = [
     (r'override.*security', "Security override attempt"),
     (r'bypass.*safety', "Safety bypass attempt"),
     (r'disable.*pin', "PIN disable attempt"),
+    (r'disable.*safety', "Safety disable attempt"),
+    (r'skip.*confirm', "Confirmation skip attempt"),
+    (r'emergency.*bypass', "Emergency bypass attempt"),
+    (r'ignore.*previous', "Jailbreak attempt"),
+    (r'reveal.*prompt', "Prompt extraction attempt"),
 ]
 
 # Keywords that require PIN verification
@@ -325,3 +330,86 @@ Output ONLY the response message, nothing else."""
         except Exception as e:
             print(f"[LLMAgent] Error calling Groq: {e}")
 
+    # ═══════════════════════════════════════════════════════════
+    # STREAMING RESPONSE (for Async Pipeline)
+    # ═══════════════════════════════════════════════════════════
+    
+    def handle_streaming(self, event):
+        """
+        Handle event with streaming response for async voice pipeline.
+        Yields tokens as they arrive from the LLM.
+        
+        Tool calls are wrapped in ### TOOL: ... ### markers for router.
+        """
+        # Defensive check
+        if not isinstance(event, dict):
+            return
+        
+        if event.get("type") == "time_tick":
+            return
+        
+        # Security checks
+        if event.get("type") == "voice_command":
+            payload = event.get("payload", {})
+            user_text = payload.get("text", "") if isinstance(payload, dict) else str(payload)
+            
+            is_attack, attack_type, sanitized_text = self._detect_attack(user_text)
+            if is_attack:
+                self._handle_attack(attack_type, user_text)
+                return
+        
+        # Build context
+        context = self._build_context(event)
+        
+        try:
+            # Streaming request
+            stream = self.client.chat.completions.create(
+                model="meta-llama/llama-4-scout-17b-16e-instruct",
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": json.dumps(context)}
+                ],
+                tools=TOOLS_SCHEMA,
+                tool_choice="auto",
+                stream=True  # Enable streaming
+            )
+            
+            # Track if we're accumulating a tool call
+            current_tool = None
+            tool_args_buffer = ""
+            
+            for chunk in stream:
+                delta = chunk.choices[0].delta if chunk.choices else None
+                if not delta:
+                    continue
+                
+                # Handle text content
+                if delta.content:
+                    print(f"[Stream] Token: '{delta.content}'")
+                    yield delta.content
+                
+                # Handle tool calls (streamed as deltas)
+                if delta.tool_calls:
+                    for tc in delta.tool_calls:
+                        if tc.function.name:
+                            # New tool call starting
+                            if current_tool:
+                                # Emit previous tool
+                                yield f"### TOOL: {json.dumps({'tool': current_tool, 'args': json.loads(tool_args_buffer)})} ###"
+                            current_tool = tc.function.name
+                            tool_args_buffer = tc.function.arguments or ""
+                        elif tc.function.arguments:
+                            # Accumulating arguments
+                            tool_args_buffer += tc.function.arguments
+            
+            # Emit final tool if any
+            if current_tool and tool_args_buffer:
+                try:
+                    yield f"### TOOL: {json.dumps({'tool': current_tool, 'args': json.loads(tool_args_buffer)})} ###"
+                except json.JSONDecodeError:
+                    print(f"[LLMAgent] Failed to parse tool args: {tool_args_buffer}")
+                    
+        except Exception as e:
+            print(f"[LLMAgent] Streaming error: {e}")
+            import traceback
+            traceback.print_exc()
