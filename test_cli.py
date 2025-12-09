@@ -42,6 +42,9 @@ from agent.automations.automation_engine import AutomationEngine
 from agent.tools.executor import ToolExecutor
 from agent.learning.learning_engine import LearningEngine
 from agent.llm_agent.llm_agent import LLMAgent
+from agent.voice.transcriber import VoiceTranscriber
+from agent.voice.transcriber import VoiceTranscriber
+from agent.voice.recorder import AudioRecorder
 
 # ANSI colors for pretty output
 class Colors:
@@ -109,6 +112,10 @@ class TestCLI:
         # Update learning engine with tool executor
         self.learning_engine.tool_executor = self.tool_executor
         
+        # Initialize Voice Components
+        self.transcriber = VoiceTranscriber()
+        self.recorder = AudioRecorder()
+        
         self.llm_agent = LLMAgent(
             self.event_bus,
             self.state_engine,
@@ -165,6 +172,9 @@ class TestCLI:
         print("  /history  - Show recent events")
         print("  /logs     - Show reasoning audit log")
         print("  /prefs    - Show stored preferences")
+        print("  /transcribe <file> - Test audio transcription")
+        print("  /record   - Record voice command (5s)")
+        print("  /chat     - Continuous conversation mode (VAD)")
         print("  /help     - Show this help")
         print("  /quit     - Exit")
         print()
@@ -239,6 +249,96 @@ class TestCLI:
         
         # Give LLM agent time to process
         time.sleep(2)
+        
+    def test_transcription(self, file_path: str, auto_execute: bool = False):
+        """Test audio transcription"""
+        print(f"\n{Colors.CYAN}Transcribing {file_path}...{Colors.RESET}")
+        
+        # Check if file exists relative to current dir or absolute
+        path = Path(file_path)
+        if not path.exists():
+            # Try relative to script dir
+            script_dir = Path(__file__).parent
+            path = script_dir / file_path
+        
+        start_time = time.time()
+        result = self.transcriber.transcribe(str(path))
+        duration = time.time() - start_time
+        
+        print(f"{Colors.GREEN}Transcription Result ({duration:.2f}s):{Colors.RESET}")
+        print(f"{Colors.BOLD}\"{result}\"{Colors.RESET}")
+        
+        # Executes if auto_execute is True, otherwise asks
+        if not result.startswith("Error"):
+            if auto_execute:
+                self.send_voice_command(result)
+            else:
+                print(f"\n{Colors.YELLOW}Execute this as a voice command? (y/n){Colors.RESET}")
+                choice = input("arvis> ").lower()
+                if choice == 'y':
+                    self.send_voice_command(result)
+                
+    def _test_recording(self):
+        """Test authentication recording"""
+        output_file = "voice_cmd.wav"
+        saved_file = self.recorder.record(duration=5, output_file=output_file)
+        
+        if saved_file:
+            self.test_transcription(saved_file, auto_execute=True)
+            
+            # clean up
+            try:
+                os.remove(saved_file)
+            except:
+                pass
+                
+    def _run_chat_mode(self):
+        """Continuous chat loop with VAD"""
+        print(f"\n{Colors.HEADER}{Colors.BOLD}🦜 Entering Chat Mode (Hands-free){Colors.RESET}")
+        print("Speak naturally. Say 'exit' or press Ctrl+C to stop.")
+        
+        # Initial calibration
+        self.recorder.calibrate_noise()
+        
+        try:
+            while True:
+                print(f"\n{Colors.CYAN}Waiting for speech...{Colors.RESET}")
+                
+                # record_auto waits for speech and stops on silence
+                audio_file = self.recorder.record_auto(output_file="chat_cmd.wav")
+                
+                if not audio_file:
+                    continue
+                    
+                # Transcribe
+                print(f"{Colors.BLUE}Transcribing...{Colors.RESET}")
+                text = self.transcriber.transcribe(audio_file)
+                
+                if text.startswith("Error"):
+                    print(f"{Colors.RED}{text}{Colors.RESET}")
+                    continue
+                    
+                print(f"{Colors.GREEN}You said: \"{text}\"{Colors.RESET}")
+                
+                # Check for exit phrase
+                if "exit" in text.lower() or "stop" in text.lower():
+                    print("Exiting chat mode...")
+                    break
+                    
+                # Execute
+                self.send_voice_command(text)
+                
+                # Small pause to let system respond before listening again
+                time.sleep(1)
+                
+        except KeyboardInterrupt:
+            print("\nStopping chat mode...")
+        finally:
+            if os.path.exists("chat_cmd.wav"):
+                try:
+                    os.remove("chat_cmd.wav")
+                except:
+                    pass
     
     def run(self):
         """Main CLI loop"""
@@ -274,6 +374,18 @@ class TestCLI:
                         self._show_history()
                     elif cmd == "/logs":
                         self._show_logs()
+                    elif cmd == "/prefs":
+                        self._show_prefs()
+                    elif cmd.startswith("/transcribe"):
+                        parts = user_input.split(maxsplit=1)
+                        if len(parts) > 1:
+                            self.test_transcription(parts[1])
+                        else:
+                            print(f"{Colors.RED}Usage: /transcribe <filepath>{Colors.RESET}")
+                    elif cmd == "/record":
+                        self._test_recording()
+                    elif cmd == "/chat":
+                        self._run_chat_mode()
                     elif cmd == "/prefs":
                         self._show_prefs()
                     else:
