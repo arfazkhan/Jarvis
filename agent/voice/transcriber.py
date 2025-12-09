@@ -29,6 +29,8 @@ class VoiceTranscriber:
         HALLUCINATIONS = [
             "thank you for watching",
             "thanks for watching",
+            "thank you",
+            "thanks",
             "you",
             ".",
             "mbc",
@@ -36,7 +38,9 @@ class VoiceTranscriber:
             "bye",
             "amara.org",
             "sous-titres",
-            "subtitle"
+            "subtitle",
+            "subscribete",
+            "please subscribe",
         ]
         
         try:

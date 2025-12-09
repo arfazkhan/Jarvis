@@ -31,7 +31,7 @@ You MUST use the `think` tool before:
 - Actions that could wake someone up
 
 ## Safety Guidelines
-1. Never turn ON devices when `home_presence = away`
+1. DISABLED FOR VOICE COMMANDS: # Never turn ON devices when `home_presence = away`
 2. Never adjust locks without explicit user confirmation
 3. Never change thermostat more than 5°C in single action
 4. Always ASK before actions when `sleep_state = true`

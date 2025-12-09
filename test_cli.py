@@ -45,8 +45,11 @@ from agent.llm_agent.llm_agent import LLMAgent
 from agent.voice.transcriber import VoiceTranscriber
 from agent.voice.transcriber import VoiceTranscriber
 from agent.voice.transcriber import VoiceTranscriber
+from agent.voice.transcriber import VoiceTranscriber
 from agent.voice.recorder import AudioRecorder
 from agent.voice.wake_word import WakeWordEngine
+from agent.voice.semantic_vad import SemanticVAD
+from agent.voice.speaker import Speaker
 
 # ANSI colors for pretty output
 class Colors:
@@ -115,10 +118,11 @@ class TestCLI:
         self.learning_engine.tool_executor = self.tool_executor
         
         # Initialize Voice Components
-        # Initialize Voice Components
         self.transcriber = VoiceTranscriber()
         self.recorder = AudioRecorder()
         self.wake_word_engine = WakeWordEngine()
+        self.semantic_vad = SemanticVAD()
+        self.speaker = Speaker()
         
         self.llm_agent = LLMAgent(
             self.event_bus,
@@ -156,13 +160,17 @@ class TestCLI:
         self.recent_events.append(event)
     
     def _on_user_query(self, event):
-        """Handle ask_user requests"""
+        """Handle ask_user requests and speak them via TTS"""
         payload = event.get("payload", {})
         question = payload.get("question", "")
         options = payload.get("options", [])
         print(f"\n{Colors.YELLOW}🤖 ARVIS Asks: {question}{Colors.RESET}")
         if options:
             print(f"   Options: {', '.join(options)}")
+        
+        # Speak the response via TTS
+        if question and hasattr(self, 'speaker'):
+            self.speaker.speak(question)
     
     def _show_help(self):
         """Show help message"""
@@ -313,12 +321,32 @@ class TestCLI:
                 for chunk in self.recorder.stream():
                     if self.wake_word_engine.detect(chunk):
                         print(f"\n{Colors.YELLOW}✨ WAKE WORD DETECTED!{Colors.RESET}")
-                        # Play a beep here if possible, for now just print
+                        # Dynamic audio acknowledgment - non-blocking (threaded)
+                        import random
+                        import threading
+                        greetings = [
+                            "Hmm?",
+                            "Hey!",
+                            "Yes!",
+                            "Sup!",
+                            "Here!",
+                            "Yep?",
+                        ]
+                        # Play greeting in background so recording can start immediately
+                        greeting_thread = threading.Thread(
+                            target=self.speaker.speak, 
+                            args=(random.choice(greetings),)
+                        )
+                        greeting_thread.start()
                         break # Exit stream to start recording
                 
-                # STAGE 2: Active Recording (VAD)
-                # record_auto waits for speech and stops on silence
-                audio_file = self.recorder.record_auto(output_file="chat_cmd.wav")
+                # STAGE 2: Active Recording (Semantic VAD)
+                # Use semantic recording - waits for complete sentences
+                audio_file = self.recorder.record_semantic(
+                    self.semantic_vad, 
+                    self.transcriber,
+                    output_file="chat_cmd.wav"
+                )
                 
                 if not audio_file:
                     continue
