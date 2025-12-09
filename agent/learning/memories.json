@@ -1,0 +1,13 @@
+{
+  "memories": [
+    {
+      "id": "1fee4b7c",
+      "title": "test_preference",
+      "knowledge": "User prefers warm lighting in the evening",
+      "category": "general",
+      "created_at": 1765272472.668326,
+      "updated_at": 1765272472.668326
+    }
+  ],
+  "preferences": {}
+}

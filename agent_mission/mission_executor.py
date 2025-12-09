@@ -2,11 +2,14 @@
 Mission Executor v2
 -------------------
 Orchestrates mission execution using ActionRouter and specialized executors.
-Supports persistence, cancellation, and restart recovery.
+Supports persistence, cancellation, restart recovery, and mode tracking.
+
+Mode System: PLANNING -> EXECUTION -> VERIFICATION
 """
 
 import asyncio
 import time
+from enum import Enum
 from typing import Dict, Optional, List, Any
 from dataclasses import dataclass, field, asdict
 
@@ -19,17 +22,32 @@ from agent_mission.mission_planner import MissionPlanner
 from agent_plan.action_router import ActionRouter
 from agent_plan.safety_validator import SafetyValidator
 
+
+class MissionMode(Enum):
+    """
+    Mission execution modes for structured agent behavior.
+    PLANNING: Analyzing mission, generating plan, validating safety
+    EXECUTION: Actively executing steps
+    VERIFICATION: Post-execution state verification
+    """
+    PLANNING = "planning"
+    EXECUTION = "execution"
+    VERIFICATION = "verification"
+
+
 @dataclass
 class MissionRuntimeState:
     """Runtime state of a mission execution"""
     mission_id: str
     current_layer_index: int = 0
+    current_mode: str = MissionMode.PLANNING.value  # Track current mode
     step_status: Dict[str, str] = field(default_factory=dict)  # step_id -> status
     step_outputs: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     started_ts: float = field(default_factory=time.time)
     last_update_ts: float = field(default_factory=time.time)
     cancelled: bool = False
     paused: bool = False
+    mode_history: List[Dict[str, Any]] = field(default_factory=list)  # Track mode transitions
     
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -56,6 +74,61 @@ class MissionExecutor:
         
         # Subscribe to events
         self.event_bus.subscribe("mission_started", self._handle_mission_started)
+    
+    # ═══════════════════════════════════════════════════════════════════════════
+    # MODE TRACKING METHODS
+    # ═══════════════════════════════════════════════════════════════════════════
+    
+    def _set_mode(self, mission_id: str, mode: MissionMode, reason: str = "") -> None:
+        """
+        Set the current mode for a mission with tracking.
+        
+        Args:
+            mission_id: The mission ID
+            mode: Target mode (PLANNING, EXECUTION, VERIFICATION)
+            reason: Optional reason for mode transition
+        """
+        state = self.active_states.get(mission_id)
+        if not state:
+            return
+            
+        old_mode = state.current_mode
+        state.current_mode = mode.value
+        state.last_update_ts = time.time()
+        
+        # Track mode history
+        state.mode_history.append({
+            "from": old_mode,
+            "to": mode.value,
+            "reason": reason,
+            "timestamp": time.time()
+        })
+        
+        print(f"🔄 [{mission_id}] Mode: {old_mode} → {mode.value}" + (f" ({reason})" if reason else ""))
+        
+        # Publish mode change event
+        self.event_bus.publish({
+            "type": "mission_mode_changed",
+            "source": "mission_executor",
+            "payload": {
+                "mission_id": mission_id,
+                "old_mode": old_mode,
+                "new_mode": mode.value,
+                "reason": reason
+            }
+        })
+        
+        self._persist_state(mission_id)
+    
+    def get_current_mode(self, mission_id: str) -> Optional[str]:
+        """Get the current mode for a mission"""
+        state = self.active_states.get(mission_id)
+        return state.current_mode if state else None
+    
+    def get_mode_history(self, mission_id: str) -> List[Dict[str, Any]]:
+        """Get mode transition history for a mission"""
+        state = self.active_states.get(mission_id)
+        return state.mode_history if state else []
         
     async def start_execution(self, mission_id: str, plan: PlanGraph):
         """
@@ -67,7 +140,7 @@ class MissionExecutor:
             
         print(f"🚀 Starting execution for mission {mission_id}")
         
-        # Initialize runtime state
+        # Initialize runtime state (starts in PLANNING mode)
         state = MissionRuntimeState(mission_id=mission_id)
         
         # Initialize all steps to PENDING
@@ -86,7 +159,7 @@ class MissionExecutor:
         self.event_bus.publish({
             "type": "mission_execution_started",
             "source": "mission_executor",
-            "payload": {"mission_id": mission_id}
+            "payload": {"mission_id": mission_id, "mode": state.current_mode}
         })
         
         # Start the execution loop
@@ -126,7 +199,8 @@ class MissionExecutor:
 
     async def _execution_loop(self, mission_id: str, plan: PlanGraph):
         """
-        Main execution loop. Advances layers until completion or failure.
+        Main execution loop with mode tracking.
+        Flow: PLANNING -> EXECUTION (per layer) -> VERIFICATION -> next layer
         """
         try:
             while True:
@@ -147,29 +221,113 @@ class MissionExecutor:
                 # Get current layer
                 layers = plan.get_execution_layers()
                 if state.current_layer_index >= len(layers):
+                    # All layers done - final verification
+                    self._set_mode(mission_id, MissionMode.VERIFICATION, "All layers completed")
+                    await self._verify_mission_completion(mission_id)
                     print(f"✅ Mission {mission_id} all layers completed")
                     await self._finalize_mission(mission_id, MissionStatus.COMPLETED)
                     break
                 
                 current_layer = layers[state.current_layer_index]
-                print(f"📍 Executing Layer {state.current_layer_index + 1}/{len(layers)}")
+                layer_num = state.current_layer_index + 1
+                total_layers = len(layers)
                 
-                # Execute layer
-                success, error = await self._execute_layer(mission_id, current_layer, state)
+                # ═══════════════════════════════════════════════════════════
+                # PHASE 1: PLANNING (validate upcoming layer)
+                # ═══════════════════════════════════════════════════════════
+                if state.current_mode == MissionMode.PLANNING.value:
+                    print(f"📋 [PLANNING] Layer {layer_num}/{total_layers}")
+                    
+                    # Validate safety before execution
+                    if self.safety_validator:
+                        actions = [{"type": node.action, "params": node.params} for node in current_layer]
+                        if not self.safety_validator.validate_layer(actions):
+                            print(f"⚠️ Safety validation failed for layer {layer_num}")
+                            await self._finalize_mission(mission_id, MissionStatus.FAILED, "Safety validation failed")
+                            break
+                    
+                    # Transition to EXECUTION
+                    self._set_mode(mission_id, MissionMode.EXECUTION, f"Layer {layer_num} validated")
+                    continue
                 
-                if success:
-                    state.current_layer_index += 1
-                    self._persist_state(mission_id)
-                else:
-                    print(f"❌ Layer execution failed for {mission_id}: {error}")
-                    await self._finalize_mission(mission_id, MissionStatus.FAILED, f"Layer execution failed: {error}")
-                    break
+                # ═══════════════════════════════════════════════════════════
+                # PHASE 2: EXECUTION (run the layer)
+                # ═══════════════════════════════════════════════════════════
+                elif state.current_mode == MissionMode.EXECUTION.value:
+                    print(f"⚡ [EXECUTION] Layer {layer_num}/{total_layers}")
+                    
+                    # Execute layer
+                    success, error = await self._execute_layer(mission_id, current_layer, state)
+                    
+                    if success:
+                        # Transition to VERIFICATION
+                        self._set_mode(mission_id, MissionMode.VERIFICATION, f"Layer {layer_num} executed")
+                    else:
+                        print(f"❌ Layer execution failed for {mission_id}: {error}")
+                        await self._finalize_mission(mission_id, MissionStatus.FAILED, f"Layer execution failed: {error}")
+                        break
+                
+                # ═══════════════════════════════════════════════════════════
+                # PHASE 3: VERIFICATION (verify layer results)
+                # ═══════════════════════════════════════════════════════════
+                elif state.current_mode == MissionMode.VERIFICATION.value:
+                    print(f"🔍 [VERIFICATION] Layer {layer_num}/{total_layers}")
+                    
+                    # Verify layer completion
+                    verification_ok = await self._verify_layer_completion(mission_id, current_layer, state)
+                    
+                    if verification_ok:
+                        state.current_layer_index += 1
+                        # Transition back to PLANNING for next layer
+                        self._set_mode(mission_id, MissionMode.PLANNING, f"Layer {layer_num} verified, advancing")
+                        self._persist_state(mission_id)
+                    else:
+                        print(f"⚠️ Verification failed for layer {layer_num}")
+                        # Could retry or fail - for now, we fail
+                        await self._finalize_mission(mission_id, MissionStatus.FAILED, "Verification failed")
+                        break
                     
         except Exception as e:
             print(f"❌ Execution loop error for {mission_id}: {e}")
             import traceback
             traceback.print_exc()
             await self._finalize_mission(mission_id, MissionStatus.FAILED, str(e))
+
+    async def _verify_layer_completion(self, mission_id: str, layer: List[Any], state: MissionRuntimeState) -> bool:
+        """
+        Verify that all steps in a layer completed successfully.
+        
+        Returns:
+            True if verification passed, False otherwise
+        """
+        for node in layer:
+            status = state.step_status.get(node.id)
+            if status != StepStatus.SUCCESS.value:
+                print(f"  ⚠️ Step {node.id} not successful: {status}")
+                return False
+        
+        print(f"  ✅ All steps in layer verified")
+        return True
+    
+    async def _verify_mission_completion(self, mission_id: str) -> bool:
+        """
+        Final verification after all layers complete.
+        Can be extended to check actual device states match expected states.
+        """
+        state = self.active_states.get(mission_id)
+        if not state:
+            return False
+        
+        # Check all steps are SUCCESS
+        failed_steps = [sid for sid, status in state.step_status.items() 
+                       if status != StepStatus.SUCCESS.value]
+        
+        if failed_steps:
+            print(f"  ⚠️ Final verification: {len(failed_steps)} steps not successful")
+            return False
+        
+        print(f"  ✅ Final verification passed: all {len(state.step_status)} steps successful")
+        return True
 
     async def _execute_layer(self, mission_id: str, layer: List[Any], state: MissionRuntimeState) -> Any:
         """

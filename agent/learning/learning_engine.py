@@ -181,3 +181,186 @@ class LearningEngine:
         except Exception as e:
             print(f"[LearningEngine] Error calling Groq: {e}")
             return []
+
+    # ------------------------------------------------------------------ #
+    # Memory System - CRUD operations for log_memory tool
+    # ------------------------------------------------------------------ #
+    
+    def _get_memory_file_path(self) -> str:
+        """Get path to memory persistence file"""
+        return os.path.join(os.path.dirname(__file__), "memories.json")
+    
+    def _load_memories(self) -> dict:
+        """Load memories from persistence file"""
+        try:
+            path = self._get_memory_file_path()
+            if os.path.exists(path):
+                with open(path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+        except Exception as e:
+            print(f"[LearningEngine] Error loading memories: {e}")
+        return {"memories": [], "preferences": {}}
+    
+    def _save_memories(self, data: dict) -> None:
+        """Save memories to persistence file"""
+        try:
+            path = self._get_memory_file_path()
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"[LearningEngine] Error saving memories: {e}")
+    
+    def store_memory(self, title: str, knowledge: str, category: str = "general") -> str:
+        """
+        Store a new memory/observation.
+        
+        Args:
+            title: Short title for the memory
+            knowledge: The content/observation to store
+            category: Category (preference, observation, pattern, etc.)
+            
+        Returns:
+            Generated memory ID
+        """
+        import uuid
+        
+        data = self._load_memories()
+        memory_id = str(uuid.uuid4())[:8]
+        
+        memory = {
+            "id": memory_id,
+            "title": title,
+            "knowledge": knowledge,
+            "category": category,
+            "created_at": time.time(),
+            "updated_at": time.time()
+        }
+        
+        data["memories"].append(memory)
+        
+        # If it's a preference, also add to quick-access preferences dict
+        if category == "preference":
+            data["preferences"][title] = knowledge
+        
+        self._save_memories(data)
+        print(f"[LearningEngine] Stored memory: {title} (ID: {memory_id})")
+        return memory_id
+    
+    def update_memory(self, memory_id: str, knowledge: str) -> bool:
+        """
+        Update an existing memory.
+        
+        Args:
+            memory_id: ID of memory to update
+            knowledge: New content
+            
+        Returns:
+            True if updated, False if not found
+        """
+        data = self._load_memories()
+        
+        for memory in data["memories"]:
+            if memory["id"] == memory_id:
+                old_title = memory["title"]
+                memory["knowledge"] = knowledge
+                memory["updated_at"] = time.time()
+                
+                # Update preferences if applicable
+                if memory.get("category") == "preference":
+                    data["preferences"][old_title] = knowledge
+                
+                self._save_memories(data)
+                print(f"[LearningEngine] Updated memory: {memory_id}")
+                return True
+        
+        print(f"[LearningEngine] Memory not found: {memory_id}")
+        return False
+    
+    def delete_memory(self, memory_id: str) -> bool:
+        """
+        Delete a memory.
+        
+        Args:
+            memory_id: ID of memory to delete
+            
+        Returns:
+            True if deleted, False if not found
+        """
+        data = self._load_memories()
+        
+        for i, memory in enumerate(data["memories"]):
+            if memory["id"] == memory_id:
+                title = memory["title"]
+                
+                # Remove from preferences if applicable
+                if memory.get("category") == "preference" and title in data["preferences"]:
+                    del data["preferences"][title]
+                
+                data["memories"].pop(i)
+                self._save_memories(data)
+                print(f"[LearningEngine] Deleted memory: {memory_id}")
+                return True
+        
+        print(f"[LearningEngine] Memory not found: {memory_id}")
+        return False
+    
+    def get_memory(self, memory_id: str) -> dict:
+        """Get a specific memory by ID"""
+        data = self._load_memories()
+        for memory in data["memories"]:
+            if memory["id"] == memory_id:
+                return memory
+        return None
+    
+    def get_all_memories(self, category: str = None, limit: int = 50) -> list:
+        """
+        Get all memories, optionally filtered by category.
+        
+        Args:
+            category: Optional category filter
+            limit: Max number to return
+            
+        Returns:
+            List of memory dicts
+        """
+        data = self._load_memories()
+        memories = data["memories"]
+        
+        if category:
+            memories = [m for m in memories if m.get("category") == category]
+        
+        # Sort by most recent first
+        memories.sort(key=lambda x: x.get("updated_at", 0), reverse=True)
+        return memories[:limit]
+    
+    def get_preferences(self) -> dict:
+        """
+        Get user preferences for LLM context.
+        
+        Returns:
+            Dict of preference title -> value
+        """
+        data = self._load_memories()
+        return data.get("preferences", {})
+    
+    def search_memories(self, query: str) -> list:
+        """
+        Search memories by title or content.
+        
+        Args:
+            query: Search string
+            
+        Returns:
+            List of matching memories
+        """
+        data = self._load_memories()
+        query_lower = query.lower()
+        
+        results = []
+        for memory in data["memories"]:
+            if (query_lower in memory.get("title", "").lower() or 
+                query_lower in memory.get("knowledge", "").lower()):
+                results.append(memory)
+        
+        return results
+

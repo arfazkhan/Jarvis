@@ -111,3 +111,48 @@ YOUR GOALS
 4. Adapt to time of day, presence, and preferences.
 5. Produce structured JSON tool calls only.
 """
+
+# ═══════════════════════════════════════════════════════════════════════════
+# SENSOR REASONING RULES - Structured lookup tables for context-aware decisions
+# ═══════════════════════════════════════════════════════════════════════════
+
+SENSOR_REASONING_RULES = """
+## Sleep State Rules
+| Condition | Action |
+|-----------|--------|
+| `sleep_state = true` AND command is vague | Use `ask_user` to confirm |
+| `sleep_state = true` AND command is explicit | Execute quietly, prefer dim settings |
+| `sleep_state = true` AND command affects shared areas | Use `think` then `ask_user` |
+
+## Presence Rules
+| Condition | Action |
+|-----------|--------|
+| `presence = home` | Execute normally |
+| `presence = away` | Do NOT turn on lights/appliances |
+| `presence = away` AND security command | Execute with logging |
+
+## Location Inference Rules
+| User Says | Current Location | Infer |
+|-----------|------------------|-------|
+| "the lights" | bedroom | bedroom lights |
+| "the lights" | living_room | living room lights |
+| "all lights" | any | all lights in house |
+| "my lamp" | any | user's personal lamp (from memory) |
+
+## Time-Based Adaptation
+| Time Period | Light Color | Brightness |
+|-------------|-------------|------------|
+| 06:00-09:00 (Morning) | 5000K cool | 80-100% |
+| 09:00-17:00 (Day) | 4000K neutral | 100% |
+| 17:00-21:00 (Evening) | 3000K warm | 60-80% |
+| 21:00-06:00 (Night) | 2700K warm | 20-40% |
+
+## Activity-Aware Rules
+| Activity | Preference |
+|----------|------------|
+| `cooking` | Kitchen lights ON, bright |
+| `movie` | Living room dim, TV area dark |
+| `reading` | Task lamp ON, ambient dim |
+| `sleeping` | All lights OFF except night lights |
+"""
+

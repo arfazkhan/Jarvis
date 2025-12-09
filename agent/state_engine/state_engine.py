@@ -30,6 +30,11 @@ class StateEngine:
         event_bus.subscribe("routine_triggered", self.handle_event)
 
     def handle_event(self, event):
+        # Defensive check for event type
+        if not isinstance(event, dict):
+            print(f"[StateEngine] Warning: Expected dict event, got {type(event)}")
+            return
+            
         # Keep history limited to avoid memory issues long term
         self.state["history"].append(event)
         # self.history is a reference to self.state["history"], so it updates automatically
@@ -40,7 +45,7 @@ class StateEngine:
 
         state_changed = False
 
-        if event["type"] == "relay_toggled":
+        if event.get("type") == "relay_toggled":
             payload = event.get("payload", {})
             device = payload.get("device")
             endpoint = payload.get("endpoint")
@@ -67,7 +72,7 @@ class StateEngine:
                 self.dirty = True
         
         # Periodically save history or pending changes
-        if event["type"] == "time_tick":
+        if event.get("type") == "time_tick":
              # Force save if dirty, or periodic history save
              now = time.time()
              if self.dirty or (int(event.get("timestamp", 0)) % 60 < 5): 
