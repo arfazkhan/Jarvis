@@ -19,7 +19,7 @@ class AudioRecorder:
         self.threshold = 0.01  # Default, will calibrate
         self.silence_limit = 1.2  # Reduced to 1.2s (was 1.5s) for snappier response
         self.min_speech_duration = 0.3  # Reduced to 0.3s (was 0.5s) to catch short replies
-        self.chunk_duration = 0.05  # Reduced to 50ms (was 100ms) for finer resolution
+        self.chunk_duration = 0.08  # 80ms (1280 samples) - Native for openwakeword
         self.chunk_size = int(self.fs * self.chunk_duration)
     
     def calibrate_noise(self, duration=1.0):
@@ -138,3 +138,27 @@ class AudioRecorder:
         except Exception as e:
             print(f"\n❌ Smart recording failed: {e}")
             return None
+
+    def stream(self):
+        """
+        Yield audio chunks for wake word detection.
+        Yields: np.ndarray (Int16)
+        """
+        q = queue.Queue()
+        
+        def callback(indata, frames, time, status):
+            if status:
+                print(status)
+            q.put(indata.copy())
+            
+        try:
+            with sd.InputStream(samplerate=self.fs, channels=1, callback=callback):
+                while True:
+                    chunk = q.get()
+                    # Convert float32 to int16 for openwakeword and FLATTEN to 1D array
+                    # sounddevice returns (samples, channels) e.g. (1280, 1) -> we need (1280,)
+                    chunk_int16 = (chunk * 32767).astype(np.int16).flatten()
+                    yield chunk_int16
+                    
+        except Exception as e:
+            print(f"Stream error: {e}")

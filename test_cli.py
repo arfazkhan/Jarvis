@@ -44,7 +44,9 @@ from agent.learning.learning_engine import LearningEngine
 from agent.llm_agent.llm_agent import LLMAgent
 from agent.voice.transcriber import VoiceTranscriber
 from agent.voice.transcriber import VoiceTranscriber
+from agent.voice.transcriber import VoiceTranscriber
 from agent.voice.recorder import AudioRecorder
+from agent.voice.wake_word import WakeWordEngine
 
 # ANSI colors for pretty output
 class Colors:
@@ -113,8 +115,10 @@ class TestCLI:
         self.learning_engine.tool_executor = self.tool_executor
         
         # Initialize Voice Components
+        # Initialize Voice Components
         self.transcriber = VoiceTranscriber()
         self.recorder = AudioRecorder()
+        self.wake_word_engine = WakeWordEngine()
         
         self.llm_agent = LLMAgent(
             self.event_bus,
@@ -293,17 +297,26 @@ class TestCLI:
                 pass
                 
     def _run_chat_mode(self):
-        """Continuous chat loop with VAD"""
-        print(f"\n{Colors.HEADER}{Colors.BOLD}🦜 Entering Chat Mode (Hands-free){Colors.RESET}")
-        print("Speak naturally. Say 'exit' or press Ctrl+C to stop.")
+        """Continuous chat loop with Wake Word + VAD"""
+        print(f"\n{Colors.HEADER}{Colors.BOLD}🦜 Chat Mode (Wake Word: 'Hey Jarvis'){Colors.RESET}")
+        print("Say 'Hey Jarvis' to wake me up. Ctrl+C to stop.")
         
-        # Initial calibration
+        # Initial calibration for VAD
         self.recorder.calibrate_noise()
         
         try:
             while True:
-                print(f"\n{Colors.CYAN}Waiting for speech...{Colors.RESET}")
+                print(f"\n{Colors.CYAN}💤 Waiting for wake word...{Colors.RESET}")
                 
+                # STAGE 1: Passive Listening (Wake Word)
+                # Stream audio chunks
+                for chunk in self.recorder.stream():
+                    if self.wake_word_engine.detect(chunk):
+                        print(f"\n{Colors.YELLOW}✨ WAKE WORD DETECTED!{Colors.RESET}")
+                        # Play a beep here if possible, for now just print
+                        break # Exit stream to start recording
+                
+                # STAGE 2: Active Recording (VAD)
                 # record_auto waits for speech and stops on silence
                 audio_file = self.recorder.record_auto(output_file="chat_cmd.wav")
                 
@@ -328,7 +341,7 @@ class TestCLI:
                 # Execute
                 self.send_voice_command(text)
                 
-                # Small pause to let system respond before listening again
+                # Small pause
                 time.sleep(1)
                 
         except KeyboardInterrupt:
