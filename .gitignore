@@ -31,6 +31,19 @@ logs/
 .DS_Store
 Thumbs.db
 
+# Models (large files - should not be committed)
+models/
+*.pth
+*.pt
+*.onnx
+*.h5
+*.pkl
+
+# Logs and output files
+*.log
+*.txt
+!requirements*.txt
+
 # Reports (Optional - keep if you want to commit reports)
 # test_results.txt
 # test_report.md
