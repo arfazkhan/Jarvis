@@ -48,6 +48,9 @@ class StreamRouter:
         """
         Process a single token from LLM stream.
         Routes to text callback or tool callback based on detection.
+        
+        NOTE: Raw text from LLM is NOT spoken - only ask_user messages
+        and tool confirmations are sent to TTS.
         """
         # Accumulate for pattern detection
         self.pending_buffer += token
@@ -59,10 +62,11 @@ class StreamRouter:
         
         elif self.TOOL_START in self.pending_buffer:
             # Detected tool start
-            # Flush any text before the marker
+            # DON'T speak any text before the marker (it's reasoning)
             idx = self.pending_buffer.find(self.TOOL_START)
+            # Log but don't speak pre-tool text
             if idx > 0:
-                self._send_text(self.pending_buffer[:idx])
+                logger.debug(f"Discarding pre-tool text: {self.pending_buffer[:idx][:50]}...")
             
             self.mode = "tool"
             self.tool_buffer = self.pending_buffer[idx:]
@@ -72,12 +76,14 @@ class StreamRouter:
             self._check_tool_end()
         
         else:
-            # Pure text - check if we have enough to flush
-            # Keep last 15 chars in case marker is split
-            if len(self.pending_buffer) > 20:
-                safe_text = self.pending_buffer[:-15]
+            # Pure text - keep accumulating, don't speak yet
+            # We only speak tool-generated text (ask_user messages, confirmations)
+            # Keep last 15 chars in case marker is split across tokens
+            if len(self.pending_buffer) > 50:
+                # Log but don't speak - this is LLM reasoning
+                discarded = self.pending_buffer[:-15]
+                logger.debug(f"Discarding raw text: {discarded[:50]}...")
                 self.pending_buffer = self.pending_buffer[-15:]
-                self._send_text(safe_text)
     
     def _check_tool_end(self):
         """Check if tool buffer contains end marker and execute if so."""
@@ -99,8 +105,9 @@ class StreamRouter:
             self.tool_buffer = ""
             self.mode = "text"
         
+        # DON'T speak remaining text - it's likely LLM reasoning
         if self.pending_buffer and self.mode == "text":
-            self._send_text(self.pending_buffer)
+            logger.debug(f"Discarding end-of-stream text: {self.pending_buffer[:50]}...")
         self.pending_buffer = ""
     
     def _send_text(self, text: str):
@@ -142,15 +149,22 @@ class StreamRouter:
                 action = 'on' if tool_name == 'turn_on' else 'off'
                 self._send_text(f"Turning {action} the {device}.")
             elif tool_name == 'get_current_time':
-                # Get and speak current time (use words to avoid "12" pause)
+                # Get and speak current time - avoid "12" pause issue
                 from datetime import datetime
                 now = datetime.now()
-                hour = now.strftime("%I").lstrip("0")  # Remove leading zero
-                minute = now.strftime("%M")
-                ampm = now.strftime("%p").replace("AM", "A M").replace("PM", "P M")
-                day = now.strftime("%A, %B %d")
-                time_str = f"{hour}:{minute} {ampm} on {day}"
-                self._send_text(f"It's currently {time_str}.")
+                # Use words for hour to avoid TTS pausing on numbers
+                hour = now.hour % 12 or 12
+                minute = now.minute
+                am_pm = "AM" if now.hour < 12 else "PM"
+                day_name = now.strftime("%A")
+                month_day = now.strftime("%B %d")
+                
+                if minute == 0:
+                    time_str = f"{hour} o'clock {am_pm}"
+                else:
+                    time_str = f"{hour}:{minute:02d} {am_pm}"
+                
+                self._send_text(f"It's {time_str} on {day_name}, {month_day}.")
             else:
                 # Queue other tools for later execution
                 if self._tool_callback:
@@ -161,19 +175,12 @@ class StreamRouter:
     
     def _sanitize_markdown(self, text: str) -> str:
         """Strip markdown formatting and emojis for clean TTS."""
-        import unicodedata
-        
-        # Remove markdown symbols
+        import emoji
+        # Remove emojis
+        text = emoji.replace_emoji(text, replace='')
+        # Remove markdown
         text = re.sub(r'[*#_`~\[\]\(\)]', '', text)
-        
-        # Remove emojis and special symbols
-        text = ''.join(
-            char for char in text 
-            if unicodedata.category(char) not in ('So', 'Sk', 'Sm', 'Sc')
-            and ord(char) < 0x1F600  # Remove emoji ranges
-        )
-        
-        # Clean up whitespace
+        # Remove multiple spaces
         text = re.sub(r'\s+', ' ', text)
         return text.strip()
     

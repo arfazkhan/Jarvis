@@ -321,10 +321,449 @@ class ToolExecutor:
                 return {"status": "error", "tool": name, "message": str(e)}
 
         # ═══════════════════════════════════════════════════════════
+        # DEVICE QUERY TOOLS
+        # ═══════════════════════════════════════════════════════════
+        
+        elif name == "get_device_state":
+            device_id = args.get("device_id")
+            try:
+                state = self.state_engine.get_device_state(device_id) if hasattr(self.state_engine, 'get_device_state') else None
+                if state is None:
+                    # Fallback to devices dict
+                    devices = getattr(self.state_engine, 'devices', {})
+                    state = devices.get(device_id, "unknown")
+                print(f"📊 Device {device_id} state: {state}")
+                return {"status": "success", "tool": name, "device_id": device_id, "state": state}
+            except Exception as e:
+                return {"status": "error", "tool": name, "message": str(e)}
+        
+        elif name == "list_devices":
+            filter_room = args.get("filter_room")
+            filter_type = args.get("filter_type")
+            try:
+                devices = getattr(self.state_engine, 'devices', {})
+                device_list = []
+                for device_id, state in devices.items():
+                    device_info = {"device_id": device_id, "state": state}
+                    # Apply filters if specified
+                    if filter_room and filter_room.lower() not in device_id.lower():
+                        continue
+                    if filter_type and filter_type.lower() not in device_id.lower():
+                        continue
+                    device_list.append(device_info)
+                print(f"📋 Found {len(device_list)} devices")
+                return {"status": "success", "tool": name, "devices": device_list, "count": len(device_list)}
+            except Exception as e:
+                return {"status": "error", "tool": name, "message": str(e)}
+        
+        elif name == "set_brightness":
+            device_id = args.get("device_id")
+            brightness = args.get("brightness", 100)
+            transition_ms = args.get("transition_ms", 0)
+            try:
+                # For now, if supported by device
+                if hasattr(self.device, 'set_brightness'):
+                    self.device.set_brightness(device_id, brightness, transition_ms)
+                else:
+                    # Fallback: turn on with brightness
+                    self.device.turn_on(device_id, 1)
+                print(f"💡 Set {device_id} brightness to {brightness}%")
+                self.event_bus.publish({
+                    "type": "device_brightness_changed",
+                    "payload": {"device_id": device_id, "brightness": brightness}
+                })
+                return {"status": "success", "tool": name, "device_id": device_id, "brightness": brightness}
+            except Exception as e:
+                return {"status": "error", "tool": name, "message": str(e)}
+
+        # ═══════════════════════════════════════════════════════════
+        # TIMER TOOLS
+        # ═══════════════════════════════════════════════════════════
+        
+        elif name == "set_timer":
+            timer_name = args.get("name")
+            delay_minutes = args.get("delay_minutes", 1)
+            action = args.get("action", {})
+            
+            import threading
+            from datetime import datetime, timedelta
+            
+            # Initialize timers dict if not exists
+            if not hasattr(self, '_timers'):
+                self._timers = {}
+            
+            def timer_callback():
+                print(f"⏰ Timer '{timer_name}' fired!")
+                # Execute the action
+                if action:
+                    self.execute([action])
+                # Remove from active timers
+                self._timers.pop(timer_name, None)
+            
+            # Create and start timer
+            timer = threading.Timer(delay_minutes * 60, timer_callback)
+            timer.start()
+            
+            self._timers[timer_name] = {
+                "timer": timer,
+                "action": action,
+                "fires_at": (datetime.now() + timedelta(minutes=delay_minutes)).isoformat(),
+                "delay_minutes": delay_minutes
+            }
+            
+            print(f"⏱️ Timer '{timer_name}' set for {delay_minutes} minutes")
+            return {"status": "success", "tool": name, "timer_name": timer_name, "delay_minutes": delay_minutes}
+        
+        elif name == "cancel_timer":
+            timer_name = args.get("name")
+            
+            if not hasattr(self, '_timers'):
+                self._timers = {}
+            
+            if timer_name in self._timers:
+                self._timers[timer_name]["timer"].cancel()
+                del self._timers[timer_name]
+                print(f"⏱️ Timer '{timer_name}' cancelled")
+                return {"status": "success", "tool": name, "cancelled": timer_name}
+            else:
+                return {"status": "error", "tool": name, "message": f"Timer '{timer_name}' not found"}
+        
+        elif name == "list_timers":
+            if not hasattr(self, '_timers'):
+                self._timers = {}
+            
+            active_timers = []
+            for name_key, info in self._timers.items():
+                active_timers.append({
+                    "name": name_key,
+                    "fires_at": info["fires_at"],
+                    "action": info["action"]
+                })
+            
+            print(f"⏱️ {len(active_timers)} active timers")
+            return {"status": "success", "tool": name, "timers": active_timers, "count": len(active_timers)}
+
+        # ═══════════════════════════════════════════════════════════
+        # SCENE TOOLS
+        # ═══════════════════════════════════════════════════════════
+        
+        elif name == "create_scene":
+            scene_name = args.get("name")
+            device_ids = args.get("device_ids", [])
+            
+            if not hasattr(self, '_scenes'):
+                self._scenes = {}
+            
+            # Capture current device states
+            devices = getattr(self.state_engine, 'devices', {})
+            scene_states = {}
+            
+            for device_id, state in devices.items():
+                if not device_ids or device_id in device_ids:
+                    scene_states[device_id] = state
+            
+            self._scenes[scene_name] = scene_states
+            print(f"🎬 Scene '{scene_name}' saved with {len(scene_states)} devices")
+            return {"status": "success", "tool": name, "scene": scene_name, "devices_saved": len(scene_states)}
+        
+        elif name == "activate_scene":
+            scene_name = args.get("name")
+            
+            if not hasattr(self, '_scenes'):
+                self._scenes = {}
+            
+            if scene_name not in self._scenes:
+                return {"status": "error", "tool": name, "message": f"Scene '{scene_name}' not found"}
+            
+            # Restore device states
+            scene_states = self._scenes[scene_name]
+            actions = []
+            for device_id, state in scene_states.items():
+                if isinstance(state, dict):
+                    for endpoint, ep_state in state.items():
+                        tool_name = "turn_on" if ep_state == "on" else "turn_off"
+                        actions.append({"tool": tool_name, "args": {"device_id": device_id, "endpoint": int(endpoint)}})
+                else:
+                    tool_name = "turn_on" if state == "on" else "turn_off"
+                    actions.append({"tool": tool_name, "args": {"device_id": device_id, "endpoint": 1}})
+            
+            self.execute(actions)
+            print(f"🎬 Scene '{scene_name}' activated!")
+            return {"status": "success", "tool": name, "scene": scene_name, "devices_restored": len(scene_states)}
+        
+        elif name == "list_scenes":
+            if not hasattr(self, '_scenes'):
+                self._scenes = {}
+            
+            scene_list = list(self._scenes.keys())
+            print(f"🎬 {len(scene_list)} scenes available")
+            return {"status": "success", "tool": name, "scenes": scene_list, "count": len(scene_list)}
+
+        # ═══════════════════════════════════════════════════════════
+        # MISSION CONTROL TOOLS
+        # ═══════════════════════════════════════════════════════════
+        
+        elif name == "cancel_mission":
+            mission_name = args.get("mission_name")
+            reason = args.get("reason", "User cancelled")
+            
+            if self.mission_manager:
+                try:
+                    self.mission_manager.cancel_mission(mission_name)
+                    print(f"🛑 Mission '{mission_name}' cancelled: {reason}")
+                    return {"status": "success", "tool": name, "mission": mission_name}
+                except Exception as e:
+                    return {"status": "error", "tool": name, "message": str(e)}
+            else:
+                return {"status": "error", "tool": name, "message": "MissionManager not configured"}
+        
+        elif name == "undo_last":
+            confirm = args.get("confirm", False)
+            
+            if not hasattr(self, '_action_history'):
+                self._action_history = []
+            
+            if not self._action_history:
+                return {"status": "error", "tool": name, "message": "No actions to undo"}
+            
+            if not confirm:
+                last_action = self._action_history[-1]
+                return {"status": "pending", "tool": name, "message": f"Undo '{last_action['tool']}'? Set confirm=true"}
+            
+            last_action = self._action_history.pop()
+            # Reverse the action
+            if last_action["tool"] == "turn_on":
+                self.execute([{"tool": "turn_off", "args": last_action["args"]}])
+            elif last_action["tool"] == "turn_off":
+                self.execute([{"tool": "turn_on", "args": last_action["args"]}])
+            
+            print(f"↩️ Undid: {last_action['tool']}")
+            return {"status": "success", "tool": name, "undone": last_action}
+
+        # ═══════════════════════════════════════════════════════════
+        # EXTERNAL SERVICES
+        # ═══════════════════════════════════════════════════════════
+        
+        elif name == "get_weather":
+            location = args.get("location", "home")
+            # Stub - in production, call weather API
+            weather_data = {
+                "location": location,
+                "temperature": 25,
+                "humidity": 60,
+                "condition": "partly cloudy",
+                "note": "Weather API not configured - returning mock data"
+            }
+            print(f"🌤️ Weather for {location}: {weather_data['temperature']}°C, {weather_data['condition']}")
+            return {"status": "success", "tool": name, **weather_data}
+        
+        elif name == "send_notification":
+            title = args.get("title")
+            message = args.get("message")
+            priority = args.get("priority", "normal")
+            
+            # Stub - in production, use push notification service
+            print(f"📱 NOTIFICATION [{priority}]: {title} - {message}")
+            self.event_bus.publish({
+                "type": "notification_sent",
+                "payload": {"title": title, "message": message, "priority": priority}
+            })
+            return {"status": "success", "tool": name, "title": title, "note": "Notification service not configured"}
+
+        # ═══════════════════════════════════════════════════════════
+        # MEDIA & ANNOUNCEMENTS
+        # ═══════════════════════════════════════════════════════════
+        
+        elif name == "play_media":
+            action = args.get("action")
+            target = args.get("target", "default")
+            value = args.get("value")
+            
+            # Stub - in production, integrate with Spotify, TV, etc.
+            print(f"🎵 MEDIA: {action} on {target}" + (f" - {value}" if value else ""))
+            self.event_bus.publish({
+                "type": "media_control",
+                "payload": {"action": action, "target": target, "value": value}
+            })
+            return {"status": "success", "tool": name, "action": action, "note": "Media API not configured"}
+        
+        elif name == "announce":
+            message = args.get("message")
+            rooms = args.get("rooms", [])
+            
+            room_str = ", ".join(rooms) if rooms else "all rooms"
+            print(f"📢 ANNOUNCEMENT to {room_str}: {message}")
+            
+            # Publish for TTS to handle
+            self.event_bus.publish({
+                "type": "announcement",
+                "payload": {"message": message, "rooms": rooms}
+            })
+            return {"status": "success", "tool": name, "message": message, "rooms": rooms}
+        
+        elif name == "find_device":
+            device_id = args.get("device_id")
+            
+            # Stub - would blink/beep the device
+            print(f"🔍 FIND DEVICE: Blinking {device_id}")
+            self.event_bus.publish({
+                "type": "device_locate",
+                "payload": {"device_id": device_id}
+            })
+            return {"status": "success", "tool": name, "device_id": device_id, "note": "Device locate triggered"}
+
+        # ═══════════════════════════════════════════════════════════
+        # ENERGY & MODES
+        # ═══════════════════════════════════════════════════════════
+        
+        elif name == "get_energy_usage":
+            period = args.get("period", "today")
+            device_id = args.get("device_id")
+            
+            # Stub - in production, read from energy monitoring
+            energy_data = {
+                "period": period,
+                "device_id": device_id or "whole_home",
+                "usage_kwh": 12.5,
+                "cost_estimate": 1.50,
+                "note": "Energy API not configured - returning mock data"
+            }
+            print(f"⚡ Energy usage ({period}): {energy_data['usage_kwh']} kWh")
+            return {"status": "success", "tool": name, **energy_data}
+        
+        elif name == "set_away_mode":
+            enabled = args.get("enabled", False)
+            simulate_presence = args.get("simulate_presence", False)
+            return_date = args.get("return_date")
+            
+            if not hasattr(self, '_away_mode'):
+                self._away_mode = {"enabled": False}
+            
+            self._away_mode = {
+                "enabled": enabled,
+                "simulate_presence": simulate_presence,
+                "return_date": return_date
+            }
+            
+            status = "enabled" if enabled else "disabled"
+            print(f"🏠 Away mode {status}" + (" with presence simulation" if simulate_presence else ""))
+            
+            self.event_bus.publish({
+                "type": "away_mode_changed",
+                "payload": self._away_mode
+            })
+            return {"status": "success", "tool": name, **self._away_mode}
+
+        # ═══════════════════════════════════════════════════════════
+        # TIME TOOLS
+        # ═══════════════════════════════════════════════════════════
+        
+        elif name == "get_current_time":
+            from datetime import datetime
+            now = datetime.now()
+            time_data = {
+                "time": now.strftime("%H:%M"),
+                "date": now.strftime("%Y-%m-%d"),
+                "day": now.strftime("%A"),
+                "timestamp": now.isoformat()
+            }
+            print(f"🕐 Current time: {time_data['time']} on {time_data['day']}")
+            return {"status": "success", "tool": name, **time_data}
+
+        # ═══════════════════════════════════════════════════════════
+        # ROUTINE EXTENSIONS
+        # ═══════════════════════════════════════════════════════════
+        
+        elif name == "modify_routine":
+            routine_name = args.get("name")
+            delta = args.get("delta", {})
+            
+            try:
+                if hasattr(self.automations, 'modify'):
+                    self.automations.modify(routine_name, delta)
+                else:
+                    # Fallback: get, modify, replace
+                    routine = self.automations.get(routine_name)
+                    if delta.get("add_actions"):
+                        routine["actions"].extend(delta["add_actions"])
+                    if delta.get("remove_actions"):
+                        routine["actions"] = [a for a in routine["actions"] if a.get("tool") not in delta["remove_actions"]]
+                    if delta.get("new_trigger"):
+                        routine["trigger"] = delta["new_trigger"]
+                print(f"📝 Routine '{routine_name}' modified")
+                return {"status": "success", "tool": name, "routine": routine_name}
+            except Exception as e:
+                return {"status": "error", "tool": name, "message": str(e)}
+        
+        elif name == "delete_routine":
+            routine_name = args.get("name")
+            try:
+                if hasattr(self.automations, 'delete'):
+                    self.automations.delete(routine_name)
+                print(f"🗑️ Routine '{routine_name}' deleted")
+                return {"status": "success", "tool": name, "routine": routine_name}
+            except Exception as e:
+                return {"status": "error", "tool": name, "message": str(e)}
+
+        # ═══════════════════════════════════════════════════════════
+        # MEMORY TOOLS (NEW)
+        # ═══════════════════════════════════════════════════════════
+        
+        elif name == "recall_memory":
+            query = args.get("query", "")
+            memory_type = args.get("memory_type", "all")
+            limit = args.get("limit", 5)
+            
+            try:
+                # Try to get memory from LLMAgent if available
+                from agent.memory import MemoryOrchestrator
+                # Use a shared instance or create one
+                if not hasattr(self, '_memory'):
+                    self._memory = MemoryOrchestrator("./data/memories")
+                
+                results = self._memory.recall(query, memory_type, limit)
+                print(f"🧠 Recalled {len(results)} memories for '{query}'")
+                return {"status": "success", "tool": name, "query": query, "results": results}
+            except Exception as e:
+                return {"status": "error", "tool": name, "message": str(e)}
+        
+        elif name == "forget_memory":
+            memory_id = args.get("memory_id")
+            memory_type = args.get("memory_type")
+            confirm = args.get("confirm", False)
+            
+            if not confirm:
+                return {"status": "pending", "tool": name, "message": "Set confirm=true to delete memory"}
+            
+            try:
+                from agent.memory import MemoryOrchestrator
+                if not hasattr(self, '_memory'):
+                    self._memory = MemoryOrchestrator("./data/memories")
+                
+                success = self._memory.forget(memory_id=memory_id, memory_type=memory_type)
+                print(f"🧠 {'Deleted' if success else 'Failed to delete'} memory {memory_id}")
+                return {"status": "success" if success else "error", "tool": name, "deleted": memory_id}
+            except Exception as e:
+                return {"status": "error", "tool": name, "message": str(e)}
+        
+        elif name == "export_my_data":
+            try:
+                from agent.memory import MemoryOrchestrator
+                if not hasattr(self, '_memory'):
+                    self._memory = MemoryOrchestrator("./data/memories")
+                
+                data = self._memory.export_all_data()
+                print(f"📦 Exported all user data (GDPR)")
+                return {"status": "success", "tool": name, "data": data}
+            except Exception as e:
+                return {"status": "error", "tool": name, "message": str(e)}
+
+        # ═══════════════════════════════════════════════════════════
         # UNKNOWN TOOL
         # ═══════════════════════════════════════════════════════════
         
         else:
             print(f"[ToolExecutor] Unknown tool: {name}")
             return {"status": "error", "tool": name, "message": f"Unknown tool: {name}"}
+
 

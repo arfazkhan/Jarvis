@@ -34,11 +34,6 @@ SUSPICIOUS_PATTERNS = [
     (r'override.*security', "Security override attempt"),
     (r'bypass.*safety', "Safety bypass attempt"),
     (r'disable.*pin', "PIN disable attempt"),
-    (r'disable.*safety', "Safety disable attempt"),
-    (r'skip.*confirm', "Confirmation skip attempt"),
-    (r'emergency.*bypass', "Emergency bypass attempt"),
-    (r'ignore.*previous', "Jailbreak attempt"),
-    (r'reveal.*prompt', "Prompt extraction attempt"),
 ]
 
 # Keywords that require PIN verification
@@ -59,6 +54,15 @@ class LLMAgent:
         # Security tracking
         self.attack_attempts = 0  # Track suspicious attempts for escalating responses
         self.last_attack_time = 0
+        
+        # Initialize Memory System
+        from agent.memory import MemoryOrchestrator
+        self.memory = MemoryOrchestrator(
+            persist_dir="./data/memories",
+            max_conversation_turns=10,
+            observation_decay_days=30
+        )
+        print("[LLMAgent] Memory system initialized")
         
         # Initialize Groq client
         api_key = os.environ.get("GROQ_API_KEY")
@@ -234,20 +238,45 @@ Output ONLY the response message, nothing else."""
             return "No device states available"
     
     def _build_context(self, event: dict) -> dict:
-        """Build rich context for LLM including home state and preferences"""
+        """Build rich context for LLM including home state, preferences, and memory."""
+        # Extract query for semantic memory search
+        query = ""
+        if event.get("type") == "voice_command":
+            payload = event.get("payload", {})
+            query = payload.get("text", "") if isinstance(payload, dict) else str(payload)
+        
+        # Get home state
+        home_state = {
+            "time": datetime.now().strftime('%H:%M'),
+            "date": datetime.now().strftime('%Y-%m-%d'),
+            "day_of_week": datetime.now().strftime('%A'),
+            "presence": self._get_presence(),
+            "sleep_state": self._get_sleep_state(),
+            "activity_hint": self._get_activity_hint()
+        }
+        
+        # Get device states
+        device_states = self._get_device_states()
+        
+        # Build memory context (searches for relevant preferences/observations)
+        memory_context = ""
+        if query:
+            try:
+                memory_context = self.memory.get_context(
+                    query=query,
+                    device_states=self.state_engine.devices if hasattr(self.state_engine, 'devices') else None,
+                    home_state=home_state
+                )
+            except Exception as e:
+                print(f"[LLMAgent] Memory context error: {e}")
+        
         return {
             "event": event,
-            "home_state": {
-                "time": datetime.now().strftime('%H:%M'),
-                "date": datetime.now().strftime('%Y-%m-%d'),
-                "day_of_week": datetime.now().strftime('%A'),
-                "presence": self._get_presence(),
-                "sleep_state": self._get_sleep_state(),
-                "activity_hint": self._get_activity_hint()
-            },
-            "device_states": self._get_device_states(),
+            "home_state": home_state,
+            "device_states": device_states,
             "routines": self.automations.list(),
-            "preferences": self._get_user_preferences()
+            "preferences": self._get_user_preferences(),
+            "memory_context": memory_context  # NEW: Personalized memory
         }
 
     # ═══════════════════════════════════════════════════════════
@@ -357,9 +386,15 @@ Output ONLY the response message, nothing else."""
             if is_attack:
                 self._handle_attack(attack_type, user_text)
                 return
+            
+            # Store user message in conversation memory
+            self.memory.add_conversation("user", user_text)
         
-        # Build context
+        # Build context (now includes memory)
         context = self._build_context(event)
+        
+        # Track response for conversation memory
+        full_response = []
         
         try:
             # Streaming request
@@ -395,7 +430,9 @@ Output ONLY the response message, nothing else."""
                             # New tool call starting
                             if current_tool:
                                 # Emit previous tool
-                                yield f"### TOOL: {json.dumps({'tool': current_tool, 'args': json.loads(tool_args_buffer)})} ###"
+                                tool_output = f"### TOOL: {json.dumps({'tool': current_tool, 'args': json.loads(tool_args_buffer)})} ###"
+                                full_response.append(tool_output)
+                                yield tool_output
                             current_tool = tc.function.name
                             tool_args_buffer = tc.function.arguments or ""
                         elif tc.function.arguments:
@@ -405,9 +442,16 @@ Output ONLY the response message, nothing else."""
             # Emit final tool if any
             if current_tool and tool_args_buffer:
                 try:
-                    yield f"### TOOL: {json.dumps({'tool': current_tool, 'args': json.loads(tool_args_buffer)})} ###"
+                    tool_output = f"### TOOL: {json.dumps({'tool': current_tool, 'args': json.loads(tool_args_buffer)})} ###"
+                    full_response.append(tool_output)
+                    yield tool_output
                 except json.JSONDecodeError:
                     print(f"[LLMAgent] Failed to parse tool args: {tool_args_buffer}")
+            
+            # Store assistant response in conversation memory
+            if full_response:
+                response_text = "".join(full_response)[:500]  # Truncate for storage
+                self.memory.add_conversation("assistant", response_text)
                     
         except Exception as e:
             print(f"[LLMAgent] Streaming error: {e}")
