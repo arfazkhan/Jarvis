@@ -27,6 +27,7 @@ class StreamRouter:
     
     Uses rolling window to detect tool markers that may be split across tokens.
     Marker format: ### TOOL: {...} ### (easier to detect than XML tags)
+    Also detects raw JSON tool format: {"tool": "...", "arguments": {...}}
     """
     
     TOOL_START = "### TOOL:"
@@ -43,6 +44,9 @@ class StreamRouter:
         self.mode = "text"  # "text" or "tool"
         self.tool_buffer = ""
         self.pending_buffer = ""  # For detecting split markers
+        self.json_mode = False  # Tracking raw JSON accumulation
+        self.json_depth = 0  # Brace depth for JSON detection
+        self.granite_mode = False  # Tracking Granite <tool_call> format
     
     def process_token(self, token: str):
         """
@@ -61,7 +65,7 @@ class StreamRouter:
             self._check_tool_end()
         
         elif self.TOOL_START in self.pending_buffer:
-            # Detected tool start
+            # Detected tool start marker
             # DON'T speak any text before the marker (it's reasoning)
             idx = self.pending_buffer.find(self.TOOL_START)
             # Log but don't speak pre-tool text
@@ -75,6 +79,65 @@ class StreamRouter:
             # Check if tool is already complete (single token case)
             self._check_tool_end()
         
+        elif '{"tool"' in self.pending_buffer or '{"tool":' in self.pending_buffer:
+            # Detected raw JSON tool format - switch to JSON accumulation mode
+            idx = self.pending_buffer.find('{"tool"')
+            if idx == -1:
+                idx = self.pending_buffer.find('{"tool":')
+            
+            logger.debug(f"Detected raw JSON tool format")
+            self.mode = "tool"
+            self.json_mode = True
+            self.tool_buffer = self.pending_buffer[idx:]
+            self.json_depth = self.tool_buffer.count('{') - self.tool_buffer.count('}')
+            self.pending_buffer = ""
+            
+            # Check if JSON is complete
+            self._check_json_complete()
+        
+        elif re.search(r'\{\s*"tool"\s*:', self.pending_buffer):
+            # Detected multi-line JSON format with whitespace: { "tool": ... }
+            match = re.search(r'\{\s*"tool"\s*:', self.pending_buffer)
+            idx = match.start()
+            
+            logger.debug(f"Detected multi-line JSON tool format")
+            self.mode = "tool"
+            self.json_mode = True
+            self.tool_buffer = self.pending_buffer[idx:]
+            self.json_depth = self.tool_buffer.count('{') - self.tool_buffer.count('}')
+            self.pending_buffer = ""
+            
+            # Check if JSON is complete
+            self._check_json_complete()
+        
+        elif '{"type":' in self.pending_buffer or '{"type": "function"' in self.pending_buffer:
+            # Detected OpenRouter format: {"type": "function", "name": ...}
+            idx = self.pending_buffer.find('{"type":')
+            if idx == -1:
+                idx = self.pending_buffer.find('{"type": "function"')
+            
+            logger.debug(f"Detected OpenRouter function format")
+            self.mode = "tool"
+            self.json_mode = True
+            self.tool_buffer = self.pending_buffer[idx:]
+            self.json_depth = self.tool_buffer.count('{') - self.tool_buffer.count('}')
+            self.pending_buffer = ""
+            
+            self._check_json_complete()
+        
+        elif '<tool_call>' in self.pending_buffer:
+            # Detected Granite XML format: <tool_call>{"name": "...", "arguments": {...}}</tool_call>
+            idx = self.pending_buffer.find('<tool_call>')
+            
+            logger.debug(f"Detected Granite <tool_call> XML format")
+            self.mode = "tool"
+            self.json_mode = True
+            self.granite_mode = True  # Track Granite format
+            self.tool_buffer = self.pending_buffer[idx:]
+            self.pending_buffer = ""
+            
+            self._check_granite_complete()
+        
         else:
             # Pure text - keep accumulating, don't speak yet
             # We only speak tool-generated text (ask_user messages, confirmations)
@@ -87,6 +150,10 @@ class StreamRouter:
     
     def _check_tool_end(self):
         """Check if tool buffer contains end marker and execute if so."""
+        if self.json_mode:
+            self._check_json_complete()
+            return
+            
         # Pattern: ### TOOL: {...} ###
         if self.tool_buffer.count("###") >= 2:
             # We have both start and end markers
@@ -96,19 +163,111 @@ class StreamRouter:
             self.pending_buffer = ""
             self.mode = "text"
     
+    def _check_json_complete(self):
+        """Check if raw JSON tool is complete by tracking brace depth."""
+        self.json_depth = self.tool_buffer.count('{') - self.tool_buffer.count('}')
+        
+        if self.json_depth == 0 and self.tool_buffer.strip():
+            # JSON is balanced - execute it
+            logger.debug(f"Complete JSON tool detected")
+            # Wrap in marker format for _execute_tool
+            wrapped = f"### TOOL: {self.tool_buffer.strip()} ###"
+            self._execute_tool(wrapped)
+            self.tool_buffer = ""
+            self.pending_buffer = ""
+            self.mode = "text"
+            self.json_mode = False
+        elif self.json_depth < 0:
+            # More closing braces than opening - we have multiple tools concatenated
+            # Find the first complete JSON object
+            depth = 0
+            first_json_end = -1
+            for i, c in enumerate(self.tool_buffer):
+                if c == '{':
+                    depth += 1
+                elif c == '}':
+                    depth -= 1
+                    if depth == 0:
+                        first_json_end = i
+                        break
+            
+            if first_json_end > 0:
+                first_json = self.tool_buffer[:first_json_end + 1]
+                remaining = self.tool_buffer[first_json_end + 1:]
+                
+                wrapped = f"### TOOL: {first_json.strip()} ###"
+                self._execute_tool(wrapped)
+                
+                # Put remaining back in pending_buffer for next cycle
+                self.tool_buffer = ""
+                self.pending_buffer = remaining
+                self.mode = "text"
+                self.json_mode = False
+    
+    def _check_granite_complete(self):
+        """Check if Granite <tool_call> buffer contains complete tool call."""
+        if '</tool_call>' in self.tool_buffer:
+            # Extract tool call content
+            start = self.tool_buffer.find('<tool_call>') + len('<tool_call>')
+            end = self.tool_buffer.find('</tool_call>')
+            
+            if start > 0 and end > start:
+                tool_json = self.tool_buffer[start:end].strip()
+                remaining = self.tool_buffer[end + len('</tool_call>'):]
+                
+                # Parse and convert Granite format {"name": "...", "arguments": {...}}
+                # to our format {"tool": "...", "args": {...}}
+                try:
+                    import json
+                    granite_tool = json.loads(tool_json)
+                    
+                    # Convert to our internal format
+                    tool_name = granite_tool.get('name', '')
+                    tool_args = granite_tool.get('arguments', {})
+                    
+                    # Create wrapped format for _execute_tool
+                    converted = {"tool": tool_name, "args": tool_args}
+                    wrapped = f"### TOOL: {json.dumps(converted)} ###"
+                    print(f"[StreamRouter] 🔧 Granite tool: {tool_name}")
+                    self._execute_tool(wrapped)
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse Granite tool JSON: {e}")
+                
+                # Reset and handle remaining
+                self.tool_buffer = ""
+                self.pending_buffer = remaining
+                self.mode = "text"
+                self.json_mode = False
+                self.granite_mode = False
+                
+                # Check for more tool calls
+                if '<tool_call>' in remaining:
+                    self.pending_buffer = remaining
+                    # Will be detected on next process_token
+    
     def flush(self):
         """Flush remaining buffer (end of stream)."""
         # Also flush any pending tool
         if self.tool_buffer and self.mode == "tool":
             logger.debug(f"Flushing tool buffer on stream end")
-            self._execute_tool(self.tool_buffer)
+            if self.granite_mode:
+                # Try to parse as Granite format
+                self._check_granite_complete()
+            elif self.json_mode:
+                wrapped = f"### TOOL: {self.tool_buffer.strip()} ###"
+                self._execute_tool(wrapped)
+            else:
+                self._execute_tool(self.tool_buffer)
             self.tool_buffer = ""
             self.mode = "text"
+            self.json_mode = False
+            self.granite_mode = False
         
         # DON'T speak remaining text - it's likely LLM reasoning
         if self.pending_buffer and self.mode == "text":
             logger.debug(f"Discarding end-of-stream text: {self.pending_buffer[:50]}...")
         self.pending_buffer = ""
+
     
     def _send_text(self, text: str):
         """Send sanitized text to TTS callback."""
@@ -119,24 +278,49 @@ class StreamRouter:
     def _execute_tool(self, tool_block: str):
         """Handle tool call - for ask_user, extract message and speak it."""
         try:
-            # Extract JSON from tool block
-            json_match = re.search(r'\{.*\}', tool_block, re.DOTALL)
-            if not json_match:
+            # Find first complete JSON object using brace matching
+            start = tool_block.find('{')
+            if start == -1:
                 logger.warning(f"No JSON found in tool: {tool_block[:50]}")
                 return
             
-            tool_data = json.loads(json_match.group())
-            tool_name = tool_data.get('tool', '')
-            args = tool_data.get('args', {})
+            depth = 0
+            end = -1
+            for i in range(start, len(tool_block)):
+                if tool_block[i] == '{':
+                    depth += 1
+                elif tool_block[i] == '}':
+                    depth -= 1
+                    if depth == 0:
+                        end = i
+                        break
+            
+            if end == -1:
+                logger.warning(f"Incomplete JSON in tool: {tool_block[:50]}")
+                return
+            
+            json_str = tool_block[start:end+1]
+            tool_data = json.loads(json_str)
+            
+            # Handle both formats:
+            # Standard: {"tool": "ask_user", "args": {...}}
+            # OpenRouter: {"type": "function", "name": "ask_user", "parameters": {...}}
+            tool_name = tool_data.get('tool') or tool_data.get('name', '')
+            args = tool_data.get('args', {}) or tool_data.get('arguments', {}) or tool_data.get('parameters', {})
             
             logger.debug(f"Tool detected: {tool_name}")
+            print(f"[StreamRouter] 🔧 Tool: {tool_name}, args: {args}")
             
             # For ask_user, extract message and send to TTS
             if tool_name == 'ask_user':
                 message = args.get('message', '')
                 if message:
+                    print(f"[StreamRouter] 🔊 Speaking: {message[:50]}...")
                     logger.info(f"Speaking: '{message[:50]}...'")
                     self._send_text(message)
+                # ALWAYS callback for ask_user so follow-up mode can detect options
+                if self._tool_callback:
+                    self._tool_callback(tool_data)
             elif tool_name == 'think':
                 # Think tool is for internal reasoning, don't speak
                 reasoning = args.get('reasoning', '')
@@ -189,6 +373,8 @@ class StreamRouter:
         self.mode = "text"
         self.tool_buffer = ""
         self.pending_buffer = ""
+        self.json_mode = False
+        self.granite_mode = False
 
 
 # ==========================================
@@ -218,6 +404,14 @@ class VoicePipeline:
         self._tool_queue = Queue()
         self._running = False
         self._speaking = False
+        
+        # ═══════════════════════════════════════════════════════════
+        # FOLLOW-UP MODE - Skip wake word after ask_user with options
+        # ═══════════════════════════════════════════════════════════
+        self.follow_up_mode = False
+        self.follow_up_timeout = 10.0  # seconds - enough time for user to think and respond
+        self.expected_responses = []  # Valid responses during follow-up
+        self.last_question_time = None
         
         # Router with callbacks
         self.router = StreamRouter(
@@ -286,6 +480,114 @@ class VoicePipeline:
         """Called by router when a tool should be executed."""
         self._tool_queue.put(tool_data)
         
+        # Check if this ask_user has options -> enter follow-up mode
+        tool_name = tool_data.get('tool') or tool_data.get('name', '')
+        args = tool_data.get('args', {}) or tool_data.get('arguments', {}) or tool_data.get('parameters', {})
+        
+        print(f"[DEBUG _on_tool] tool_name={tool_name}, has_options={'options' in args if args else 'no args'}")
+        
+        if tool_name == 'ask_user':
+            options = args.get('options', []) if args else []
+            message = args.get('message', '') if args else ''
+            
+            print(f"[DEBUG _on_tool] ask_user detected. options={options}, has_question_mark={'?' in message}")
+            
+            if options:
+                # Enter follow-up mode with expected responses
+                self.enter_follow_up(options)
+                print(f"[FollowUp] ✅ Entered follow-up mode. Expected: {options}")
+            elif '?' in message:
+                # Question without options - short follow-up for free-form answer
+                self.enter_follow_up([])  # Empty = accept anything
+                print("[FollowUp] ✅ Entered free-form follow-up mode")
+    
+    # ═══════════════════════════════════════════════════════════
+    # FOLLOW-UP MODE METHODS
+    # ═══════════════════════════════════════════════════════════
+    
+    def enter_follow_up(self, expected: list):
+        """Enter follow-up mode - skip wake word for next response."""
+        import time
+        self.follow_up_mode = True
+        self.expected_responses = [e.lower().strip() for e in expected]
+        self.last_question_time = time.time()
+        print(f"[FollowUp] 🎯 Mode set to TRUE. Expected: {self.expected_responses}")
+        
+    def exit_follow_up(self, reason: str = ""):
+        """Exit follow-up mode - require wake word again."""
+        self.follow_up_mode = False
+        self.expected_responses = []
+        self.last_question_time = None
+        logger.info(f"[FollowUp] Mode OFF. Reason: {reason}")
+        
+    def is_follow_up_valid(self) -> bool:
+        """Check if follow-up mode is still valid (not timed out)."""
+        if not self.follow_up_mode:
+            return False
+        if self.last_question_time is None:
+            return False
+            
+        import time
+        elapsed = time.time() - self.last_question_time
+        if elapsed > self.follow_up_timeout:
+            self.exit_follow_up("timeout")
+            return False
+        return True
+    
+    def check_follow_up_response(self, transcription: str) -> dict:
+        """
+        Check if transcription matches expected follow-up responses.
+        
+        Returns:
+            {
+                "valid": bool,
+                "matched": str or None,  # The matched option
+                "action": "process" | "ignore" | "exit_politely"
+            }
+        """
+        if not self.is_follow_up_valid():
+            return {"valid": False, "matched": None, "action": "exit_politely"}
+        
+        text = transcription.lower().strip()
+        
+        # If no expected responses (free-form question), accept anything
+        if not self.expected_responses:
+            self.exit_follow_up("free_form_response")
+            return {"valid": True, "matched": text, "action": "process"}
+        
+        # Check if response matches any expected option
+        for expected in self.expected_responses:
+            # Fuzzy matching - check if expected is in the response
+            if expected in text or text in expected:
+                self.exit_follow_up("matched_response")
+                return {"valid": True, "matched": expected, "action": "process"}
+        
+        # Also check for common variations
+        common_yes = ["yes", "yeah", "yep", "sure", "ok", "okay", "yup", "affirmative"]
+        common_no = ["no", "nope", "nah", "negative", "cancel", "stop"]
+        
+        if any(y in text for y in common_yes) and "yes" in self.expected_responses:
+            self.exit_follow_up("matched_yes")
+            return {"valid": True, "matched": "yes", "action": "process"}
+        
+        if any(n in text for n in common_no) and "no" in self.expected_responses:
+            self.exit_follow_up("matched_no")
+            return {"valid": True, "matched": "no", "action": "process"}
+        
+        # No match - could be background noise, ignore but stay in follow-up
+        logger.debug(f"[FollowUp] No match for '{text}'. Expected: {self.expected_responses}")
+        return {"valid": False, "matched": None, "action": "ignore"}
+    
+    def get_follow_up_exit_message(self) -> str:
+        """Get a polite message when exiting follow-up mode due to timeout."""
+        messages = [
+            "I didn't catch that. Say Jarvis if you need me!",
+            "Hmm, I missed that. Just say Jarvis when you're ready.",
+            "No worries, just say Jarvis to continue.",
+        ]
+        import random
+        return random.choice(messages)
+        
     def process_llm_stream(self, token_generator: Iterator[str]):
         """
         Feed LLM tokens through the pipeline with TRUE STREAMING.
@@ -297,37 +599,35 @@ class VoicePipeline:
         if not self._running:
             raise RuntimeError("VoicePipeline not started")
         
-        # Track if we've started playback
-        playback_started = False
+        # Track if any text was queued for playback
+        text_queued = False
         
         def _on_text_streaming(text: str):
-            """Feed text and start playback on first chunk."""
-            nonlocal playback_started
+            """Queue text for TTS (no playback yet - we play at the end)."""
+            nonlocal text_queued
             if self._tts_stream and text.strip():
                 self._tts_stream.feed(text)
-                
-                # Start async playback on first text
-                if not playback_started:
-                    playback_started = True
-                    self._tts_stream.play_async()
+                text_queued = True
+                logger.debug(f"Queued for TTS: {text[:50]}...")
         
         # Temporarily replace callback for streaming mode
         original_callback = self.router._text_callback
         self.router._text_callback = _on_text_streaming
         
         try:
-            # Process all tokens through the router
+            # Process all tokens through the router - this queues text
             for token in token_generator:
                 self.router.process_token(token)
                 
-            # Flush remaining text
+            # Flush remaining text (handles tool messages like ask_user)
             self.router.flush()
             
-            # Wait for playback to complete
-            if playback_started:
-                import time
-                while self._speaking:
-                    time.sleep(0.05)
+            # NOW play all queued text at once
+            if text_queued and self._tts_stream:
+                logger.info("Playing queued TTS audio...")
+                self._tts_stream.play()  # Blocking - speaks all queued text
+                logger.info("TTS playback complete")
+                
         finally:
             # Restore original callback
             self.router._text_callback = original_callback
@@ -388,6 +688,18 @@ class VoicePipeline:
             except Empty:
                 break
         return tools
+    
+    def speak(self, text: str, blocking: bool = True):
+        """Speak a message through TTS."""
+        if not self._running or not self._tts_stream:
+            logger.warning("VoicePipeline not running, can't speak")
+            return
+        
+        self._tts_stream.feed(text)
+        if blocking:
+            self._tts_stream.play()
+        else:
+            self._tts_stream.play_async()
         
     def interrupt(self):
         """Handle user interruption."""

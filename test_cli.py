@@ -26,11 +26,45 @@ import sys
 import time
 import json
 import threading
+import logging
 from pathlib import Path
+from datetime import datetime
 from dotenv import load_dotenv
 
 # Load environment before imports
 load_dotenv()
+
+# ═══════════════════════════════════════════════════════════
+# LOGGING SETUP - Save all logs to file
+# ═══════════════════════════════════════════════════════════
+LOG_DIR = Path(__file__).parent / "agent" / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_FILE = LOG_DIR / f"test_cli_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+
+# Configure root logger to write to file
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s | %(levelname)s | %(name)s | %(message)s',
+    handlers=[
+        logging.FileHandler(LOG_FILE, encoding='utf-8'),
+        # Also keep console output for errors
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+
+# Check if debug mode is enabled via environment variable
+ARVIS_DEBUG = os.environ.get("ARVIS_DEBUG", "false").lower() in ("true", "1", "yes")
+
+# Set console handler level based on debug mode
+if ARVIS_DEBUG:
+    logging.getLogger().handlers[1].setLevel(logging.DEBUG)
+    print(f"🔧 DEBUG MODE ENABLED - Full logging to console")
+else:
+    logging.getLogger().handlers[1].setLevel(logging.WARNING)
+
+# Create logger for this module
+logger = logging.getLogger("test_cli")
+logger.info(f"Test CLI started. Logs saved to: {LOG_FILE}")
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -60,6 +94,30 @@ class Colors:
     RED = '\033[91m'
     RESET = '\033[0m'
     BOLD = '\033[1m'
+
+
+def strip_colors(text: str) -> str:
+    """Remove ANSI color codes from text for clean log files."""
+    import re
+    return re.sub(r'\033\[[0-9;]*m', '', text)
+
+
+def log_print(msg: str, level: str = "info"):
+    """Print to console AND log to file. Strips colors for log file."""
+    print(msg, flush=True)  # Console with colors, flush immediately
+    clean_msg = strip_colors(msg)  # Log without colors
+    if level == "debug":
+        logger.debug(clean_msg)
+    elif level == "warning":
+        logger.warning(clean_msg)
+    elif level == "error":
+        logger.error(clean_msg)
+    else:
+        logger.info(clean_msg)
+    
+    # Flush all handlers to ensure immediate write to file
+    for handler in logger.handlers + logging.getLogger().handlers:
+        handler.flush()
 
 
 class TestCLI:
@@ -311,25 +369,43 @@ class TestCLI:
         """Continuous chat loop using RealtimeSTT (wake word + VAD + transcription)"""
         from RealtimeSTT import AudioToTextRecorder
         
-        print(f"\n{Colors.HEADER}{Colors.BOLD}🦜 Chat Mode (RealtimeSTT){Colors.RESET}")
-        print("Say 'Jarvis' to wake me up. Ctrl+C to stop.")
-        print(f"{Colors.YELLOW}Initializing RealtimeSTT...{Colors.RESET}")
+        log_print(f"\n{Colors.HEADER}{Colors.BOLD}🦜 Chat Mode (RealtimeSTT){Colors.RESET}")
+        log_print("Say 'Jarvis' to wake me up. Ctrl+C to stop.")
+        log_print(f"{Colors.YELLOW}Initializing RealtimeSTT...{Colors.RESET}")
         
-        def process_text(text: str):
+        def process_text(text: str, is_follow_up: bool = False):
             """Callback when transcription is complete"""
+            
             if not text or not text.strip():
                 return
+            
+            # If this is a follow-up response, check if it matches
+            if is_follow_up:
+                result = self.voice_pipeline.check_follow_up_response(text)
                 
-            print(f"\n{Colors.GREEN}You said: \"{text}\"{Colors.RESET}")
+                if result["action"] == "ignore":
+                    log_print(f"{Colors.YELLOW}[FollowUp] Ignored: '{text}' (no match){Colors.RESET}")
+                    return  # Stay in follow-up mode
+                    
+                elif result["action"] == "exit_politely":
+                    exit_msg = self.voice_pipeline.get_follow_up_exit_message()
+                    log_print(f"{Colors.YELLOW}[FollowUp] Timeout - {exit_msg}{Colors.RESET}")
+                    self.voice_pipeline.speak(exit_msg)
+                    in_follow_up = False
+                    return
+                    
+                # result["action"] == "process" - continue processing as normal
+                log_print(f"{Colors.GREEN}[FollowUp] Matched: '{result['matched']}'{Colors.RESET}")
+                
+            log_print(f"\n{Colors.GREEN}You said: \"{text}\"{Colors.RESET}")
             
             # Check for exit phrase
             if "exit" in text.lower() or "stop listening" in text.lower():
-                print("Exiting chat mode...")
-                recorder.stop()
+                log_print("Exiting chat mode...")
                 return
             
             # === STREAMING MODE ===
-            print(f"{Colors.BLUE}🧠 Sending to Groq LLM...{Colors.RESET}")
+            log_print(f"{Colors.BLUE}🧠 Sending to LLM ({self.llm_agent.provider})...{Colors.RESET}")
             
             # Create event for streaming LLM
             event = {
@@ -346,28 +422,28 @@ class TestCLI:
                     full_response.append(token)
                     # Show first part of each token (colored)
                     display = token[:50].replace('\n', '↵')
-                    print(f"{Colors.YELLOW}▸ {display}{Colors.RESET}")
+                    log_print(f"{Colors.YELLOW}▸ {display}{Colors.RESET}", "debug")
                     yield token
             
             # Feed streaming tokens through pipeline
-            print(f"{Colors.BLUE}📤 Streaming response:{Colors.RESET}")
+            log_print(f"{Colors.BLUE}📤 Streaming response:{Colors.RESET}")
             self.voice_pipeline.process_llm_stream(logged_stream())
             
             # Show full response summary
             response_text = "".join(full_response)
-            print(f"\n{Colors.GREEN}━━━ Full LLM Response ━━━{Colors.RESET}")
-            print(f"{Colors.CYAN}{response_text[:500]}{'...' if len(response_text) > 500 else ''}{Colors.RESET}")
-            print(f"{Colors.GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━{Colors.RESET}")
+            log_print(f"\n{Colors.GREEN}━━━ Full LLM Response ━━━{Colors.RESET}")
+            log_print(f"{Colors.CYAN}{response_text}{Colors.RESET}")
+            log_print(f"{Colors.GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━{Colors.RESET}")
             
             # Process queued tool calls (execute device commands)
             tools = self.voice_pipeline.get_pending_tools()
             if tools:
-                print(f"\n{Colors.BLUE}🔧 Executing {len(tools)} tool(s):{Colors.RESET}")
+                log_print(f"\n{Colors.BLUE}🔧 Executing {len(tools)} tool(s):{Colors.RESET}")
             for tool_data in tools:
                 tool_name = tool_data.get('tool', '')
                 args = tool_data.get('args', {})
                 
-                print(f"  {Colors.CYAN}→ {tool_name}({args}){Colors.RESET}")
+                log_print(f"  {Colors.CYAN}→ {tool_name}({args}){Colors.RESET}")
                 if tool_name in ('turn_on', 'turn_off', 'create_routine', 'run_routine'):
                     self.event_bus.publish({
                         "type": "tool_calls_generated",
@@ -380,7 +456,58 @@ class TestCLI:
             while self.voice_pipeline.is_speaking():
                 time.sleep(0.1)
             
-            print(f"\n{Colors.CYAN}💤 Listening... (say 'Jarvis'){Colors.RESET}")
+            # Check if we should enter follow-up mode
+            log_print(f"[DEBUG] Checking follow_up_mode: {self.voice_pipeline.follow_up_mode}", "debug")
+            if self.voice_pipeline.follow_up_mode:
+                # FOLLOW-UP MODE: Listen for response WITHOUT wake word
+                # Do this HERE inside the callback, before returning
+                log_print(f"{Colors.CYAN}🔄 Follow-up mode - listening for response (10s)...{Colors.RESET}")
+                
+                # RESET the timer NOW - so user has full 10 seconds AFTER TTS finishes
+                import time as time_module
+                self.voice_pipeline.last_question_time = time_module.time()
+                
+                import speech_recognition as sr
+                recognizer = sr.Recognizer()
+                
+                try:
+                    with sr.Microphone() as source:
+                        recognizer.adjust_for_ambient_noise(source, duration=0.3)
+                        audio = recognizer.listen(source, timeout=10, phrase_time_limit=5)
+                        
+                        try:
+                            # Use Google's free speech recognition (no model download needed)
+                            follow_up_text = recognizer.recognize_google(audio)
+                            log_print(f"{Colors.GREEN}[FollowUp] Heard: '{follow_up_text}'{Colors.RESET}")
+                            
+                            if follow_up_text and follow_up_text.strip():
+                                # Check if it matches expected responses
+                                result = self.voice_pipeline.check_follow_up_response(follow_up_text)
+                                log_print(f"[DEBUG] check_follow_up_response returned: {result}", "debug")
+                                
+                                if result["action"] == "process":
+                                    log_print(f"{Colors.GREEN}[FollowUp] Matched: '{result['matched']}'{Colors.RESET}")
+                                    # Recursively process the follow-up (will call LLM again)
+                                    process_text(follow_up_text, is_follow_up=False)
+                                elif result["action"] == "ignore":
+                                    log_print(f"{Colors.YELLOW}[FollowUp] No match, trying again...{Colors.RESET}")
+                                elif result["action"] == "exit_politely":
+                                    log_print(f"{Colors.YELLOW}[FollowUp] Timeout detected, exiting...{Colors.RESET}")
+                                    
+                        except sr.UnknownValueError:
+                            log_print(f"{Colors.YELLOW}[FollowUp] Couldn't understand audio{Colors.RESET}")
+                except sr.WaitTimeoutError:
+                    log_print(f"{Colors.YELLOW}[FollowUp] Timeout - no speech detected{Colors.RESET}")
+                    exit_msg = self.voice_pipeline.get_follow_up_exit_message()
+                    self.voice_pipeline.speak(exit_msg)
+                except Exception as e:
+                    log_print(f"{Colors.RED}[FollowUp] Error: {e}{Colors.RESET}", "error")
+                finally:
+                    self.voice_pipeline.exit_follow_up("completed")
+                    
+                log_print(f"\n{Colors.CYAN}💤 Listening... (say 'Jarvis'){Colors.RESET}")
+            else:
+                log_print(f"\n{Colors.CYAN}💤 Listening... (say 'Jarvis'){Colors.RESET}")
         
         def on_realtime_update(text: str):
             """Show real-time transcription updates"""
@@ -388,7 +515,7 @@ class TestCLI:
                 print(f"\r{Colors.YELLOW}[...] {text}{Colors.RESET}", end="", flush=True)
         
         try:
-            # Initialize RealtimeSTT with wake word
+            # Initialize main RealtimeSTT with wake word
             recorder = AudioToTextRecorder(
                 model="base",  # Whisper model size
                 language="en",
@@ -410,9 +537,10 @@ class TestCLI:
             print(f"{Colors.GREEN}✅ RealtimeSTT ready!{Colors.RESET}")
             print(f"{Colors.CYAN}💤 Listening... (say 'Jarvis'){Colors.RESET}")
             
-            # Main listening loop - RealtimeSTT handles everything!
+            # Main listening loop - simple wake word mode
+            # Follow-up listening is handled inside process_text callback
             while True:
-                text = recorder.text(process_text)
+                recorder.text(process_text)
                 
         except KeyboardInterrupt:
             print("\nStopping chat mode...")
