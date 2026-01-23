@@ -9,6 +9,9 @@ Provides typed, injectable tool classes for:
 - Alarm handling and analysis
 - Energy monitoring and optimization
 - GSAS sustainability compliance
+- Building skillbook (institutional memory)
+- ML-powered analytics
+- Operations (briefings, ghost detection, maintenance verification)
 """
 
 from typing import Any, List, Optional
@@ -44,25 +47,58 @@ from .gsas import (
     GenerateGORDReport
 )
 
+# Skillbook tools
+from .skillbook import (
+    QuerySkillbook,
+    AddToSkillbook,
+    FindSimilarSkills
+)
+
+# ML Analytics tools
+from .ml_analytics import (
+    ForecastEnergy,
+    DetectEquipmentFaults,
+    AnalyzeRootCause,
+    SimulateWithUncertainty,
+    BenchmarkBuildingML
+)
+
+# Operations tools
+from .operations import (
+    GenerateBriefing,
+    FindGhostSpaces,
+    EstimateZoneOccupancy,
+    VerifyMaintenanceWork,
+    AnalyzeCascade,
+    CorrelateEvents,
+    SimulateChange,
+    PredictRemainingLife,
+    PredictMaintenance,
+    GetDashboardOverview,
+    GetPointHistory,
+    CompareToFleet
+)
+
 
 __all__ = [
     # Equipment
-    "GetEquipmentStatus",
-    "ListEquipment", 
-    "GetEquipmentHealth",
+    "GetEquipmentStatus", "ListEquipment", "GetEquipmentHealth",
     # Alarms
-    "GetActiveAlarms",
-    "ExplainAlarm",
-    "AcknowledgeAlarm",
+    "GetActiveAlarms", "ExplainAlarm", "AcknowledgeAlarm",
     # Energy
-    "AnalyzeEnergy",
-    "GetEnergyAnomalies",
-    "CheckCostImpact",
-    "GetBurnRate",
+    "AnalyzeEnergy", "GetEnergyAnomalies", "CheckCostImpact", "GetBurnRate",
     # GSAS
-    "GetGSASStatus",
-    "GetGSASImprovementPriorities",
-    "GenerateGORDReport",
+    "GetGSASStatus", "GetGSASImprovementPriorities", "GenerateGORDReport",
+    # Skillbook
+    "QuerySkillbook", "AddToSkillbook", "FindSimilarSkills",
+    # ML Analytics
+    "ForecastEnergy", "DetectEquipmentFaults", "AnalyzeRootCause",
+    "SimulateWithUncertainty", "BenchmarkBuildingML",
+    # Operations
+    "GenerateBriefing", "FindGhostSpaces", "EstimateZoneOccupancy",
+    "VerifyMaintenanceWork", "AnalyzeCascade", "CorrelateEvents",
+    "SimulateChange", "PredictRemainingLife", "PredictMaintenance",
+    "GetDashboardOverview", "GetPointHistory", "CompareToFleet",
     # Factory
     "BMSToolkit"
 ]
@@ -88,7 +124,8 @@ class BMSToolkit:
         energy_analyzer: Optional[Any] = None,
         gsas_reporter: Optional[Any] = None,
         skillbook: Optional[Any] = None,
-        ml_engine: Optional[Any] = None
+        ml_engine: Optional[Any] = None,
+        briefing_engine: Optional[Any] = None
     ):
         self.bms_state = bms_state
         self.alarm_engine = alarm_engine
@@ -96,40 +133,67 @@ class BMSToolkit:
         self.gsas_reporter = gsas_reporter
         self.skillbook = skillbook
         self.ml_engine = ml_engine
+        self.briefing_engine = briefing_engine
     
     def get_tools(self) -> List[BaseTool]:
         """
         Create all BMS tools with injected engines.
         
         Returns:
-            List of fully configured BaseTool instances
+            List of fully configured BaseTool instances (33 tools total)
         """
         return [
-            # Equipment tools
+            # ─── Equipment (3 tools) ───
             GetEquipmentStatus(bms_state=self.bms_state),
             ListEquipment(bms_state=self.bms_state),
             GetEquipmentHealth(bms_state=self.bms_state, ml_engine=self.ml_engine),
             
-            # Alarm tools
+            # ─── Alarms (3 tools) ───
             GetActiveAlarms(alarm_engine=self.alarm_engine, bms_state=self.bms_state),
-            ExplainAlarm(
-                alarm_engine=self.alarm_engine, 
-                bms_state=self.bms_state,
-                skillbook=self.skillbook
-            ),
+            ExplainAlarm(alarm_engine=self.alarm_engine, bms_state=self.bms_state, skillbook=self.skillbook),
             AcknowledgeAlarm(alarm_engine=self.alarm_engine, bms_state=self.bms_state),
             
-            # Energy tools
+            # ─── Energy (4 tools) ───
             AnalyzeEnergy(energy_analyzer=self.energy_analyzer),
             GetEnergyAnomalies(energy_analyzer=self.energy_analyzer),
             CheckCostImpact(energy_analyzer=self.energy_analyzer),
             GetBurnRate(energy_analyzer=self.energy_analyzer, bms_state=self.bms_state),
             
-            # GSAS tools
+            # ─── GSAS (3 tools) ───
             GetGSASStatus(gsas_reporter=self.gsas_reporter, bms_state=self.bms_state),
             GetGSASImprovementPriorities(gsas_reporter=self.gsas_reporter),
             GenerateGORDReport(gsas_reporter=self.gsas_reporter),
+            
+            # ─── Skillbook (3 tools) ───
+            QuerySkillbook(skillbook=self.skillbook),
+            AddToSkillbook(skillbook=self.skillbook),
+            FindSimilarSkills(skillbook=self.skillbook),
+            
+            # ─── ML Analytics (5 tools) ───
+            ForecastEnergy(ml_engine=self.ml_engine),
+            DetectEquipmentFaults(ml_engine=self.ml_engine, bms_state=self.bms_state),
+            AnalyzeRootCause(ml_engine=self.ml_engine),
+            SimulateWithUncertainty(ml_engine=self.ml_engine),
+            BenchmarkBuildingML(ml_engine=self.ml_engine),
+            
+            # ─── Operations (12 tools) ───
+            GenerateBriefing(briefing_engine=self.briefing_engine),
+            FindGhostSpaces(bms_state=self.bms_state),
+            EstimateZoneOccupancy(),
+            VerifyMaintenanceWork(bms_state=self.bms_state),
+            AnalyzeCascade(alarm_engine=self.alarm_engine),
+            CorrelateEvents(),
+            SimulateChange(),
+            PredictRemainingLife(ml_engine=self.ml_engine),
+            PredictMaintenance(ml_engine=self.ml_engine),
+            GetDashboardOverview(bms_state=self.bms_state),
+            GetPointHistory(bms_state=self.bms_state),
+            CompareToFleet(),
         ]
+    
+    def get_tool_count(self) -> int:
+        """Get total number of tools"""
+        return 33
     
     def get_equipment_tools(self) -> List[BaseTool]:
         """Get only equipment-related tools"""
@@ -154,4 +218,26 @@ class BMSToolkit:
             GetEnergyAnomalies(energy_analyzer=self.energy_analyzer),
             CheckCostImpact(energy_analyzer=self.energy_analyzer),
             GetBurnRate(energy_analyzer=self.energy_analyzer, bms_state=self.bms_state),
+        ]
+    
+    def get_ml_tools(self) -> List[BaseTool]:
+        """Get only ML-powered tools"""
+        return [
+            ForecastEnergy(ml_engine=self.ml_engine),
+            DetectEquipmentFaults(ml_engine=self.ml_engine, bms_state=self.bms_state),
+            AnalyzeRootCause(ml_engine=self.ml_engine),
+            SimulateWithUncertainty(ml_engine=self.ml_engine),
+            BenchmarkBuildingML(ml_engine=self.ml_engine),
+            PredictRemainingLife(ml_engine=self.ml_engine),
+            PredictMaintenance(ml_engine=self.ml_engine),
+        ]
+    
+    def get_essential_tools(self) -> List[BaseTool]:
+        """Get minimal essential tools for basic operation"""
+        return [
+            GetEquipmentStatus(bms_state=self.bms_state),
+            ListEquipment(bms_state=self.bms_state),
+            GetActiveAlarms(alarm_engine=self.alarm_engine, bms_state=self.bms_state),
+            AnalyzeEnergy(energy_analyzer=self.energy_analyzer),
+            GetDashboardOverview(bms_state=self.bms_state),
         ]
