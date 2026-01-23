@@ -1,0 +1,110 @@
+# ARVIS Device Configuration
+# --------------------------
+# Define your smart home devices here. ARVIS loads this at startup.
+# No Python code changes needed to add/modify devices.
+#
+# Device Types:
+#   - light: On/Off, brightness, color_temp
+#   - switch: On/Off only
+#   - fan: On/Off, speed levels
+#   - thermostat: Temperature, mode
+#   - sensor: Read-only (motion, temperature, humidity)
+#   - cover: Open/Close, position
+#
+# Capabilities:
+#   - on_off: Basic toggle
+#   - brightness: 0-100 level
+#   - color_temp: Kelvin value (2700-6500)
+#   - color: RGB/HSL color
+#   - speed: Fan speed levels
+#   - temperature: Thermostat setpoint
+#   - position: Cover/blind position 0-100
+
+devices:
+  # ═══════════════════════════════════════════════════════════
+  # LIGHTS
+  # ═══════════════════════════════════════════════════════════
+  
+  living_room_light:
+    name: "Living Room Light"
+    type: light
+    node_id: 1                    # Matter Node ID (from commissioning)
+    endpoint: 1                   # Matter Endpoint (usually 1)
+    capabilities:
+      - on_off
+      - brightness
+      - color_temp
+    room: living_room
+    
+  bedroom_light:
+    name: "Bedroom Light"
+    type: light
+    node_id: 1
+    endpoint: 2
+    capabilities:
+      - on_off
+      - brightness
+    room: bedroom
+    
+  kitchen_light:
+    name: "Kitchen Light"
+    type: light
+    node_id: 1
+    endpoint: 3
+    capabilities:
+      - on_off
+    room: kitchen
+
+  # ═══════════════════════════════════════════════════════════
+  # SWITCHES (e.g., outlets, appliances)
+  # ═══════════════════════════════════════════════════════════
+  
+  coffee_maker:
+    name: "Coffee Maker"
+    type: switch
+    node_id: 1
+    endpoint: 4
+    capabilities:
+      - on_off
+    room: kitchen
+
+  # ═══════════════════════════════════════════════════════════
+  # FANS
+  # ═══════════════════════════════════════════════════════════
+  
+  bedroom_fan:
+    name: "Bedroom Fan"
+    type: fan
+    node_id: 1
+    endpoint: 5
+    capabilities:
+      - on_off
+      - speed
+    speed_levels: 3               # Low, Medium, High
+    room: bedroom
+
+# ═══════════════════════════════════════════════════════════
+# ROOMS (for context-aware commands)
+# ═══════════════════════════════════════════════════════════
+
+rooms:
+  - living_room
+  - bedroom
+  - kitchen
+  - bathroom
+  - office
+
+# ═══════════════════════════════════════════════════════════
+# DEVICE GROUPS (for "all lights" commands)
+# ═══════════════════════════════════════════════════════════
+
+groups:
+  all_lights:
+    - living_room_light
+    - bedroom_light
+    - kitchen_light
+    
+  downstairs:
+    - living_room_light
+    - kitchen_light
+    - coffee_maker

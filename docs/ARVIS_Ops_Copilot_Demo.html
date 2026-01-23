@@ -1,0 +1,1255 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ARVIS Ops Copilot — Demo</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #fafafa;
+            --bg-elevated: #ffffff;
+            --bg-hover: #f4f4f5;
+            --bg-active: #e4e4e7;
+            --border: #e4e4e7;
+            --border-light: #f4f4f5;
+            --text: #18181b;
+            --text-secondary: #71717a;
+            --text-tertiary: #a1a1aa;
+            --accent: #6366f1;
+            --accent-light: #eef2ff;
+            --success: #22c55e;
+            --success-light: #f0fdf4;
+            --warning: #f59e0b;
+            --warning-light: #fffbeb;
+            --danger: #ef4444;
+            --danger-light: #fef2f2;
+            --radius: 8px;
+            --radius-lg: 12px;
+            --shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.06);
+            --shadow-lg: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            font-size: 14px;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Layout */
+        .app {
+            display: flex;
+            height: 100vh;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 240px;
+            background: var(--bg-elevated);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+        }
+
+        .sidebar-header {
+            padding: 20px;
+            border-bottom: 1px solid var(--border-light);
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 600;
+            font-size: 15px;
+        }
+
+        .logo-icon {
+            width: 28px;
+            height: 28px;
+            background: var(--accent);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .sidebar-nav {
+            padding: 12px;
+            flex: 1;
+        }
+
+        .nav-section {
+            margin-bottom: 24px;
+        }
+
+        .nav-section-title {
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--text-tertiary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 0 8px;
+            margin-bottom: 8px;
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 10px;
+            border-radius: var(--radius);
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.15s ease;
+            font-size: 13px;
+        }
+
+        .nav-item:hover {
+            background: var(--bg-hover);
+            color: var(--text);
+        }
+
+        .nav-item.active {
+            background: var(--accent-light);
+            color: var(--accent);
+        }
+
+        .nav-item svg {
+            width: 16px;
+            height: 16px;
+            opacity: 0.7;
+        }
+
+        .nav-item.active svg {
+            opacity: 1;
+        }
+
+        .nav-badge {
+            margin-left: auto;
+            background: var(--danger);
+            color: white;
+            font-size: 11px;
+            padding: 2px 6px;
+            border-radius: 10px;
+            font-weight: 500;
+        }
+
+        .sidebar-footer {
+            padding: 16px;
+            border-top: 1px solid var(--border-light);
+        }
+
+        .building-selector {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            background: var(--bg-hover);
+            border-radius: var(--radius);
+            cursor: pointer;
+        }
+
+        .building-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, #6366f1, #8b5cf6);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+        }
+
+        .building-info {
+            flex: 1;
+        }
+
+        .building-name {
+            font-weight: 500;
+            font-size: 13px;
+        }
+
+        .building-status {
+            font-size: 11px;
+            color: var(--text-tertiary);
+        }
+
+        /* Main Content */
+        .main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .header {
+            padding: 16px 24px;
+            border-bottom: 1px solid var(--border-light);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: var(--bg-elevated);
+        }
+
+        .header-title {
+            font-size: 15px;
+            font-weight: 600;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn {
+            padding: 7px 14px;
+            border-radius: var(--radius);
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            border: none;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn-secondary {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            color: var(--text);
+        }
+
+        .btn-secondary:hover {
+            background: var(--bg-hover);
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            opacity: 0.9;
+        }
+
+        .content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px;
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .stat-card {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 20px;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: var(--text-tertiary);
+            margin-bottom: 8px;
+        }
+
+        .stat-value {
+            font-size: 28px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .stat-change {
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .stat-change.positive {
+            color: var(--success);
+        }
+
+        .stat-change.negative {
+            color: var(--danger);
+        }
+
+        /* Sections */
+        .section {
+            margin-bottom: 24px;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+
+        .section-title {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .section-action {
+            font-size: 12px;
+            color: var(--accent);
+            cursor: pointer;
+        }
+
+        .section-action:hover {
+            text-decoration: underline;
+        }
+
+        /* Insights */
+        .insights-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .insight-card {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 16px 20px;
+            display: flex;
+            gap: 16px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .insight-card:hover {
+            border-color: var(--accent);
+            box-shadow: var(--shadow-lg);
+        }
+
+        .insight-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: var(--radius);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            flex-shrink: 0;
+        }
+
+        .insight-icon.warning {
+            background: var(--warning-light);
+        }
+
+        .insight-icon.danger {
+            background: var(--danger-light);
+        }
+
+        .insight-icon.success {
+            background: var(--success-light);
+        }
+
+        .insight-content {
+            flex: 1;
+        }
+
+        .insight-title {
+            font-weight: 500;
+            margin-bottom: 4px;
+        }
+
+        .insight-desc {
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+        }
+
+        .insight-meta {
+            display: flex;
+            gap: 16px;
+            font-size: 12px;
+            color: var(--text-tertiary);
+        }
+
+        .insight-actions {
+            display: flex;
+            gap: 8px;
+            align-items: flex-start;
+        }
+
+        .insight-btn {
+            padding: 6px 12px;
+            border-radius: var(--radius);
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            border: 1px solid var(--border);
+            background: var(--bg-elevated);
+            color: var(--text-secondary);
+            transition: all 0.15s ease;
+        }
+
+        .insight-btn:hover {
+            background: var(--bg-hover);
+            color: var(--text);
+        }
+
+        .insight-btn.primary {
+            background: var(--accent);
+            border-color: var(--accent);
+            color: white;
+        }
+
+        /* Chat Panel */
+        .chat-panel {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            width: 400px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.12);
+            display: flex;
+            flex-direction: column;
+            max-height: 500px;
+            overflow: hidden;
+            transform: translateY(20px);
+            opacity: 0;
+            pointer-events: none;
+            transition: all 0.2s ease;
+        }
+
+        .chat-panel.open {
+            transform: translateY(0);
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .chat-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border-light);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .chat-header-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 500;
+        }
+
+        .chat-header-icon {
+            width: 24px;
+            height: 24px;
+            background: var(--accent);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 12px;
+        }
+
+        .chat-close {
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: var(--text-tertiary);
+            padding: 4px;
+        }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px 20px;
+        }
+
+        .chat-message {
+            margin-bottom: 16px;
+        }
+
+        .chat-message.user {
+            text-align: right;
+        }
+
+        .chat-bubble {
+            display: inline-block;
+            max-width: 85%;
+            padding: 10px 14px;
+            border-radius: var(--radius-lg);
+            font-size: 13px;
+            line-height: 1.5;
+            text-align: left;
+        }
+
+        .chat-message.user .chat-bubble {
+            background: var(--accent);
+            color: white;
+        }
+
+        .chat-message.assistant .chat-bubble {
+            background: var(--bg-hover);
+            color: var(--text);
+        }
+
+        .chat-bubble ul {
+            margin: 8px 0;
+            padding-left: 16px;
+        }
+
+        .chat-bubble li {
+            margin-bottom: 4px;
+        }
+
+        .chat-input-container {
+            padding: 16px 20px;
+            border-top: 1px solid var(--border-light);
+        }
+
+        .chat-input-wrapper {
+            display: flex;
+            gap: 8px;
+        }
+
+        .chat-input {
+            flex: 1;
+            padding: 10px 14px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            font-size: 13px;
+            font-family: inherit;
+            outline: none;
+            transition: border-color 0.15s ease;
+        }
+
+        .chat-input:focus {
+            border-color: var(--accent);
+        }
+
+        .chat-send {
+            padding: 10px 16px;
+            background: var(--accent);
+            color: white;
+            border: none;
+            border-radius: var(--radius);
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+        }
+
+        /* FAB */
+        .chat-fab {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            width: 56px;
+            height: 56px;
+            background: var(--accent);
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+            transition: all 0.2s ease;
+            border: none;
+        }
+
+        .chat-fab:hover {
+            transform: scale(1.05);
+        }
+
+        .chat-fab.hidden {
+            opacity: 0;
+            pointer-events: none;
+            transform: scale(0.8);
+        }
+
+        /* Alarms List */
+        .alarms-list {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+        }
+
+        .alarm-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--border-light);
+            cursor: pointer;
+            transition: background 0.15s ease;
+        }
+
+        .alarm-item:last-child {
+            border-bottom: none;
+        }
+
+        .alarm-item:hover {
+            background: var(--bg-hover);
+        }
+
+        .alarm-priority {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .alarm-priority.high {
+            background: var(--danger);
+        }
+
+        .alarm-priority.medium {
+            background: var(--warning);
+        }
+
+        .alarm-priority.low {
+            background: var(--success);
+        }
+
+        .alarm-content {
+            flex: 1;
+        }
+
+        .alarm-title {
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 2px;
+        }
+
+        .alarm-location {
+            font-size: 12px;
+            color: var(--text-tertiary);
+        }
+
+        .alarm-time {
+            font-size: 11px;
+            color: var(--text-tertiary);
+        }
+
+        /* Typing animation */
+        .typing-indicator {
+            display: flex;
+            gap: 4px;
+            padding: 12px 14px;
+        }
+
+        .typing-dot {
+            width: 6px;
+            height: 6px;
+            background: var(--text-tertiary);
+            border-radius: 50%;
+            animation: typing 1.4s infinite ease-in-out;
+        }
+
+        .typing-dot:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .typing-dot:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes typing {
+
+            0%,
+            60%,
+            100% {
+                transform: translateY(0);
+            }
+
+            30% {
+                transform: translateY(-6px);
+            }
+        }
+
+        /* Demo Controls */
+        .demo-controls {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            background: var(--text);
+            color: white;
+            padding: 12px 16px;
+            border-radius: var(--radius);
+            font-size: 12px;
+            z-index: 1000;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .demo-controls button {
+            background: rgba(255, 255, 255, 0.2);
+            border: none;
+            color: white;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 11px;
+            cursor: pointer;
+        }
+
+        .demo-controls button:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        /* Animations */
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .animate-in {
+            animation: fadeIn 0.3s ease forwards;
+        }
+
+        /* Notification */
+        .notification {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%) translateY(-100px);
+            background: var(--bg-elevated);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 14px 20px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            z-index: 1001;
+            transition: transform 0.3s ease;
+        }
+
+        .notification.show {
+            transform: translateX(-50%) translateY(0);
+        }
+
+        .notification-icon {
+            width: 32px;
+            height: 32px;
+            background: var(--warning-light);
+            border-radius: var(--radius);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+        }
+
+        .notification-content h4 {
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 2px;
+        }
+
+        .notification-content p {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="app">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <div class="logo-icon">A</div>
+                    <span>ARVIS Copilot</span>
+                </div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <div class="nav-section">
+                    <div class="nav-section-title">Overview</div>
+                    <div class="nav-item active">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="3" width="7" height="7" rx="1" />
+                            <rect x="14" y="3" width="7" height="7" rx="1" />
+                            <rect x="3" y="14" width="7" height="7" rx="1" />
+                            <rect x="14" y="14" width="7" height="7" rx="1" />
+                        </svg>
+                        Dashboard
+                    </div>
+                    <div class="nav-item">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path
+                                d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                            <line x1="12" y1="9" x2="12" y2="13" />
+                            <line x1="12" y1="17" x2="12.01" y2="17" />
+                        </svg>
+                        Alarms
+                        <span class="nav-badge">12</span>
+                    </div>
+                    <div class="nav-item">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M18 20V10" />
+                            <path d="M12 20V4" />
+                            <path d="M6 20v-6" />
+                        </svg>
+                        Energy
+                    </div>
+                    <div class="nav-item">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10" />
+                            <path d="M12 16v-4" />
+                            <path d="M12 8h.01" />
+                        </svg>
+                        Insights
+                    </div>
+                </div>
+
+                <div class="nav-section">
+                    <div class="nav-section-title">Reports</div>
+                    <div class="nav-item">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                            <polyline points="14 2 14 8 20 8" />
+                            <line x1="16" y1="13" x2="8" y2="13" />
+                            <line x1="16" y1="17" x2="8" y2="17" />
+                        </svg>
+                        Weekly Summary
+                    </div>
+                    <div class="nav-item">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                            <line x1="16" y1="2" x2="16" y2="6" />
+                            <line x1="8" y1="2" x2="8" y2="6" />
+                            <line x1="3" y1="10" x2="21" y2="10" />
+                        </svg>
+                        GSAS Export
+                    </div>
+                </div>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div class="building-selector">
+                    <div class="building-icon">🏢</div>
+                    <div class="building-info">
+                        <div class="building-name">Al Rayyan Tower</div>
+                        <div class="building-status">Connected • Live</div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main">
+            <header class="header">
+                <h1 class="header-title">Dashboard</h1>
+                <div class="header-actions">
+                    <button class="btn btn-secondary">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                            <polyline points="7 10 12 15 17 10" />
+                            <line x1="12" y1="15" x2="12" y2="3" />
+                        </svg>
+                        Export
+                    </button>
+                    <button class="btn btn-primary" onclick="toggleChat()">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <circle cx="12" cy="12" r="10" />
+                            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+                            <line x1="12" y1="17" x2="12.01" y2="17" />
+                        </svg>
+                        Ask ARVIS
+                    </button>
+                </div>
+            </header>
+
+            <div class="content">
+                <!-- Stats -->
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-label">Active Alarms</div>
+                        <div class="stat-value">12</div>
+                        <div class="stat-change negative">
+                            <span>↑ 3</span> from yesterday
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Energy Today</div>
+                        <div class="stat-value">2,450 kWh</div>
+                        <div class="stat-change positive">
+                            <span>↓ 8%</span> vs last week
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Comfort Score</div>
+                        <div class="stat-value">94%</div>
+                        <div class="stat-change positive">
+                            <span>↑ 2%</span> this week
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Complaints</div>
+                        <div class="stat-value">3</div>
+                        <div class="stat-change positive">
+                            <span>↓ 5</span> resolved today
+                        </div>
+                    </div>
+                </div>
+
+                <!-- AI Insights -->
+                <div class="section">
+                    <div class="section-header">
+                        <h2 class="section-title">Today's Insights</h2>
+                        <span class="section-action">View all →</span>
+                    </div>
+                    <div class="insights-list" id="insights-list">
+                        <div class="insight-card" onclick="showInsightDetail('energy')">
+                            <div class="insight-icon warning">⚡</div>
+                            <div class="insight-content">
+                                <div class="insight-title">Energy Anomaly Detected</div>
+                                <div class="insight-desc">Floor 5 HVAC running 3 hours after occupancy hours. Estimated
+                                    waste: 125 kWh/day (~QAR 45/day)</div>
+                                <div class="insight-meta">
+                                    <span>Detected 2 hours ago</span>
+                                    <span>Confidence: 92%</span>
+                                </div>
+                            </div>
+                            <div class="insight-actions">
+                                <button class="insight-btn">Dismiss</button>
+                                <button class="insight-btn primary">Explain</button>
+                            </div>
+                        </div>
+
+                        <div class="insight-card" onclick="showInsightDetail('root-cause')">
+                            <div class="insight-icon danger">🔍</div>
+                            <div class="insight-content">
+                                <div class="insight-title">Root Cause Analysis</div>
+                                <div class="insight-desc">3 cooling complaints on Floor 3 trace to VAV damper in zone
+                                    3-East. Likely stuck actuator.</div>
+                                <div class="insight-meta">
+                                    <span>Detected 45 min ago</span>
+                                    <span>Confidence: 87%</span>
+                                </div>
+                            </div>
+                            <div class="insight-actions">
+                                <button class="insight-btn">Dismiss</button>
+                                <button class="insight-btn primary">Explain</button>
+                            </div>
+                        </div>
+
+                        <div class="insight-card" onclick="showInsightDetail('optimization')">
+                            <div class="insight-icon success">💡</div>
+                            <div class="insight-content">
+                                <div class="insight-title">Optimization Opportunity</div>
+                                <div class="insight-desc">Cooling setpoint could be raised 1°C during 2-4 PM based on
+                                    occupancy patterns. Est. saving: 8%</div>
+                                <div class="insight-meta">
+                                    <span>Based on 14-day analysis</span>
+                                    <span>Confidence: 78%</span>
+                                </div>
+                            </div>
+                            <div class="insight-actions">
+                                <button class="insight-btn">Dismiss</button>
+                                <button class="insight-btn primary">Explain</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Priority Alarms -->
+                <div class="section">
+                    <div class="section-header">
+                        <h2 class="section-title">Priority Alarms</h2>
+                        <span class="section-action">View all 12 →</span>
+                    </div>
+                    <div class="alarms-list">
+                        <div class="alarm-item">
+                            <div class="alarm-priority high"></div>
+                            <div class="alarm-content">
+                                <div class="alarm-title">Chiller 2 — High discharge pressure</div>
+                                <div class="alarm-location">Penthouse Mechanical Room</div>
+                            </div>
+                            <div class="alarm-time">5 min ago</div>
+                        </div>
+                        <div class="alarm-item">
+                            <div class="alarm-priority high"></div>
+                            <div class="alarm-content">
+                                <div class="alarm-title">AHU-3 — Supply temp deviation</div>
+                                <div class="alarm-location">Floor 3 Air Handler</div>
+                            </div>
+                            <div class="alarm-time">12 min ago</div>
+                        </div>
+                        <div class="alarm-item">
+                            <div class="alarm-priority medium"></div>
+                            <div class="alarm-content">
+                                <div class="alarm-title">VAV-3E — Damper position fault</div>
+                                <div class="alarm-location">Floor 3 East Zone</div>
+                            </div>
+                            <div class="alarm-time">45 min ago</div>
+                        </div>
+                        <div class="alarm-item">
+                            <div class="alarm-priority low"></div>
+                            <div class="alarm-content">
+                                <div class="alarm-title">Lobby lighting — Schedule override active</div>
+                                <div class="alarm-location">Ground Floor Lobby</div>
+                            </div>
+                            <div class="alarm-time">2 hrs ago</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Chat Panel -->
+    <div class="chat-panel" id="chatPanel">
+        <div class="chat-header">
+            <div class="chat-header-title">
+                <div class="chat-header-icon">✨</div>
+                <span>Ask ARVIS</span>
+            </div>
+            <button class="chat-close" onclick="toggleChat()">✕</button>
+        </div>
+        <div class="chat-messages" id="chatMessages">
+            <div class="chat-message assistant">
+                <div class="chat-bubble">
+                    Hi! I'm ARVIS, your building operations copilot. Ask me anything about alarms, energy, or comfort
+                    issues.
+                </div>
+            </div>
+        </div>
+        <div class="chat-input-container">
+            <div class="chat-input-wrapper">
+                <input type="text" class="chat-input" id="chatInput" placeholder="Ask about energy, alarms, comfort..."
+                    onkeypress="handleKeyPress(event)">
+                <button class="chat-send" onclick="sendMessage()">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Chat FAB -->
+    <button class="chat-fab" id="chatFab" onclick="toggleChat()">💬</button>
+
+    <!-- Notification -->
+    <div class="notification" id="notification">
+        <div class="notification-icon">⚠️</div>
+        <div class="notification-content">
+            <h4>New Insight Available</h4>
+            <p>ARVIS detected an energy anomaly on Floor 5</p>
+        </div>
+    </div>
+
+    <!-- Demo Controls -->
+    <div class="demo-controls">
+        <span>Demo Mode</span>
+        <button onclick="showNotification()">Trigger Alert</button>
+        <button onclick="simulateNewInsight()">New Insight</button>
+        <button onclick="resetDemo()">Reset</button>
+    </div>
+
+    <script>
+        let chatOpen = false;
+
+        function toggleChat() {
+            chatOpen = !chatOpen;
+            document.getElementById('chatPanel').classList.toggle('open', chatOpen);
+            document.getElementById('chatFab').classList.toggle('hidden', chatOpen);
+        }
+
+        function handleKeyPress(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        }
+
+        function sendMessage() {
+            const input = document.getElementById('chatInput');
+            const query = input.value.trim();
+            if (!query) return;
+
+            // Add user message
+            addMessage(query, 'user');
+            input.value = '';
+
+            // Show typing indicator
+            showTyping();
+
+            // Simulate AI response
+            setTimeout(() => {
+                hideTyping();
+                const response = getAIResponse(query);
+                addMessage(response, 'assistant');
+            }, 1500);
+        }
+
+        function addMessage(content, type) {
+            const messages = document.getElementById('chatMessages');
+            const div = document.createElement('div');
+            div.className = `chat-message ${type} animate-in`;
+            div.innerHTML = `<div class="chat-bubble">${content}</div>`;
+            messages.appendChild(div);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function showTyping() {
+            const messages = document.getElementById('chatMessages');
+            const div = document.createElement('div');
+            div.className = 'chat-message assistant';
+            div.id = 'typingIndicator';
+            div.innerHTML = `
+                <div class="chat-bubble">
+                    <div class="typing-indicator">
+                        <div class="typing-dot"></div>
+                        <div class="typing-dot"></div>
+                        <div class="typing-dot"></div>
+                    </div>
+                </div>
+            `;
+            messages.appendChild(div);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function hideTyping() {
+            const typing = document.getElementById('typingIndicator');
+            if (typing) typing.remove();
+        }
+
+        function getAIResponse(query) {
+            const q = query.toLowerCase();
+
+            if (q.includes('energy') && (q.includes('high') || q.includes('why'))) {
+                return `Energy consumption is <strong>18% higher</strong> this week. Key factors:
+                <ul>
+                    <li>Outside temperature averaged 42°C vs 38°C last week (+8% cooling load)</li>
+                    <li>Conference center had 3 events vs 1 last week (+5% occupancy)</li>
+                    <li>Floor 5 HVAC running after hours — I've flagged this as an anomaly</li>
+                </ul>
+                Would you like me to generate a detailed breakdown?`;
+            }
+
+            if (q.includes('floor 3') || q.includes('complaints') || q.includes('cooling')) {
+                return `I found <strong>3 cooling complaints</strong> on Floor 3 today, all from the East wing.
+                <ul>
+                    <li>Root cause: VAV damper in zone 3-East appears stuck</li>
+                    <li>The damper position sensor shows 15% but airflow readings suggest ~60%</li>
+                    <li>This explains why the zone is overcooling</li>
+                </ul>
+                <strong>Recommendation:</strong> Check the damper actuator in zone 3-East. Confidence: 87%`;
+            }
+
+            if (q.includes('chiller') || q.includes('pressure')) {
+                return `Chiller 2 is showing <strong>high discharge pressure</strong> (185 psi vs normal 150 psi).
+                <ul>
+                    <li>Possible causes: condenser fouling, refrigerant overcharge, or ambient temp</li>
+                    <li>Condenser was last cleaned 6 months ago</li>
+                    <li>No recent refrigerant work logged</li>
+                </ul>
+                <strong>Suggestion:</strong> Schedule condenser inspection. This isn't critical yet but warrants attention this week.`;
+            }
+
+            if (q.includes('save') || q.includes('optimization') || q.includes('reduce')) {
+                return `Based on 14-day analysis, here are <strong>3 optimization opportunities</strong>:
+                <ul>
+                    <li><strong>Setpoint adjustment:</strong> Raise cooling by 1°C during 2-4 PM (low occupancy) — saves ~8%</li>
+                    <li><strong>Schedule alignment:</strong> Floor 5 HVAC starts 2 hours early — adjust to occupancy — saves ~5%</li>
+                    <li><strong>Economizer tuning:</strong> AHU-2 not using free cooling when outdoor temp allows — saves ~3%</li>
+                </ul>
+                Combined estimated savings: <strong>QAR 180/day</strong>`;
+            }
+
+            return `I understand you're asking about "${query}". Let me analyze the building data...
+            <br><br>
+            Could you be more specific? For example:
+            <ul>
+                <li>"Why is energy higher this week?"</li>
+                <li>"What's causing Floor 3 complaints?"</li>
+                <li>"How can we reduce energy costs?"</li>
+            </ul>`;
+        }
+
+        function showNotification() {
+            const notif = document.getElementById('notification');
+            notif.classList.add('show');
+            setTimeout(() => notif.classList.remove('show'), 4000);
+        }
+
+        function simulateNewInsight() {
+            const list = document.getElementById('insights-list');
+            const newInsight = document.createElement('div');
+            newInsight.className = 'insight-card animate-in';
+            newInsight.innerHTML = `
+                <div class="insight-icon warning">🌡️</div>
+                <div class="insight-content">
+                    <div class="insight-title">Temperature Drift Detected</div>
+                    <div class="insight-desc">Meeting Room 5A temperature rising despite cooling request. Possible sensor calibration issue.</div>
+                    <div class="insight-meta">
+                        <span>Just now</span>
+                        <span>Confidence: 74%</span>
+                    </div>
+                </div>
+                <div class="insight-actions">
+                    <button class="insight-btn">Dismiss</button>
+                    <button class="insight-btn primary">Explain</button>
+                </div>
+            `;
+            list.insertBefore(newInsight, list.firstChild);
+            showNotification();
+        }
+
+        function resetDemo() {
+            location.reload();
+        }
+
+        function showInsightDetail(type) {
+            // Open chat with context
+            if (!chatOpen) toggleChat();
+
+            setTimeout(() => {
+                let query = '';
+                if (type === 'energy') query = 'Tell me more about the Floor 5 energy anomaly';
+                if (type === 'root-cause') query = 'What\'s causing the Floor 3 cooling complaints?';
+                if (type === 'optimization') query = 'How can we reduce energy costs?';
+
+                document.getElementById('chatInput').value = query;
+                sendMessage();
+            }, 300);
+        }
+
+        // Show notification after 5 seconds for demo effect
+        setTimeout(showNotification, 5000);
+    </script>
+</body>
+
+</html>

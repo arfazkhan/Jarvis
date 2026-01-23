@@ -13,10 +13,19 @@ scikit-learn                 # ML utilities
 
 # Phase 2: Natural Interaction (Conversation + Voice)
 openai-whisper              # Speech-to-text (local)
-pyttsx3                     # Text-to-speech (local)
+pyttsx3                     # Text-to-speech (local fallback)
 textblob                    # Sentiment analysis
 nltk                        # NLP utilities
 SpeechRecognition           # Voice recognition abstraction
+RealtimeTTS                 # Streaming TTS (Coqui, Kokoro, Piper)
+emoji                       # Emoji handling for TTS text sanitization
+sounddevice                 # Audio I/O for CosyVoice
+
+# CosyVoice TTS (optional - high-quality, low-latency)
+# Requires separate installation:
+#   git clone https://github.com/FunAudioLLM/CosyVoice.git
+#   cd CosyVoice && pip install -e .
+# Then set TTS_ENGINE=cosyvoice in .env
 
 # Phase 3: Autonomous Planning (Multi-step Execution)
 networkx                    # Graph operations for dependency management

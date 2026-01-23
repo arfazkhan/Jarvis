@@ -174,8 +174,8 @@ class ToolExecutor:
             return {"status": "success", "tool": name}
         
         elif name == "log_memory":
-            title = args.get("title")
-            knowledge = args.get("knowledge")
+            title = args.get("title") or args.get("key")
+            knowledge = args.get("knowledge") or args.get("value")
             action = args.get("action", "create")
             existing_id = args.get("existing_id")
             

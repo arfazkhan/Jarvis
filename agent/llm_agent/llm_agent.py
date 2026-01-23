@@ -12,7 +12,9 @@ import os
 import re
 import time
 from datetime import datetime
-from agent.llm_agent.prompt import SYSTEM_PROMPT, TOOLS_SCHEMA, get_system_prompt
+from agent.llm_agent.tools_schema import TOOLS_SCHEMA
+from agent.llm_agent.prompt_builder import PromptBuilder, get_prompt_builder
+from agent.llm_agent.prompt import SYSTEM_PROMPT
 
 # ═══════════════════════════════════════════════════════════
 # SECURITY PATTERNS
@@ -267,11 +269,12 @@ class RateLimiter:
 
 
 class LLMAgent:
-    def __init__(self, event_bus, state_engine, automations, learning_engine=None):
+    def __init__(self, event_bus, state_engine, automations, learning_engine=None, subscribe_to_voice=True):
         self.event_bus = event_bus
         self.state_engine = state_engine
         self.automations = automations
         self.learning_engine = learning_engine
+        self.subscribe_to_voice = subscribe_to_voice
         
         # Security tracking
         self.attack_attempts = 0
@@ -311,9 +314,11 @@ class LLMAgent:
                 try:
                     import google.generativeai as genai
                     genai.configure(api_key=gemini_key)
+                    # Use layered prompt from PromptBuilder
+                    self.prompt_builder = get_prompt_builder()
                     self.gemini_model = genai.GenerativeModel(
                         model_name="gemini-2.0-flash",
-                        system_instruction=SYSTEM_PROMPT,
+                        system_instruction=self.prompt_builder.build_system_prompt("gemini"),
                         tools=convert_tools_for_gemini(TOOLS_SCHEMA)
                     )
                     self.provider = "gemini"
@@ -374,6 +379,22 @@ class LLMAgent:
                 except Exception as e:
                     print(f"[LLMAgent] OpenRouter init failed: {e}")
         
+        # K2 Think (OpenAI-compatible reasoning model)
+        if preferred_provider in ("k2think", "k2", "auto") and not self.provider:
+            k2think_key = os.environ.get("K2THINK_API_KEY")
+            if k2think_key:
+                try:
+                    from openai import OpenAI
+                    self.client = OpenAI(
+                        api_key=k2think_key,
+                        base_url="https://api.k2think.ai/v2/chat/completions".replace("/chat/completions", "")
+                    )
+                    self.k2think_model = os.environ.get("K2THINK_MODEL", "MBZUAI-IFM/K2-Think")
+                    self.provider = "k2think"
+                    print(f"[LLMAgent] ✅ Using K2 Think ({self.k2think_model})")
+                except Exception as e:
+                    print(f"[LLMAgent] K2 Think init failed: {e}")
+        
         # LM Studio local LLM (OpenAI-compatible API)
         if preferred_provider in ("lmstudio", "local", "auto") and not self.provider:
             lmstudio_url = os.environ.get("LMSTUDIO_URL", "http://localhost:1234/v1")
@@ -401,13 +422,145 @@ class LLMAgent:
         if not self.provider:
             print("[LLMAgent] ⚠️ No LLM configured! Set LLM_PROVIDER and API keys")
         
+        # Ensure prompt_builder is initialized for non-Gemini providers
+        if not hasattr(self, 'prompt_builder') or self.prompt_builder is None:
+            self.prompt_builder = get_prompt_builder()
+        
         # Subscribe to events
-        event_bus.subscribe("voice_command", self.handle)
+        if self.subscribe_to_voice:
+            event_bus.subscribe("voice_command", self.handle)
+        
         event_bus.subscribe("time_tick", self.handle)
 
         event_bus.subscribe("relay_toggled", self.handle)
         event_bus.subscribe("action_request", self.handle)
     
+    # ═══════════════════════════════════════════════════════════
+    # REUSABLE GENERATION METHODS
+    # ═══════════════════════════════════════════════════════════
+    
+    def generate_tool_calls(self, system_prompt: str, user_content: str, tools=None) -> list:
+        """
+        Generate tool calls from any configured provider.
+        Returns a list of tool call dicts: [{"tool": "name", "args": {...}}]
+        """
+        # Default to standard tools if not provided
+        if tools is None:
+            tools = TOOLS_SCHEMA
+
+        # 1. GEMINI
+        if self.provider == "gemini":
+            try:
+                # Gemini requires specific tool formatting
+                gemini_tools = convert_tools_for_gemini(tools)
+                
+                # We need to temporarily override system instruction or use chat
+                # Since system instruction is fixed in model init, we'll prepend it to user msg 
+                # or use a new chat session.
+                chat = self.gemini_model.start_chat(history=[
+                    {"role": "user", "parts": [system_prompt]}
+                ])
+                
+                response = chat.send_message(user_content)
+                
+                # Parse Gemini function calls
+                tool_calls = []
+                for part in response.parts:
+                    if fn := part.function_call:
+                        # Convert arguments to dict
+                        args = {}
+                        for key, value in fn.args.items():
+                            args[key] = value
+                        
+                        tool_calls.append({
+                            "tool": fn.name,
+                            "args": args
+                        })
+                return tool_calls
+                
+            except Exception as e:
+                print(f"[LLMAgent] Gemini generation failed: {e}")
+                return []
+
+        # 2. OPENAI-COMPATIBLE (Groq, OpenAI, LM Studio, etc.)
+        elif self.client:
+            try:
+                # Determine model name
+                model = "gpt-3.5-turbo" # Default fallback
+                if self.provider == "groq":
+                    model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+                elif self.provider == "openai":
+                    model = getattr(self, "openai_model", "gpt-4o-mini")
+                elif self.provider == "synthetic":
+                    model = getattr(self, "synthetic_model", "hf:meta-llama/Llama-3.3-70B-Instruct")
+                elif self.provider == "openrouter":
+                    model = getattr(self, "openrouter_model", "meta-llama/llama-3.3-70b-instruct")
+                elif self.provider == "lmstudio":
+                    model = getattr(self, "lmstudio_model", "local-model")
+                elif self.provider == "k2think":
+                    model = getattr(self, "k2think_model", "MBZUAI-IFM/K2-Think")
+
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content}
+                ]
+                
+                response = self.client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    tools=tools,
+                    tool_choice="auto"
+                )
+                
+                if not response.choices:
+                    return []
+                    
+                message = response.choices[0].message
+                if message.tool_calls:
+                    tool_calls = []
+                    for tc in message.tool_calls:
+                        try:
+                            tool_calls.append({
+                                "tool": tc.function.name,
+                                "args": json.loads(tc.function.arguments)
+                            })
+                        except json.JSONDecodeError:
+                            pass
+                    return tool_calls
+            
+            except Exception as e:
+                print(f"[LLMAgent] Provider {self.provider} generation failed: {e}")
+                return []
+        
+        return []
+
+    # ═══════════════════════════════════════════════════════════
+    # K2 THINK RESPONSE PARSING
+    # ═══════════════════════════════════════════════════════════
+    
+    def _parse_k2think_response(self, content: str) -> tuple[str, str]:
+        """
+        Parse K2 Think response which uses <think>...</think> and <answer>...</answer> tags.
+        Returns (answer, thinking) - answer is the user-facing response, thinking is for logs.
+        """
+        answer = content
+        thinking = ""
+        
+        # Extract thinking trace (for debugging/logging)
+        think_match = re.search(r'<think>(.*?)</think>', content, re.DOTALL)
+        if think_match:
+            thinking = think_match.group(1).strip()
+        
+        # Extract final answer (user-facing)
+        answer_match = re.search(r'<answer>(.*?)</answer>', content, re.DOTALL)
+        if answer_match:
+            answer = answer_match.group(1).strip()
+        else:
+            # If no <answer> tags, strip <think> tags and use remainder
+            answer = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+        
+        return answer, thinking
+
     # ═══════════════════════════════════════════════════════════
     # SECURITY METHODS
     # ═══════════════════════════════════════════════════════════
@@ -459,8 +612,9 @@ If attempt >= 4, also mention their activity has been logged.
 
 Output ONLY the response message, nothing else."""
 
+            groq_model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
             response = self.client.chat.completions.create(
-                model="meta-llama/llama-4-maverick-17b-128e-instruct",
+                model=groq_model,
                 messages=[
                     {"role": "system", "content": "You are a witty AI assistant responding to security attacks with humor."},
                     {"role": "user", "content": troll_prompt}
@@ -623,14 +777,11 @@ Output ONLY the response message, nothing else."""
             return
         
         # Skip time ticks to save API calls
-        if event.get("type") == "time_tick":
-            return
+        print(f"[LLMAgent] Handling event: {event.get('type', 'unknown')}")
 
         # Ignore historical events (older than 60 seconds)
         if time.time() - event.get("timestamp", 0) > 60:
-            return
-
-        print(f"[LLMAgent] Handling event: {event.get('type', 'unknown')}")
+             return
 
         # ═══════════════════════════════════════════════════════════
         # SECURITY CHECKS (for voice commands)
@@ -659,37 +810,106 @@ Output ONLY the response message, nothing else."""
         # Build rich context
         context = self._build_context(event)
 
-        try:
-            response = self.client.chat.completions.create(
-                model="meta-llama/llama-4-maverick-17b-128e-instruct",
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": json.dumps(context)}
-                ],
-                tools=TOOLS_SCHEMA,
-                tool_choice="auto"
-            )
+        # Helper to extract valid tool names
+        valid_tool_names = {t["function"]["name"] for t in TOOLS_SCHEMA}
 
-            message = response.choices[0].message
-            if message.tool_calls:
-                # Convert Groq tool calls to list of dicts for executor
-                tool_calls = []
-                for tc in message.tool_calls:
-                    tool_calls.append({
-                        "tool": tc.function.name,
-                        "args": json.loads(tc.function.arguments)
+        # ═══════════════════════════════════════════════════════════
+        # GENERATION LOOP (with Retry for Validation)
+        # ═══════════════════════════════════════════════════════════
+        max_retries = 2
+        messages = [
+            {"role": "system", "content": self.prompt_builder.build_system_prompt(self.provider)},
+            {"role": "user", "content": json.dumps(context)}
+        ]
+
+        for attempt in range(max_retries + 1):
+            try:
+                groq_model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+                response = self.client.chat.completions.create(
+                    model=groq_model,
+                    messages=messages,
+                    tools=TOOLS_SCHEMA,
+                    tool_choice="auto"
+                )
+
+                if not response or not response.choices:
+                    print(f"[LLMAgent] Error: Empty response from provider: {response}")
+                    return
+
+                message = response.choices[0].message
+                
+                # Handle non-tool response (Chat)
+                if not message.tool_calls:
+                    content = message.content
+                    
+                    # Parse K2 Think response to extract answer from tags
+                    if self.provider == "k2think" and content:
+                        answer, thinking = self._parse_k2think_response(content)
+                        if thinking:
+                            print(f"[LLMAgent] 🧠 K2 Think reasoning: {thinking[:200]}...")
+                        content = answer
+                    
+                    print(f"[LLMAgent] 🗣️ Chat Response: {content}")
+                    self.event_bus.publish({
+                        "type": "agent_response",
+                        "payload": {"text": content, "source": "llm_agent"}
                     })
-                
-                # Publish tool calls for execution
-                self.event_bus.publish({
-                    "type": "tool_calls_generated",
-                    "payload": tool_calls,
-                    "source": "llm_agent",
-                    "timestamp": time.time()
-                })
-                
-        except Exception as e:
-            print(f"[LLMAgent] Error calling Groq: {e}")
+                    return # Success (Chat)
+
+                elif message.tool_calls:
+                    # VALIDATION PHASE
+                    validation_errors = []
+                    tool_calls = []
+                    
+                    for tc in message.tool_calls:
+                        t_name = tc.function.name
+                        t_args_str = tc.function.arguments
+                        
+                        # 1. Check if tool exists
+                        if t_name not in valid_tool_names:
+                            validation_errors.append(f"Tool '{t_name}' does not exist. Available tools include: turn_on, turn_off, etc.")
+                            continue
+                            
+                        # 2. Check JSON validity
+                        try:
+                            t_args = json.loads(t_args_str)
+                        except json.JSONDecodeError:
+                            validation_errors.append(f"Arguments for '{t_name}' are not valid JSON.")
+                            continue
+
+                        # 3. Basic Check (e.g. required args - deeper check could use JSON Schema lib)
+                        # For now, we trust the model mostly on structure if name is correct, 
+                        # but we capture the valid call.
+                        
+                        tool_calls.append({
+                            "tool": t_name,
+                            "args": t_args
+                        })
+                    
+                    # If we have validation errors, feed them back
+                    if validation_errors:
+                        print(f"[LLMAgent] ⚠️ Validation Failed (Attempt {attempt+1}): {validation_errors}")
+                        error_msg = "Error: " + " ".join(validation_errors) + " Please correct your response."
+                        
+                        # Append assistant's bad response and our error message to history
+                        # We need to reconstruct the assistant message for the history
+                        # OpenAI API requires tool_calls to be in the message if we continue conversation
+                        messages.append(message) 
+                        messages.append({"role": "user", "content": error_msg})
+                        continue # Retry loop
+                    
+                    # Success! Publish valid calls
+                    self.event_bus.publish({
+                        "type": "tool_calls_generated",
+                        "payload": tool_calls,
+                        "source": "llm_agent",
+                        "timestamp": time.time()
+                    })
+                    return # Success (Tools)
+
+            except Exception as e:
+                print(f"[LLMAgent] Error calling Groq: {e}")
+                return # Stop on fatal API error
 
     # ═══════════════════════════════════════════════════════════
     # STREAMING RESPONSE (for Async Pipeline)
@@ -837,8 +1057,9 @@ Output ONLY the response message, nothing else."""
                 # ═══════════════════════════════════════════════════════════
                 # GROQ STREAMING
                 # ═══════════════════════════════════════════════════════════
+                groq_model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
                 stream = self.client.chat.completions.create(
-                    model="meta-llama/llama-4-maverick-17b-128e-instruct",
+                    model=groq_model,
                     messages=[
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": json.dumps(context)}
@@ -1109,8 +1330,9 @@ Output ONLY the response message, nothing else."""
 
     def _call_groq_streaming(self, context: dict, full_response: list):
         """Helper method to call Groq streaming API. Used for fallback."""
+        groq_model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
         stream = self.client.chat.completions.create(
-            model="meta-llama/llama-4-maverick-17b-128e-instruct",
+            model=groq_model,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": json.dumps(context)}

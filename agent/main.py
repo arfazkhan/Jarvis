@@ -109,7 +109,8 @@ def main():
     mission_executor = MissionExecutor(
         event_bus=event_bus, 
         store=mission_manager.store, 
-        planner=mission_planner
+        planner=mission_planner,
+        action_router=plan_executor 
     )
     logger.info("✅ Mission Control initialized")
 
@@ -149,10 +150,29 @@ def main():
     from agent.agent_core.state_feedback_loop import StateFeedbackLoop
     feedback_loop = StateFeedbackLoop(event_bus, state_engine)
     
-    dialogue_manager = DialogueManager(personality_manager, mission_manager) # Added mission_manager arg
-    from agent_conversation.interaction_loop import InteractionLoop
-    interaction_loop = InteractionLoop(event_bus, dialogue_manager)
-    logger.info("✅ Dialogue System & Interaction Loop initialized")
+    dialogue_manager = DialogueManager(personality_manager, mission_manager)
+    
+    # --------------------------------------------------------------------------
+    # HYBRID AGENT ARCHITECTURE (Local + Cloud)
+    # --------------------------------------------------------------------------
+    from agent.llm_agent.local_agent import LocalAgent
+    from agent.llm_agent.llm_agent import LLMAgent
+    from agent.llm_agent.hybrid_orchestrator import HybridOrchestrator
+    
+    logger.info("🤖 Initializing Hybrid Agent Architecture...")
+    
+    # 1. Local Agent (FunctionGemma 270M) - Fast Path
+    local_agent = LocalAgent() # Loads model from cache automatically
+    
+    # 2. Cloud Agent (Llama/Gemini/Groq) - Slow Path / Reasoner
+    # We disable auto-subscription so Orchestrator can route events manually
+    llm_agent = LLMAgent(event_bus, state_engine, automation_engine, learning_engine, subscribe_to_voice=False)
+    
+    # 3. Hybrid Orchestrator (Traffic Controller)
+    hybrid_orchestrator = HybridOrchestrator(event_bus, local_agent, llm_agent, tool_executor)
+    logger.info("✅ Hybrid Orchestrator initialized")
+    
+    # --------------------------------------------------------------------------
     
     # 9. Unified Cognitive Loop (The Meta-Agent)
     from agent.agent_cognitive.meta_agent import MetaAgent

@@ -4,6 +4,7 @@ import os
 from groq import Groq
 from agent.llm_agent.prompt import TOOLS_SCHEMA
 from agent.learning.pattern_analyzer import PatternAnalyzer
+from agent.learning.reflector import Reflector
 
 # Ensure GROQ_API_KEY is set in environment or .env
 # client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
@@ -20,11 +21,11 @@ Your job:
 - You may also log observations (log_note).
 
 Constraints:
-- BE CONSERVATIVE: only create routines for patterns that are very consistent
-  and clearly beneficial (e.g. same actions around the same time for many days).
+- IF a pattern occurs 3+ times in the history: PROPOSE A ROUTINE (create_routine).
+- IF a pattern is consistent but you aren't sure of the user's intent: ASK THE USER (ask_user).
+- IF the pattern is weak (< 3 times) or vague: JUST LOG IT (log_note).
 - Avoid duplicating routines that already exist.
 - Do not create more than 3 new routines in a single learning cycle.
-- Do not modify more than 3 routines in a single learning cycle.
 - Never output plain text. Only output tool calls in JSON format.
 """
 
@@ -37,24 +38,20 @@ class LearningEngine:
         tool_executor,
         interval_minutes: int = 60,
         history_limit: int = 200,
+        llm_client=None
     ):
         """
         interval_minutes: how often to run a learning cycle
         history_limit: how many most recent events to consider
+        llm_client: LLMAgent instance for generation
         """
         self.event_bus = event_bus
         self.state_engine = state_engine
         self.automations = automation_engine
         self.tool_executor = tool_executor
         
-        # Initialize Groq client here - allow tests to run without API key
-        api_key = os.environ.get("GROQ_API_KEY")
-        
-        if api_key:
-            self.client = Groq(api_key=api_key)
-        else:
-            print("[LearningEngine] Warning: GROQ_API_KEY not found in environment - LLM features disabled")
-            self.client = None  # Allow tests to run without API key
+        # LLM Client (injected)
+        self.llm_client = llm_client
 
         self.interval_seconds = interval_minutes * 60
         self.history_limit = history_limit
@@ -62,9 +59,17 @@ class LearningEngine:
         
         # Initialize PatternAnalyzer for advanced insights
         self.pattern_analyzer = PatternAnalyzer()
+        
+        # Initialize Reflector (ACE)
+        self.reflector = Reflector(llm_client)
 
         # Subscribe to time_tick so we get called periodically
         event_bus.subscribe("time_tick", self._on_time_tick)
+
+    def set_llm_client(self, client):
+        """Set the LLM client (LLMAgent)"""
+        self.llm_client = client
+        self.reflector.llm_client = client
 
     # ------------------------------------------------------------------ #
     # Event handler
@@ -86,62 +91,55 @@ class LearningEngine:
     # Main learning routine
     # ------------------------------------------------------------------ #
     def run_learning_cycle(self):
-        # Skip if no API key available
-        if not self.client:
-            print("[LearningEngine] Skipping learning cycle - no API key")
+        # Skip if no LLM client available
+        if not self.llm_client:
+            print("[LearningEngine] Skipping learning cycle - no LLM client configured")
             return
             
-        # 1. Collect recent history and current routines
+        # 1. Collect recent history
         history = self.state_engine.get_history(limit=self.history_limit)
         routines = self.automations.list()
 
-        if not history:
-            print("[LearningEngine] No history yet, skipping.")
-            return
-
-        # Debug: Show what we're analyzing
-        print(f"[LearningEngine] Analyzing {len(history)} events from history")
-        print(f"[LearningEngine] Current routines: {len(routines)}")
-        
-        # 2. Analyze patterns using PatternAnalyzer
-        analysis = self.pattern_analyzer.summarize_patterns(history)
-        anomalies = analysis.get("anomalies", [])
-        clusters = analysis.get("clusters", [])
-        wake_drift = analysis.get("wake_drift", {}).get("wake_time")
-        bed_drift = analysis.get("bed_drift", {}).get("bedtime")
-        
-        # Show a sample of the history for debugging
-        if wake_drift:
-            print(f"[LearningEngine] Wake time drift: {wake_drift}")
-        if bed_drift:
-            print(f"[LearningEngine] Bedtime drift: {bed_drift}")
-
-        context = {
-            "recent_history": history,
-            "current_routines": routines,
-            "anomalies": anomalies,
-            "pattern_clusters": [
-                {
-                    "event_count": c["event_count"],
-                    "time_span_seconds": c["end_time"] - c["start_time"],
-                    "sample_events": [e.get("type") for e in c["events"][:5]]
-                }
-                for c in clusters[:10]  # Limit to top 10 clusters
-            ],
-            "wake_time_trend": wake_drift,
-            "bedtime_trend": bed_drift
-        }
-
-        # 3. Ask LLM for pattern-based tool calls
-        tool_calls = self._ask_llm_for_patterns(context)
-
-        if not tool_calls:
-            print("[LearningEngine] No suggestions from LLM this cycle.")
-            return
-
-        # 4. Execute tool calls via ToolExecutor
-        print(f"[LearningEngine] Executing {len(tool_calls)} tool calls from learning cycle.")
-        self.tool_executor.execute(tool_calls)
+        if history:
+            # --- TITANS LOOP (Pattern Detection) ---
+            print(f"[LearningEngine] Analyzing {len(history)} events for patterns...")
+            analysis = self.pattern_analyzer.summarize_patterns(history)
+            context = {
+                "recent_history": history,
+                "current_routines": routines,
+                "pattern_clusters": [
+                     {
+                        "event_count": c["event_count"],
+                        "time_span_seconds": c["end_time"] - c["start_time"],
+                        "sample_events": [e.get("type") for e in c["events"][:5]]
+                    }
+                    for c in analysis.get("clusters", [])[:5]
+                ]
+            }
+            tool_calls = self._ask_llm_for_patterns(context)
+            if tool_calls:
+                print(f"[LearningEngine] Titans Loop: Executing {len(tool_calls)} tool calls.")
+                self.tool_executor.execute(tool_calls)
+            
+            # --- ACE REFLECTOR LOOP (Lesson Extraction) ---
+            print(f"[LearningEngine] Running Reflector cycle...")
+            try:
+                reflection_calls = self.reflector.reflect(history)
+                if reflection_calls:
+                    print(f"[LearningEngine] Reflector: Found {len(reflection_calls)} lessons.")
+                    # Process log_lesson calls manually since it's a special internal tool
+                    for call in reflection_calls:
+                        if call["tool"] == "log_lesson":
+                            args = call["args"]
+                            self.store_memory(
+                                title=f"Lesson: {args.get('lesson')[:30]}...",
+                                knowledge=args.get('lesson'),
+                                category="lesson" # New category for lessons
+                            )
+            except Exception as e:
+                print(f"[LearningEngine] Reflector failed: {e}")
+        else:
+             print("[LearningEngine] No history yet, skipping.")
 
     # ------------------------------------------------------------------ #
     # LLM Call
@@ -151,197 +149,64 @@ class LearningEngine:
         Sends recent history + routines to the LLM and returns a list
         of tool-call dicts suitable for ToolExecutor.execute().
         """
-        if not self.client:
+        if not self.llm_client or not hasattr(self.llm_client, 'generate_tool_calls'):
+            print("[LearningEngine] LLM client missing generate_tool_calls method")
             return []
             
-        messages = [
-            {"role": "system", "content": LEARNING_SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps(context)},
-        ]
-
         try:
-            response = self.client.chat.completions.create(
-                model="meta-llama/llama-4-scout-17b-16e-instruct",
-                messages=messages,
-                tools=TOOLS_SCHEMA,
-                tool_choice="auto"
+            # Use the shared LLM Agent to generate tool calls
+            return self.llm_client.generate_tool_calls(
+                system_prompt=LEARNING_SYSTEM_PROMPT,
+                user_content=json.dumps(context),
+                tools=TOOLS_SCHEMA
             )
-
-            message = response.choices[0].message
-            if message.tool_calls:
-                tool_calls = []
-                for tc in message.tool_calls:
-                    tool_calls.append({
-                        "tool": tc.function.name,
-                        "args": json.loads(tc.function.arguments)
-                    })
-                return tool_calls
-            return []
             
         except Exception as e:
-            print(f"[LearningEngine] Error calling Groq: {e}")
+            print(f"[LearningEngine] Error calling LLM: {e}")
             return []
 
     # ------------------------------------------------------------------ #
-    # Memory System - CRUD operations for log_memory tool
+    # Memory System - Delegated to MemoryOrchestrator
     # ------------------------------------------------------------------ #
     
-    def _get_memory_file_path(self) -> str:
-        """Get path to memory persistence file"""
-        return os.path.join(os.path.dirname(__file__), "memories.json")
+    # NOTE: LearningEngine now expects 'llm_client' to be an LLMAgent
+    # which has a .memory attribute (MemoryOrchestrator).
+    # Alternatively, we can inject memory_system directly.
     
-    def _load_memories(self) -> dict:
-        """Load memories from persistence file"""
-        try:
-            path = self._get_memory_file_path()
-            if os.path.exists(path):
-                with open(path, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-        except Exception as e:
-            print(f"[LearningEngine] Error loading memories: {e}")
-        return {"memories": [], "preferences": {}}
-    
-    def _save_memories(self, data: dict) -> None:
-        """Save memories to persistence file"""
-        try:
-            path = self._get_memory_file_path()
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            print(f"[LearningEngine] Error saving memories: {e}")
-    
+    def _get_memory_system(self):
+        """Helper to get memory system from LLM client or simple fallback"""
+        if self.llm_client and hasattr(self.llm_client, "memory"):
+            return self.llm_client.memory
+        return None
+
     def store_memory(self, title: str, knowledge: str, category: str = "general") -> str:
         """
-        Store a new memory/observation.
-        
-        Args:
-            title: Short title for the memory
-            knowledge: The content/observation to store
-            category: Category (preference, observation, pattern, etc.)
+        Store a new memory via the unified MemoryOrchestrator.
+        """
+        memory = self._get_memory_system()
+        if not memory:
+            print("[LearningEngine] ⚠️ No memory system available to store lesson")
+            return None
             
-        Returns:
-            Generated memory ID
-        """
-        import uuid
-        
-        data = self._load_memories()
-        memory_id = str(uuid.uuid4())[:8]
-        
-        memory = {
-            "id": memory_id,
-            "title": title,
-            "knowledge": knowledge,
-            "category": category,
-            "created_at": time.time(),
-            "updated_at": time.time()
-        }
-        
-        data["memories"].append(memory)
-        
-        # If it's a preference, also add to quick-access preferences dict
-        if category == "preference":
-            data["preferences"][title] = knowledge
-        
-        self._save_memories(data)
-        print(f"[LearningEngine] Stored memory: {title} (ID: {memory_id})")
-        return memory_id
-    
-    def update_memory(self, memory_id: str, knowledge: str) -> bool:
-        """
-        Update an existing memory.
-        
-        Args:
-            memory_id: ID of memory to update
-            knowledge: New content
-            
-        Returns:
-            True if updated, False if not found
-        """
-        data = self._load_memories()
-        
-        for memory in data["memories"]:
-            if memory["id"] == memory_id:
-                old_title = memory["title"]
-                memory["knowledge"] = knowledge
-                memory["updated_at"] = time.time()
-                
-                # Update preferences if applicable
-                if memory.get("category") == "preference":
-                    data["preferences"][old_title] = knowledge
-                
-                self._save_memories(data)
-                print(f"[LearningEngine] Updated memory: {memory_id}")
-                return True
-        
-        print(f"[LearningEngine] Memory not found: {memory_id}")
-        return False
-    
-    def delete_memory(self, memory_id: str) -> bool:
-        """
-        Delete a memory.
-        
-        Args:
-            memory_id: ID of memory to delete
-            
-        Returns:
-            True if deleted, False if not found
-        """
-        data = self._load_memories()
-        
-        for i, memory in enumerate(data["memories"]):
-            if memory["id"] == memory_id:
-                title = memory["title"]
-                
-                # Remove from preferences if applicable
-                if memory.get("category") == "preference" and title in data["preferences"]:
-                    del data["preferences"][title]
-                
-                data["memories"].pop(i)
-                self._save_memories(data)
-                print(f"[LearningEngine] Deleted memory: {memory_id}")
-                return True
-        
-        print(f"[LearningEngine] Memory not found: {memory_id}")
-        return False
-    
-    def get_memory(self, memory_id: str) -> dict:
-        """Get a specific memory by ID"""
-        data = self._load_memories()
-        for memory in data["memories"]:
-            if memory["id"] == memory_id:
-                return memory
-        return None
-    
-    def get_all_memories(self, category: str = None, limit: int = 50) -> list:
-        """
-        Get all memories, optionally filtered by category.
-        
-        Args:
-            category: Optional category filter
-            limit: Max number to return
-            
-        Returns:
-            List of memory dicts
-        """
-        data = self._load_memories()
-        memories = data["memories"]
-        
-        if category:
-            memories = [m for m in memories if m.get("category") == category]
-        
-        # Sort by most recent first
-        memories.sort(key=lambda x: x.get("updated_at", 0), reverse=True)
-        return memories[:limit]
+        print(f"[LearningEngine] Storing lesson in shared memory: {title}")
+        return memory.remember(
+            content=knowledge,
+            memory_type="preference" if category in ["preference", "lesson"] else "observation",
+            key=title, # Use title as key for retrieval
+            context=category,
+            importance=1.0 # Lessons are high importance
+        )
     
     def get_preferences(self) -> dict:
-        """
-        Get user preferences for LLM context.
-        
-        Returns:
-            Dict of preference title -> value
-        """
-        data = self._load_memories()
-        return data.get("preferences", {})
+        """Get user preferences from memory system"""
+        memory = self._get_memory_system()
+        if not memory:
+            return {}
+            
+        # Hack: The current MemoryOrchestrator.preferences.export_all() 
+        # might be needed here, or we trust LLMAgent to fetch context.
+        # For now, return empty dict as LLMAgent handles injection itself.
+        return {}
     
     def search_memories(self, query: str) -> list:
         """

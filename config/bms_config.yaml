@@ -1,0 +1,210 @@
+# BMS Configuration
+# ARVIS Ops Copilot - Building Management System Integration
+
+# =============================================================================
+# BACnet/IP Configuration
+# =============================================================================
+bacnet:
+  enabled: true
+
+  # Network settings
+  local_address: "0.0.0.0" # Listen on all interfaces (or specific IP)
+  port: 47809 # Use different port than YABE (47808)
+
+  # Discovery settings
+  discovery_timeout: 30 # Seconds to wait for device discovery
+
+  # Devices to poll (can also be auto-discovered)
+  devices:
+    # Chiller Plant Controller (YABE simulated device)
+    - device_id: 1001
+      name: "Chiller Plant Controller"
+      address: "127.0.0.1" # For local YABE simulation
+      poll_interval: 30 # Seconds between polls
+
+    # Add more devices as needed:
+    # - device_id: 2001
+    #   name: "AHU-01 Controller"
+    #   poll_interval: 60
+
+# =============================================================================
+# Point Definitions - Maps BACnet objects to equipment
+# =============================================================================
+points:
+  # ─────────────────────────────────────────────────────────────────────────
+  # Chiller 1 (CH-01)
+  # ─────────────────────────────────────────────────────────────────────────
+  - point_id: "CH-01/CHWST"
+    device_id: 1001
+    object_type: "analogInput"
+    object_instance: 1
+    name: "Chilled Water Supply Temperature"
+    equipment_id: "CH-01"
+    unit: "°C"
+
+  - point_id: "CH-01/CHWRT"
+    device_id: 1001
+    object_type: "analogInput"
+    object_instance: 2
+    name: "Chilled Water Return Temperature"
+    equipment_id: "CH-01"
+    unit: "°C"
+
+  - point_id: "CH-01/KW"
+    device_id: 1001
+    object_type: "analogInput"
+    object_instance: 3
+    name: "Chiller Power"
+    equipment_id: "CH-01"
+    unit: "kW"
+
+  - point_id: "CH-01/LOAD"
+    device_id: 1001
+    object_type: "analogInput"
+    object_instance: 4
+    name: "Chiller Load"
+    equipment_id: "CH-01"
+    unit: "%"
+
+  - point_id: "CH-01/STATUS"
+    device_id: 1001
+    object_type: "binaryInput"
+    object_instance: 1
+    name: "Chiller Running Status"
+    equipment_id: "CH-01"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # AHU-01
+  # ─────────────────────────────────────────────────────────────────────────
+  - point_id: "AHU-01/SAT"
+    device_id: 2001
+    object_type: "analogInput"
+    object_instance: 1
+    name: "Supply Air Temperature"
+    equipment_id: "AHU-01"
+    unit: "°C"
+
+  - point_id: "AHU-01/RAT"
+    device_id: 2001
+    object_type: "analogInput"
+    object_instance: 2
+    name: "Return Air Temperature"
+    equipment_id: "AHU-01"
+    unit: "°C"
+
+  - point_id: "AHU-01/SF_SPD"
+    device_id: 2001
+    object_type: "analogOutput"
+    object_instance: 1
+    name: "Supply Fan Speed"
+    equipment_id: "AHU-01"
+    unit: "%"
+
+  - point_id: "AHU-01/OA_DMPR"
+    device_id: 2001
+    object_type: "analogOutput"
+    object_instance: 2
+    name: "Outdoor Air Damper"
+    equipment_id: "AHU-01"
+    unit: "%"
+
+# =============================================================================
+# Equipment Topology
+# =============================================================================
+equipment:
+  chillers:
+    - equipment_id: "CH-01"
+      name: "Chiller 1"
+      location: "Central Plant, Basement"
+      capacity_tr: 1200
+      children: ["AHU-01", "AHU-02", "AHU-03"]
+
+    - equipment_id: "CH-02"
+      name: "Chiller 2"
+      location: "Central Plant, Basement"
+      capacity_tr: 1200
+      children: ["AHU-04", "AHU-05", "AHU-06"]
+
+  ahus:
+    - equipment_id: "AHU-01"
+      name: "Air Handler 1"
+      location: "Floor 1, Core"
+      parent: "CH-01"
+      design_cfm: 20000
+
+    - equipment_id: "AHU-02"
+      name: "Air Handler 2"
+      location: "Floor 2, Core"
+      parent: "CH-01"
+      design_cfm: 20000
+
+# =============================================================================
+# Energy Meters
+# =============================================================================
+meters:
+  - meter_id: "MAIN-METER"
+    name: "Main Electric Meter"
+    device_id: 5001
+    object_type: "analogInput"
+    object_instance: 1
+    unit: "kW"
+
+  - meter_id: "HVAC-METER"
+    name: "HVAC Submeter"
+    device_id: 5001
+    object_type: "analogInput"
+    object_instance: 2
+    unit: "kW"
+
+# =============================================================================
+# Alarm Thresholds
+# =============================================================================
+alarms:
+  thresholds:
+    chwst_high: 9.0 # °C - Chilled water supply temp high
+    chwst_low: 4.0 # °C - Chilled water supply temp low
+    sat_high: 18.0 # °C - Supply air temp high
+    filter_dp_high: 400 # Pa - Filter differential pressure
+    chiller_cop_low: 3.0 # COP below this is alarm
+
+  # Nuisance suppression
+  suppression:
+    deadband_minutes: 10 # Don't re-alarm within this period
+    hunting_threshold: 3 # Oscillations before suppression
+    transient_seconds: 60 # Ignore alarms shorter than this
+
+# =============================================================================
+# GSAS Reporting
+# =============================================================================
+gsas:
+  enabled: true
+  building_id: "QNB-TOWER-DOHA"
+  building_name: "QNB Tower"
+  target_rating: 3 # 1-6 stars
+
+  # Baseline year for comparisons
+  baseline_year: 2024
+
+  # Utility rates for savings calculations
+  electricity_rate_qar: 0.15 # QAR per kWh
+  water_rate_qar: 5.0 # QAR per m³
+
+# =============================================================================
+# ML Model Settings
+# =============================================================================
+ml:
+  predictive_maintenance:
+    enabled: true
+    failure_threshold: 0.7 # Probability triggering high-risk
+    rul_warning_days: 30 # Days before RUL warning
+
+  energy_analyzer:
+    enabled: true
+    anomaly_threshold: -0.3 # Isolation Forest score
+    baseline_window_hours: 168 # 1 week for baseline
+
+  # Model persistence paths
+  model_paths:
+    xgboost: "models/pm_xgboost.pkl"
+    isolation_forest: "models/pm_iforest.pkl"
+    energy_baseline: "models/energy_baseline.pkl"

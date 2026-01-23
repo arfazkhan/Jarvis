@@ -236,6 +236,27 @@ TOOL_SCHEMAS = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "teach_alias",
+            "description": "Teach the system a custom name for a device. Use when user says things like 'call the bedroom light reading lamp' or 'remember that X means Y'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "alias": {
+                        "type": "string",
+                        "description": "The custom name/alias the user wants to use (e.g., 'reading lamp', 'movie lights')"
+                    },
+                    "device_id": {
+                        "type": "string",
+                        "description": "The actual device ID to map to (e.g., 'bedroom_lamp', 'living_room_light')"
+                    }
+                },
+                "required": ["alias", "device_id"]
+            }
+        }
+    },
     
     # ═══════════════════════════════════════════════════════════
     # MISSION TOOLS

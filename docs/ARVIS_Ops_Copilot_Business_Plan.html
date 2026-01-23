@@ -1,0 +1,1252 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ARVIS Ops Copilot - Business Plan 2026</title>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=Inter:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
+    <style>
+        :root {
+            --primary: #1e3a5f;
+            --primary-light: #2d5a8a;
+            --accent: #06b6d4;
+            --accent-light: #22d3ee;
+            --gold: #f59e0b;
+            --dark: #0f172a;
+            --dark-2: #1e293b;
+            --text: #1e293b;
+            --text-light: #64748b;
+            --bg: #f8fafc;
+            --white: #ffffff;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.7;
+        }
+
+        .page {
+            max-width: 900px;
+            margin: 0 auto;
+            background: var(--white);
+            box-shadow: 0 0 60px rgba(0, 0, 0, 0.08);
+        }
+
+        /* Cover Page */
+        .cover {
+            background: linear-gradient(135deg, var(--dark) 0%, var(--primary) 100%);
+            color: white;
+            padding: 80px 60px;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .cover::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -20%;
+            width: 80%;
+            height: 150%;
+            background: radial-gradient(ellipse, rgba(6, 182, 212, 0.15) 0%, transparent 70%);
+            pointer-events: none;
+        }
+
+        .cover-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(6, 182, 212, 0.2);
+            border: 1px solid rgba(6, 182, 212, 0.4);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 13px;
+            color: var(--accent-light);
+            margin-bottom: 32px;
+            width: fit-content;
+        }
+
+        .cover-logo {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, var(--accent) 0%, var(--accent-light) 100%);
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Playfair Display', serif;
+            font-size: 36px;
+            font-weight: 700;
+            color: var(--dark);
+            margin-bottom: 32px;
+        }
+
+        .cover h1 {
+            font-family: 'Playfair Display', serif;
+            font-size: 52px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            letter-spacing: -1px;
+        }
+
+        .cover .subtitle {
+            font-size: 24px;
+            color: var(--accent);
+            margin-bottom: 24px;
+            font-weight: 300;
+        }
+
+        .cover .tagline {
+            font-size: 18px;
+            opacity: 0.85;
+            max-width: 550px;
+            margin-bottom: 48px;
+            line-height: 1.6;
+        }
+
+        .cover-meta {
+            margin-top: auto;
+            padding-top: 48px;
+            border-top: 1px solid rgba(255, 255, 255, 0.15);
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+        }
+
+        .cover-meta-left p {
+            font-size: 14px;
+            opacity: 0.7;
+            margin-bottom: 4px;
+        }
+
+        .cover-meta-right {
+            text-align: right;
+        }
+
+        .confidential {
+            color: var(--accent);
+            font-weight: 600;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            font-size: 11px;
+        }
+
+        /* Section Styles */
+        .section {
+            padding: 60px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+
+        .section-number {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
+            color: white;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 16px;
+        }
+
+        h2 {
+            font-family: 'Playfair Display', serif;
+            font-size: 28px;
+            color: var(--primary);
+        }
+
+        h3 {
+            font-size: 18px;
+            color: var(--primary);
+            margin: 32px 0 16px;
+            font-weight: 600;
+        }
+
+        h4 {
+            font-size: 15px;
+            color: var(--text);
+            margin: 20px 0 10px;
+            font-weight: 600;
+        }
+
+        p {
+            margin-bottom: 16px;
+            color: var(--text-light);
+            font-size: 15px;
+        }
+
+        .lead {
+            font-size: 17px;
+            color: var(--text);
+            line-height: 1.7;
+        }
+
+        /* Highlight Boxes */
+        .highlight-box {
+            background: linear-gradient(135deg, var(--dark) 0%, var(--primary) 100%);
+            color: white;
+            padding: 28px 32px;
+            border-radius: 16px;
+            margin: 28px 0;
+        }
+
+        .highlight-box h3 {
+            color: var(--accent);
+            margin-top: 0;
+            margin-bottom: 12px;
+        }
+
+        .highlight-box p {
+            color: rgba(255, 255, 255, 0.9);
+            margin-bottom: 0;
+        }
+
+        .insight-box {
+            background: linear-gradient(135deg, rgba(6, 182, 212, 0.08) 0%, rgba(6, 182, 212, 0.02) 100%);
+            border: 1px solid rgba(6, 182, 212, 0.2);
+            border-left: 4px solid var(--accent);
+            padding: 20px 24px;
+            border-radius: 0 12px 12px 0;
+            margin: 24px 0;
+        }
+
+        .insight-box p {
+            color: var(--text);
+            margin: 0;
+            font-style: italic;
+        }
+
+        /* Stats */
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            margin: 28px 0;
+        }
+
+        .stat-card {
+            background: var(--bg);
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 24px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: 700;
+            color: var(--primary);
+            font-family: 'Playfair Display', serif;
+        }
+
+        .stat-label {
+            font-size: 13px;
+            color: var(--text-light);
+            margin-top: 6px;
+        }
+
+        /* Tables */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            font-size: 14px;
+        }
+
+        th,
+        td {
+            padding: 14px 16px;
+            text-align: left;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        th {
+            background: var(--primary);
+            color: white;
+            font-weight: 600;
+            font-size: 13px;
+        }
+
+        th:first-child {
+            border-radius: 8px 0 0 0;
+        }
+
+        th:last-child {
+            border-radius: 0 8px 0 0;
+        }
+
+        tr:hover {
+            background: #f8fafc;
+        }
+
+        td {
+            color: var(--text-light);
+        }
+
+        td strong {
+            color: var(--text);
+        }
+
+        /* Lists */
+        ul {
+            margin: 16px 0;
+            padding-left: 0;
+            list-style: none;
+        }
+
+        li {
+            margin-bottom: 10px;
+            color: var(--text-light);
+            padding-left: 24px;
+            position: relative;
+            font-size: 15px;
+        }
+
+        li::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 8px;
+            width: 8px;
+            height: 8px;
+            background: var(--accent);
+            border-radius: 50%;
+        }
+
+        /* Two Column */
+        .two-col {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 32px;
+            margin: 24px 0;
+        }
+
+        .col-box {
+            background: var(--bg);
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 24px;
+        }
+
+        .col-box h4 {
+            margin-top: 0;
+            color: var(--primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .col-box.is {
+            border-left: 4px solid var(--success);
+        }
+
+        .col-box.is-not {
+            border-left: 4px solid var(--danger);
+        }
+
+        /* Timeline */
+        .timeline {
+            position: relative;
+            padding-left: 32px;
+            margin: 28px 0;
+        }
+
+        .timeline::before {
+            content: '';
+            position: absolute;
+            left: 8px;
+            top: 4px;
+            bottom: 4px;
+            width: 2px;
+            background: linear-gradient(180deg, var(--accent), var(--primary));
+            border-radius: 2px;
+        }
+
+        .timeline-item {
+            position: relative;
+            margin-bottom: 28px;
+        }
+
+        .timeline-item::before {
+            content: '';
+            position: absolute;
+            left: -28px;
+            top: 4px;
+            width: 12px;
+            height: 12px;
+            background: var(--accent);
+            border-radius: 50%;
+            border: 2px solid white;
+            box-shadow: 0 0 0 2px var(--accent);
+        }
+
+        .timeline-phase {
+            font-size: 12px;
+            color: var(--accent);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 4px;
+        }
+
+        .timeline-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 6px;
+        }
+
+        .timeline-desc {
+            font-size: 14px;
+            color: var(--text-light);
+        }
+
+        /* Use of Funds */
+        .funds-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+            margin: 24px 0;
+        }
+
+        .fund-item {
+            background: var(--bg);
+            border-left: 4px solid var(--accent);
+            padding: 16px 20px;
+            border-radius: 0 8px 8px 0;
+        }
+
+        .fund-percent {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--primary);
+        }
+
+        .fund-label {
+            font-size: 14px;
+            color: var(--text);
+            font-weight: 500;
+            margin-top: 4px;
+        }
+
+        .fund-desc {
+            font-size: 13px;
+            color: var(--text-light);
+            margin-top: 4px;
+        }
+
+        /* Mockup Images */
+        .mockup-section {
+            margin: 32px 0;
+        }
+
+        .mockup-container {
+            background: var(--dark);
+            border-radius: 16px;
+            padding: 24px;
+            margin: 16px 0;
+        }
+
+        .mockup-container img {
+            width: 100%;
+            border-radius: 8px;
+            display: block;
+        }
+
+        .mockup-caption {
+            text-align: center;
+            font-size: 13px;
+            color: var(--text-light);
+            margin-top: 12px;
+            font-style: italic;
+        }
+
+        .mockup-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+
+        /* Team */
+        .team-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+            margin: 24px 0;
+        }
+
+        .team-card {
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 20px;
+        }
+
+        .team-card h4 {
+            margin: 0 0 4px;
+            color: var(--primary);
+        }
+
+        .team-card .role {
+            font-size: 13px;
+            color: var(--accent);
+            font-weight: 500;
+            margin-bottom: 10px;
+        }
+
+        .team-card p {
+            font-size: 13px;
+            margin: 0;
+        }
+
+        /* CTA */
+        .cta-section {
+            background: linear-gradient(135deg, var(--dark) 0%, var(--primary) 100%);
+            color: white;
+            padding: 60px;
+            text-align: center;
+        }
+
+        .cta-section h2 {
+            color: white;
+            margin-bottom: 16px;
+        }
+
+        .cta-section p {
+            color: rgba(255, 255, 255, 0.8);
+            max-width: 550px;
+            margin: 0 auto 32px;
+        }
+
+        .contact-grid {
+            display: flex;
+            justify-content: center;
+            gap: 48px;
+            flex-wrap: wrap;
+        }
+
+        .contact-item {
+            text-align: center;
+        }
+
+        .contact-item .label {
+            font-size: 11px;
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 6px;
+        }
+
+        .contact-item .value {
+            font-size: 15px;
+        }
+
+        /* Print */
+        @media print {
+            .page {
+                box-shadow: none;
+            }
+
+            .section {
+                page-break-inside: avoid;
+            }
+
+            .cover {
+                page-break-after: always;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="page">
+
+        <!-- Cover Page -->
+        <div class="cover">
+            <div class="cover-badge">
+                <span>📄</span> Business Plan 2026
+            </div>
+            <div class="cover-logo">A</div>
+            <h1>ARVIS Ops Copilot</h1>
+            <p class="subtitle">Advisory AI for Commercial Building Operations</p>
+            <p class="tagline">A vendor-neutral intelligence layer that helps facility teams interpret what's happening
+                in their buildings, reduce operational noise, and make better decisions — without replacing existing
+                systems.</p>
+
+            <div class="cover-meta">
+                <div class="cover-meta-left">
+                    <p class="confidential">CONFIDENTIAL</p>
+                    <p>Prepared by: <strong>Arfaz Khan</strong></p>
+                    <p>January 2026</p>
+                </div>
+                <div class="cover-meta-right">
+                    <p style="font-size: 13px; opacity: 0.6;">Version 1.0</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Section 1: Executive Summary -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-number">1</div>
+                <h2>Executive Summary</h2>
+            </div>
+
+            <p class="lead">Commercial buildings today are rich in data but poor in operational intelligence.</p>
+
+            <p>Most large buildings already run Building Management Systems (BMS) from established vendors. These
+                systems collect vast amounts of sensor data, alarms, schedules, and energy information. What they do not
+                provide is <strong>reasoning</strong> — an understanding of <em>what matters right now</em>, <em>why it
+                    is happening</em>, and <em>what should be done next</em>.</p>
+
+            <div class="highlight-box">
+                <h3>The ARVIS Approach</h3>
+                <p><strong>ARVIS Ops Copilot</strong> is a vendor-neutral, advisory AI layer that sits on top of
+                    existing BMS infrastructure. It helps facility teams interpret what is happening in their buildings,
+                    reduce operational noise, and make better decisions — without replacing or interfering with existing
+                    systems.</p>
+            </div>
+
+            <p>ARVIS is intentionally designed as a <strong>decision-support system</strong>, not an autonomous
+                controller. This makes it safe, explainable, and suitable for deployment in existing commercial
+                buildings in conservative environments such as Qatar.</p>
+
+            <div class="stats-row">
+                <div class="stat-card">
+                    <div class="stat-value">500+</div>
+                    <div class="stat-label">Alarms/day ignored as noise</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">25-30%</div>
+                    <div class="stat-label">Energy wasted in typical buildings</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">72 hrs</div>
+                    <div class="stat-label">Avg. root cause identification</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Section 2: The Problem -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-number">2</div>
+                <h2>The Problem</h2>
+            </div>
+
+            <p>Despite years of investment in BMS platforms, commercial building operations still face persistent
+                issues:</p>
+
+            <ul>
+                <li>Hundreds of alarms with no prioritisation or context</li>
+                <li>Comfort complaints that repeat without clear root causes</li>
+                <li>Energy inefficiencies discovered only after monthly bills</li>
+                <li>Multiple vendor dashboards that do not communicate</li>
+                <li>Heavy reliance on a few experienced operators and tribal knowledge</li>
+            </ul>
+
+            <div class="insight-box">
+                <p>"The core problem is not lack of data. The core problem is lack of interpretation and reasoning
+                    across systems."</p>
+            </div>
+
+            <p>Facility teams are forced to manually connect dots across alarms, trends, schedules, and complaints — a
+                process that does not scale and breaks down as buildings and portfolios grow.</p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Pain Point</th>
+                        <th>Reality</th>
+                        <th>Cost Impact</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Alarm Fatigue</strong></td>
+                        <td>95% of alarms are noise, ignored by operators</td>
+                        <td>Critical issues missed</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Root Cause Analysis</strong></td>
+                        <td>Takes 2-3 days to trace recurring complaints</td>
+                        <td>Tenant dissatisfaction</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Energy Waste</strong></td>
+                        <td>After-hours HVAC, overcooling, schedule drift</td>
+                        <td>25-30% excess spending</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Knowledge Loss</strong></td>
+                        <td>Tribal knowledge walks out with operators</td>
+                        <td>Inconsistent operations</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Section 3: Why Now -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-number">3</div>
+                <h2>Why Now</h2>
+            </div>
+
+            <p>Several conditions make this the right moment for ARVIS:</p>
+
+            <ul>
+                <li>Most commercial buildings already have digitised infrastructure</li>
+                <li>Energy costs and efficiency targets are rising globally</li>
+                <li>Skilled facility operators are difficult to scale across portfolios</li>
+                <li>Owners and regulators increasingly demand better reporting</li>
+                <li>AI adoption is accelerating, but trust remains low</li>
+            </ul>
+
+            <div class="highlight-box">
+                <h3>The Qatar Opportunity</h3>
+                <p>Qatar has invested over <strong>$200 billion</strong> in infrastructure since 2015. These buildings
+                    now need intelligent management to optimize energy, reduce costs, and meet Vision 2030
+                    sustainability goals. The market is mature enough to have BMS — but not yet served by AI-native
+                    solutions.</p>
+            </div>
+
+            <p>ARVIS addresses this gap by introducing intelligence <em>above</em> existing systems, rather than
+                disrupting them.</p>
+        </div>
+
+        <!-- Section 4: What ARVIS Is -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-number">4</div>
+                <h2>What ARVIS Is (and Is Not)</h2>
+            </div>
+
+            <div class="two-col">
+                <div class="col-box is">
+                    <h4>✓ ARVIS Is</h4>
+                    <ul>
+                        <li>An operations copilot for facility teams</li>
+                        <li>A vendor-neutral overlay on existing BMS</li>
+                        <li>A reasoning and explanation layer</li>
+                        <li>Designed for human decision-making</li>
+                        <li>Safe, auditable, and explainable</li>
+                    </ul>
+                </div>
+                <div class="col-box is-not">
+                    <h4>✗ ARVIS Is Not</h4>
+                    <ul>
+                        <li>A replacement for BMS platforms</li>
+                        <li>A safety-critical controller</li>
+                        <li>A black-box making autonomous changes</li>
+                        <li>A vendor-locked solution</li>
+                        <li>A science project or prototype</li>
+                    </ul>
+                </div>
+            </div>
+
+            <p>This positioning reduces adoption risk and shortens approval cycles. Facility managers don't need to
+                justify replacing existing investments — they're <em>enhancing</em> them.</p>
+        </div>
+
+        <!-- Section 5: Product Overview -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-number">5</div>
+                <h2>Product Overview</h2>
+            </div>
+
+            <h3>5.1 BMS Connectivity (Read-Only)</h3>
+            <p>ARVIS connects to existing infrastructure via standard protocols:</p>
+            <ul>
+                <li><strong>BACnet/IP</strong> — Industry standard for commercial HVAC</li>
+                <li><strong>Modbus</strong> — For legacy and industrial equipment</li>
+                <li><strong>REST APIs</strong> — Where vendors expose modern interfaces</li>
+            </ul>
+            <p>It reads sensor data, alarms, setpoints, schedules, and energy metrics. <strong>No control commands are
+                    issued in Phase 1.</strong></p>
+
+            <h3>5.2 Intelligent Alarm & Event Reasoning</h3>
+            <p>Instead of raw alerts flooding the operator's screen, ARVIS provides:</p>
+            <ul>
+                <li>Alarm clustering based on root causes</li>
+                <li>Priority ranking based on operational impact</li>
+                <li>Plain-language explanations with confidence scores</li>
+            </ul>
+
+            <div class="insight-box">
+                <p>"3 cooling complaints on Floor 3 are likely caused by a stuck VAV damper in zone 3-East, not a
+                    chiller issue. Recommendation: Check damper actuator. Confidence: 87%"</p>
+            </div>
+
+            <h3>5.3 Energy & Efficiency Insights</h3>
+            <p>ARVIS analyses historical and live data to identify:</p>
+            <ul>
+                <li>Abnormal energy usage patterns</li>
+                <li>After-hours wastage (HVAC running empty)</li>
+                <li>Cooling and heating inefficiencies</li>
+                <li>Zone-level anomalies</li>
+            </ul>
+            <p>Insights are explained in operational terms, not just charts.</p>
+
+            <h3>5.4 Natural Language Interface</h3>
+            <p>Facility teams interact using English or Arabic:</p>
+            <ul>
+                <li>"Why is energy higher this week?"</li>
+                <li>"Which zones are overcooled right now?"</li>
+                <li>"What caused yesterday's complaints on Floor 5?"</li>
+            </ul>
+            <p>Responses are contextual, explainable, and logged for audit.</p>
+
+            <h3>5.5 Reporting & Compliance</h3>
+            <ul>
+                <li>Energy summaries (daily, weekly, monthly)</li>
+                <li>Operational insight reports</li>
+                <li>GSAS-aligned sustainability exports</li>
+                <li>PDF and Excel formats for management</li>
+            </ul>
+        </div>
+
+        <!-- Section 6: Product Mockups -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-number">6</div>
+                <h2>Product Interface</h2>
+            </div>
+
+            <p>ARVIS provides a modern, intuitive interface designed for facility operations teams:</p>
+
+            <div class="mockup-section">
+                <h3>Operations Dashboard</h3>
+                <p>At-a-glance building health with AI-powered insights, priority alarms, and energy monitoring.</p>
+                <div class="mockup-container">
+                    <img src="copilot_dashboard_1768464179385.png" alt="ARVIS Ops Copilot Dashboard">
+                </div>
+                <p class="mockup-caption">Building overview with real-time AI insights and prioritized alarms</p>
+            </div>
+
+            <div class="mockup-grid">
+                <div class="mockup-section">
+                    <h4>AI Insights Panel</h4>
+                    <div class="mockup-container">
+                        <img src="copilot_insights_1768464206921.png" alt="Today's Insights">
+                    </div>
+                    <p class="mockup-caption">Proactive anomaly detection and recommendations</p>
+                </div>
+                <div class="mockup-section">
+                    <h4>Natural Language Chat</h4>
+                    <div class="mockup-container">
+                        <img src="copilot_chat_1768464241822.png" alt="Ask ARVIS">
+                    </div>
+                    <p class="mockup-caption">Ask questions in plain English or Arabic</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Section 7: Safety & Trust -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-number">7</div>
+                <h2>Safety, Trust & Governance</h2>
+            </div>
+
+            <p>ARVIS is designed for conservative commercial environments where trust must be earned:</p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Principle</th>
+                        <th>Implementation</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Advisory-Only Mode</strong></td>
+                        <td>Phase 1 is read-only; no control commands issued</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Human-in-the-Loop</strong></td>
+                        <td>All recommendations require human approval</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Confidence Indicators</strong></td>
+                        <td>Every insight shows confidence % and reasoning</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Full Audit Trail</strong></td>
+                        <td>All queries and responses logged for compliance</td>
+                    </tr>
+                    <tr>
+                        <td><strong>No Life-Safety Interaction</strong></td>
+                        <td>Fire, smoke, emergency systems are never touched</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <p>This ensures minimal operational risk and easier stakeholder approval.</p>
+        </div>
+
+        <!-- Section 8: Target Customers -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-number">8</div>
+                <h2>Target Customers</h2>
+            </div>
+
+            <p>ARVIS is best suited for buildings and portfolios where:</p>
+            <ul>
+                <li>Multiple BMS vendors or systems coexist</li>
+                <li>Energy costs are a significant operational expense</li>
+                <li>Operational teams are stretched across multiple sites</li>
+                <li>Compliance and reporting requirements are increasing</li>
+            </ul>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Segment</th>
+                        <th>Why ARVIS Fits</th>
+                        <th>Priority</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Hotels & Hospitality</strong></td>
+                        <td>Energy-intensive, comfort-sensitive, 24/7 operations</td>
+                        <td style="color: var(--success);">High</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Hospitals & Healthcare</strong></td>
+                        <td>Critical comfort, compliance requirements</td>
+                        <td style="color: var(--success);">High</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Commercial Offices</strong></td>
+                        <td>Tenant complaints, energy optimization</td>
+                        <td style="color: var(--success);">High</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Facility Management Cos.</strong></td>
+                        <td>Multi-site portfolios, consistency challenges</td>
+                        <td style="color: var(--warning);">Medium</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Section 9: Business Model -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-number">9</div>
+                <h2>Business Model</h2>
+            </div>
+
+            <p>ARVIS is designed as an enterprise software product with recurring revenue. The model prioritises
+                long-term relationships over one-off sales.</p>
+
+            <h3>Pilot Phase (Entry)</h3>
+            <p>ARVIS is first deployed as a <strong>paid advisory pilot</strong>:</p>
+            <table>
+                <tbody>
+                    <tr>
+                        <td><strong>Duration</strong></td>
+                        <td>3-4 months</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Pricing</strong></td>
+                        <td><strong>QAR 60,000 – 120,000</strong> per building</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Deliverables</strong></td>
+                        <td>BMS integration, alarm insights, energy analysis, reports</td>
+                    </tr>
+                </tbody>
+            </table>
+            <p>Paid pilots ensure seriousness on both sides and simplify internal approvals.</p>
+
+            <h3>Annual Licensing (Post-Pilot)</h3>
+            <p>After successful validation, ARVIS converts to annual licensing:</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Tier</th>
+                        <th>Annual Price (QAR)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Single Building</strong></td>
+                        <td>QAR 120,000 – 300,000/year</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Portfolio (5+ buildings)</strong></td>
+                        <td>QAR 80,000 – 150,000/building/year</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Year 1 Revenue Projection</h3>
+            <div class="highlight-box">
+                <table style="color: white; margin: 0;">
+                    <tbody>
+                        <tr style="border-color: rgba(255,255,255,0.2);">
+                            <td>2 paid pilots × QAR 100k</td>
+                            <td style="text-align: right;"><strong>QAR 200,000</strong></td>
+                        </tr>
+                        <tr style="border-color: rgba(255,255,255,0.2);">
+                            <td>5 annual licences × QAR 150k</td>
+                            <td style="text-align: right;"><strong>QAR 750,000</strong></td>
+                        </tr>
+                        <tr style="border: none;">
+                            <td><strong>Total Year 1</strong></td>
+                            <td style="text-align: right; color: var(--accent);"><strong>~QAR 1,000,000</strong></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Section 10: Phase 1 Plan -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-number">10</div>
+                <h2>Phase 1 Plan (6 Months)</h2>
+            </div>
+
+            <div class="timeline">
+                <div class="timeline-item">
+                    <div class="timeline-phase">Month 1-2</div>
+                    <div class="timeline-title">Core Product Development</div>
+                    <div class="timeline-desc">Complete BACnet integration, alarm reasoning engine, and Arabic
+                        localization. Prepare deployment package.</div>
+                </div>
+                <div class="timeline-item">
+                    <div class="timeline-phase">Month 2-3</div>
+                    <div class="timeline-title">First Pilot Deployment</div>
+                    <div class="timeline-desc">Deploy read-only integration at first Qatar building. Begin collecting
+                        data and refining insights.</div>
+                </div>
+                <div class="timeline-item">
+                    <div class="timeline-phase">Month 3-4</div>
+                    <div class="timeline-title">Pilot Validation</div>
+                    <div class="timeline-desc">Validate alarm clustering, energy insights, and natural language queries
+                        with facility team.</div>
+                </div>
+                <div class="timeline-item">
+                    <div class="timeline-phase">Month 5-6</div>
+                    <div class="timeline-title">Second Pilot + Case Studies</div>
+                    <div class="timeline-desc">Deploy second pilot, document results, produce case studies for sales
+                        expansion.</div>
+                </div>
+            </div>
+
+            <h3>Phase 1 Outcomes</h3>
+            <ul>
+                <li>Deployable, enterprise-ready advisory product</li>
+                <li>2 paid pilot deployments in Qatar</li>
+                <li>Validated alarm reasoning and energy insights</li>
+                <li>Reference customers and case studies</li>
+                <li>Foundation for Year 1 commercial expansion</li>
+            </ul>
+        </div>
+
+        <!-- Section 11: Investment -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-number">11</div>
+                <h2>Investment Requirement</h2>
+            </div>
+
+            <div class="highlight-box">
+                <h3>Phase 1 Capital Required</h3>
+                <p style="font-size: 32px; font-weight: 700; color: var(--accent); margin-top: 8px;">QAR 400,000 –
+                    600,000</p>
+            </div>
+
+            <h3>Use of Funds</h3>
+            <div class="funds-grid">
+                <div class="fund-item">
+                    <div class="fund-percent">35%</div>
+                    <div class="fund-label">Product Development</div>
+                    <div class="fund-desc">BACnet adapter, reasoning engine, Arabic NLP</div>
+                </div>
+                <div class="fund-item">
+                    <div class="fund-percent">25%</div>
+                    <div class="fund-label">Pilot Deployments</div>
+                    <div class="fund-desc">On-site integration, edge hardware, training</div>
+                </div>
+                <div class="fund-item">
+                    <div class="fund-percent">20%</div>
+                    <div class="fund-label">Team & Operations</div>
+                    <div class="fund-desc">Technical lead, sales support, Qatar presence</div>
+                </div>
+                <div class="fund-item">
+                    <div class="fund-percent">20%</div>
+                    <div class="fund-label">Working Capital</div>
+                    <div class="fund-desc">Travel, legal, marketing, contingency</div>
+                </div>
+            </div>
+
+            <h3>Return Potential</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Milestone</th>
+                        <th>Timeline</th>
+                        <th>Indicator</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>First paid pilot</td>
+                        <td>Month 3</td>
+                        <td>Product-market validation</td>
+                    </tr>
+                    <tr>
+                        <td>First annual license</td>
+                        <td>Month 6</td>
+                        <td>Recurring revenue proven</td>
+                    </tr>
+                    <tr>
+                        <td>Year 1 revenue ~QAR 1M</td>
+                        <td>Month 12</td>
+                        <td>Business model validated</td>
+                    </tr>
+                    <tr>
+                        <td>GCC expansion</td>
+                        <td>Year 2</td>
+                        <td>Scale potential demonstrated</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Section 12: Team -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-number">12</div>
+                <h2>Team</h2>
+            </div>
+
+            <div class="team-grid">
+                <div class="team-card">
+                    <h4>Arfaz Khan</h4>
+                    <div class="role">Founder & Technical Lead</div>
+                    <p>Creator of ARVIS. Deep expertise in AI, automation, and IoT systems. Built the complete ARVIS
+                        platform from concept to working product.</p>
+                </div>
+                <div class="team-card">
+                    <h4>Qatar Operations</h4>
+                    <div class="role">Local Presence & Support</div>
+                    <p>Family connection in Qatar provides on-ground support for customer relationships, installations,
+                        and local operations.</p>
+                </div>
+            </div>
+
+            <h3>Planned Hires (Phase 1)</h3>
+            <ul>
+                <li><strong>Technical Lead (Qatar)</strong> — On-site deployment and customer support</li>
+                <li><strong>Sales & BD</strong> — Qatar market relationships and expansion</li>
+            </ul>
+        </div>
+
+        <!-- Section 13: Roadmap -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-number">13</div>
+                <h2>Post-Pilot Roadmap</h2>
+            </div>
+
+            <p>After trust is established through successful advisory deployments, ARVIS can evolve:</p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Phase</th>
+                        <th>Capability</th>
+                        <th>Risk Level</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Phase 1</strong> (Current)</td>
+                        <td>Read-only advisory, insights, reports</td>
+                        <td style="color: var(--success);">Zero</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Phase 2</strong></td>
+                        <td>Approved setpoint recommendations</td>
+                        <td style="color: var(--warning);">Low</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Phase 3</strong></td>
+                        <td>Occupancy-aware scheduling</td>
+                        <td style="color: var(--warning);">Low</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Phase 4</strong></td>
+                        <td>Limited, policy-controlled automation</td>
+                        <td style="color: var(--warning);">Medium</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <p>All upgrades are opt-in and governed by customer policy. Control is always earned, never assumed.</p>
+        </div>
+
+        <!-- CTA -->
+        <div class="cta-section">
+            <h2>Let's Build the Future of Building Intelligence</h2>
+            <p>ARVIS Ops Copilot is not about adding another dashboard. It's about making existing systems
+                understandable, actionable, and intelligent — without replacing what already works.</p>
+
+            <div class="contact-grid">
+                <div class="contact-item">
+                    <div class="label">Prepared By</div>
+                    <div class="value">Arfaz Khan</div>
+                </div>
+                <div class="contact-item">
+                    <div class="label">Email</div>
+                    <div class="value">[your.email@domain.com]</div>
+                </div>
+                <div class="contact-item">
+                    <div class="label">Location</div>
+                    <div class="value">India → Qatar</div>
+                </div>
+            </div>
+
+            <p style="margin-top: 48px; font-size: 12px; opacity: 0.6;">
+                This document is confidential and intended for prospective investors and partners.<br>
+                © 2026 ARVIS. All rights reserved.
+            </p>
+        </div>
+
+    </div>
+</body>
+
+</html>

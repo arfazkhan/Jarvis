@@ -76,7 +76,25 @@ CONVERSATION_CONFIG = {
         "sample_rate": 16000,
     },
     "tts": {
-        "engine": "pyttsx3",  # pyttsx3, gtts, google_cloud
+        # TTS engine: "edgetts", "vibevoice", "cosyvoice", "kokoro", "coqui", or "piper"
+        # Set via TTS_ENGINE environment variable
+        "engine": os.getenv("TTS_ENGINE", "vibevoice"),
+        
+        # Edge TTS settings (if TTS_ENGINE=edgetts) - cloud-based, free, no API key
+        "edgetts_voice": os.getenv("EDGETTS_VOICE", "guy"),  # guy, jenny, aria, davis, neerja, prabhat, etc.
+        "edgetts_rate": os.getenv("EDGETTS_RATE", "+0%"),  # Speech rate: "+10%", "-20%"
+        
+        # VibeVoice-specific settings (if TTS_ENGINE=vibevoice)
+        "vibevoice_model": os.getenv("VIBEVOICE_MODEL", "microsoft/VibeVoice-Realtime-0.5B"),
+        "vibevoice_device": os.getenv("VIBEVOICE_DEVICE", "cuda"),
+        "vibevoice_speaker": os.getenv("VIBEVOICE_SPEAKER", "carter"),  # carter, davis, emma, frank, grace, mike
+        
+        # CosyVoice-specific settings (if TTS_ENGINE=cosyvoice)
+        "cosyvoice_model": os.getenv("COSYVOICE_MODEL", "Fun-CosyVoice3-0.5B"),  # Latest 0.5B, fits 4GB GPU
+        "cosyvoice_device": os.getenv("COSYVOICE_DEVICE", "cuda"),  # "cuda" or "cpu"
+        "cosyvoice_speaker": os.getenv("COSYVOICE_SPEAKER", "英文女"),  # English female default
+        
+        # General TTS settings
         "rate": 150,  # Words per minute
         "volume": 0.9,
     },

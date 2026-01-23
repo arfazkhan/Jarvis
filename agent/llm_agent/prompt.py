@@ -1,8 +1,21 @@
 """
 ARVIS LLM Agent - System Prompt and Tool Schemas
 Industry-Standard Implementation
-"""
 
+DEPRECATED: This mega-prompt is deprecated. Use the layered prompt system instead:
+- prompt_identity.py: Layer 1 - Identity & Style
+- prompt_rules.py: Layer 2 - Decision Rules
+- prompt_builder.py: PromptBuilder for runtime composition
+
+The constants below are kept for backward compatibility.
+"""
+import warnings
+
+warnings.warn(
+    "prompt.py is deprecated. Use prompt_builder.PromptBuilder for layered prompts.",
+    DeprecationWarning,
+    stacklevel=2
+)
 SYSTEM_PROMPT = """
 ## Identity
 You are ARVIS (pronounced "AAR-vis", not spelled out) — an intelligent home automation agent powered by Adaptive Home Intelligence™.

@@ -12,6 +12,7 @@ from .preference_store import PreferenceStore
 from .observation_store import ObservationStore
 from .conversation_buffer import ConversationBuffer
 from .context_builder import ContextBuilder
+from .pattern_store import PatternStore
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,9 @@ class MemoryOrchestrator:
             max_turns=max_conversation_turns
         )
         
+        # Pattern store for few-shot learning (Titans Update loop)
+        self.patterns = PatternStore(str(self.persist_dir))
+        
         # Context builder
         self.context_builder = ContextBuilder(
             self.preferences,
@@ -71,6 +75,25 @@ class MemoryOrchestrator:
         )
         
         logger.info(f"[MemoryOrchestrator] Initialized at {self.persist_dir}")
+    
+    # ==================== Pattern Learning (Titans Update Loop) ====================
+    
+    def log_successful_pattern(self, command: str, tool_calls: list, 
+                               resolved_device: str = None) -> bool:
+        """
+        Log a successful command pattern for few-shot learning.
+        Called after local agent successfully handles a command.
+        """
+        return self.patterns.log_success(command, tool_calls, resolved_device)
+    
+    def get_similar_patterns(self, command: str, k: int = 3) -> list:
+        """Get similar past successful patterns for few-shot injection."""
+        return self.patterns.get_similar_patterns(command, k=k)
+    
+    def format_patterns_for_prompt(self, command: str, k: int = 3) -> str:
+        """Get formatted few-shot examples from past patterns."""
+        patterns = self.get_similar_patterns(command, k=k)
+        return self.patterns.format_as_fewshot(patterns)
     
     # ==================== High-Level API ====================
     

@@ -1,0 +1,12 @@
+{
+  "directed": true,
+  "multigraph": true,
+  "graph": {},
+  "nodes": [
+    {
+      "type": "location",
+      "id": "home"
+    }
+  ],
+  "edges": []
+}

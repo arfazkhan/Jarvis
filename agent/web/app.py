@@ -2,7 +2,6 @@ from flask import Flask, render_template, jsonify, request
 import threading
 import time
 import json
-
 import os
 
 # Explicitly set template folder relative to this file
@@ -19,22 +18,67 @@ agent_state = None
 agent_event_bus = None
 agent_simulation = None
 agent_learning = None
+agent_orchestrator = None
+agent_memory = None
+socketio = None
 
-def start_server(state_engine, event_bus, simulation_engine, learning_engine, port=5000):
+
+def start_server(state_engine, event_bus, simulation_engine=None, learning_engine=None, 
+                 orchestrator=None, memory=None, port=5000, enable_websocket=True):
+    """
+    Start the web server with optional WebSocket support.
+    
+    Args:
+        state_engine: StateEngine instance
+        event_bus: EventBus instance
+        simulation_engine: Optional simulation engine
+        learning_engine: Optional learning engine
+        orchestrator: HybridOrchestrator for voice commands
+        memory: MemoryOrchestrator for memory operations
+        port: Server port (default 5000)
+        enable_websocket: Enable WebSocket API (default True)
+    """
     global agent_state, agent_event_bus, agent_simulation, agent_learning
+    global agent_orchestrator, agent_memory, socketio
+    
     agent_state = state_engine
     agent_event_bus = event_bus
     agent_simulation = simulation_engine
     agent_learning = learning_engine
+    agent_orchestrator = orchestrator
+    agent_memory = memory
     
-    # Run Flask in a separate thread
-    thread = threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False))
-    thread.daemon = True
-    thread.start()
+    if enable_websocket:
+        # Initialize WebSocket API
+        from agent.web.websocket_api import init_websocket
+        socketio = init_websocket(app, event_bus, orchestrator, state_engine, memory)
+        
+        # Run with SocketIO (uses eventlet)
+        print(f"[WebServer] Starting with WebSocket on port {port}")
+        thread = threading.Thread(
+            target=lambda: socketio.run(app, host='0.0.0.0', port=port, debug=False, use_reloader=False)
+        )
+        thread.daemon = True
+        thread.start()
+    else:
+        # Run Flask without WebSocket
+        print(f"[WebServer] Starting without WebSocket on port {port}")
+        thread = threading.Thread(
+            target=lambda: app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+        )
+        thread.daemon = True
+        thread.start()
+    
+    return socketio
 
 @app.route('/')
 def index():
     return render_template('index.html')
+
+@app.route('/voice')
+def voice_control():
+    """WebSocket-based voice control interface."""
+    return render_template('voice.html')
 
 @app.route('/api/state')
 def get_state():

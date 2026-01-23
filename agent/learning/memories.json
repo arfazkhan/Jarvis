@@ -7,6 +7,14 @@
       "category": "general",
       "created_at": 1765272472.668326,
       "updated_at": 1765272472.668326
+    },
+    {
+      "id": "f0f31c41",
+      "title": "test_preference",
+      "knowledge": "User prefers warm lighting in the evening",
+      "category": "general",
+      "created_at": 1768046988.8248727,
+      "updated_at": 1768046988.8248727
     }
   ],
   "preferences": {}

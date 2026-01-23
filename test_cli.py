@@ -179,18 +179,50 @@ class TestCLI:
         self.recorder = AudioRecorder()
         self.wake_word_engine = WakeWordEngine()
         self.semantic_vad = SemanticVAD()
-        self.speaker = Speaker()
+        # self.speaker = Speaker() # Legacy: VoicePipeline handles TTS now
         
         # Initialize Voice Pipeline (async streaming with RealtimeTTS)
-        self.voice_pipeline = VoicePipeline(tts_engine="kokoro")
+        # TTS engine is configured via TTS_ENGINE environment variable (default: coqui)
+        tts_engine = os.environ.get("TTS_ENGINE", "coqui")
+        print(f"{Colors.CYAN}Using TTS engine: {tts_engine}{Colors.RESET}")
+        self.voice_pipeline = VoicePipeline(tts_engine=tts_engine)
         self.voice_pipeline.start()
+        
+        # Initialize Hybrid Agent Architecture
+        # Lazy load LocalAgent only if NOT in chat mode (saves ~2-3GB VRAM for VibeVoice)
+        # Check sys.argv to see if we are running a specific command that needs LocalAgent
+        is_chat_mode = len(sys.argv) > 1 and "/chat" in sys.argv[1:]
+        
+        from agent.llm_agent.local_agent import LocalAgent
+        from agent.llm_agent.hybrid_orchestrator import HybridOrchestrator
+        
+        if is_chat_mode:
+            print(f"{Colors.YELLOW}⚠️  Chat Mode: Skipping LocalAgent (Qwen) to save VRAM for TTS{Colors.RESET}")
+            self.local_agent = None
+            self.hybrid_orchestrator = None
+        else:
+            # SHARED MEMORY: Both agents must point to the same persistence directory
+            SHARED_MEMORY_DIR = "./data/memories"
+            self.local_agent = LocalAgent(persistence_dir=SHARED_MEMORY_DIR)
         
         self.llm_agent = LLMAgent(
             self.event_bus,
             self.state_engine,
             self.automation_engine,
-            learning_engine=self.learning_engine
+            learning_engine=self.learning_engine,
+            subscribe_to_voice=False 
         )
+        
+        # Inject LLM agent into learning engine
+        self.learning_engine.set_llm_client(self.llm_agent)
+        
+        if self.local_agent:
+            self.hybrid_orchestrator = HybridOrchestrator(
+                self.event_bus, 
+                self.local_agent, 
+                self.llm_agent, 
+                self.tool_executor
+            )
         
         # Track events for display
         self.recent_events = []
@@ -230,7 +262,9 @@ class TestCLI:
             print(f"   Options: {', '.join(options)}")
         
         # Speak the response via TTS
-        if question and hasattr(self, 'speaker'):
+        if question and hasattr(self, 'voice_pipeline'):
+             self.voice_pipeline.speak(question)
+        elif question and hasattr(self, 'speaker'):
             self.speaker.speak(question)
     
     def _show_help(self):
@@ -244,7 +278,9 @@ class TestCLI:
         print("  /state    - Show current device states")
         print("  /history  - Show recent events")
         print("  /logs     - Show reasoning audit log")
-        print("  /prefs    - Show stored preferences")
+        print("  /prefs    - Show stored preferences (from LearningEngine)")
+        print("  /verify   - Verify LocalAgent memory (Vector DB)")
+        print("  /learn    - Trigger Titans active learning loop")
         print("  /transcribe <file> - Test audio transcription")
         print("  /record   - Record voice command (5s)")
         print("  /chat     - Continuous conversation mode (VAD)")
@@ -263,16 +299,50 @@ class TestCLI:
     
     def _test_memory_tool(self):
         """Test the log_memory tool"""
-        print(f"\n{Colors.CYAN}Testing log_memory tool...{Colors.RESET}")
-        self.tool_executor.execute([{
+        # Simulate what HybridOrchestrator does
+        tool_calls = [{
             "tool": "log_memory",
             "args": {
-                "title": "test_preference",
-                "knowledge": "User prefers warm lighting in the evening",
+                "key": "test_preference",
+                "value": "User prefers warm lighting in the evening",
                 "action": "create"
             }
-        }])
-        print(f"{Colors.GREEN}✅ Memory stored - check with /prefs{Colors.RESET}")
+        }]
+        
+        # Use LocalAgent's memory processor (Vector DB)
+        if hasattr(self.local_agent, "process_memory_logs"):
+            count = self.local_agent.process_memory_logs(tool_calls)
+            print(f"{Colors.GREEN}✅ Processed {count} memory logs via LocalAgent (Vector DB){Colors.RESET}")
+        else:
+            print(f"{Colors.RED}❌ LocalAgent missing process_memory_logs{Colors.RESET}")
+            # Fallback to executor for legacy
+            self.tool_executor.execute(tool_calls)
+            
+        print(f"{Colors.GREEN}✅ Memory stored - check with /verify{Colors.RESET}")
+
+    def _verify_memory(self):
+        """Verify LocalAgent memory persistence"""
+        print(f"\n{Colors.CYAN}Verifying LocalAgent Memory (Vector DB)...{Colors.RESET}")
+        if hasattr(self.local_agent, "memory"):
+            # Search for the test preference
+            results = self.local_agent.memory.search("lighting preference", limit=5)
+            if results:
+                print(f"{Colors.GREEN}✅ Found {len(results)} memories:{Colors.RESET}")
+                for res in results:
+                    print(f"  - {res['content']} (Score: {res.get('score', 0):.2f})")
+            else:
+                print(f"{Colors.YELLOW}⚠️ No memories found for 'lighting preference'{Colors.RESET}")
+        else:
+            print(f"{Colors.RED}❌ LocalAgent has no memory attribute{Colors.RESET}")
+            
+    def _test_learning_loop(self):
+        """Trigger the Titans active learning loop"""
+        print(f"\n{Colors.CYAN}🧠 Triggering Titans Active Learning Loop...{Colors.RESET}")
+        try:
+            self.learning_engine.run_learning_cycle()
+            print(f"{Colors.GREEN}✅ Learning cycle completed.{Colors.RESET}")
+        except Exception as e:
+            print(f"{Colors.RED}❌ Learning cycle failed: {e}{Colors.RESET}")
     
     def _show_state(self):
         """Show current device states"""
@@ -367,6 +437,38 @@ class TestCLI:
                 
     def _run_chat_mode(self):
         """Continuous chat loop using RealtimeSTT (wake word + VAD + transcription)"""
+        
+        # MEMORY OPTIMIZATION: Unload LocalAgent (Qwen) if loaded
+        if hasattr(self, 'local_agent') and self.local_agent is not None:
+            log_print(f"{Colors.YELLOW}⚠️  Optimizing VRAM: Unloading LocalAgent (Qwen)...{Colors.RESET}")
+            # Try to close/delete heavy resources
+            try:
+                # If local_agent has a close method, call it
+                if hasattr(self.local_agent, 'close'):
+                    self.local_agent.close() 
+                del self.local_agent
+                self.local_agent = None
+                
+                # Unload HybridOrchestrator too as it holds references
+                if hasattr(self, 'hybrid_orchestrator'):
+                    self.hybrid_orchestrator = None
+                
+                # Force garbage collection
+                import gc
+                gc.collect()
+                
+                # Clear CUDA cache if possible
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                        log_print(f"{Colors.GREEN}   CUDA cache cleared.{Colors.RESET}")
+                except ImportError:
+                    pass
+                    
+            except Exception as e:
+                log_print(f"{Colors.RED}Failed to unload LocalAgent: {e}{Colors.RESET}")
+
         from RealtimeSTT import AudioToTextRecorder
         
         log_print(f"\n{Colors.HEADER}{Colors.BOLD}🦜 Chat Mode (RealtimeSTT){Colors.RESET}")
@@ -453,6 +555,9 @@ class TestCLI:
                     })
             
             # Wait for audio to finish playing
+            # Crucial for VibeVoice async streaming - we must wait for the queue to empty
+            # and playback to stop before opening the mic for follow-up
+            log_print(f"{Colors.BLUE}⏳ Waiting for TTS to finish...{Colors.RESET}", "debug")
             while self.voice_pipeline.is_speaking():
                 time.sleep(0.1)
             
@@ -461,7 +566,7 @@ class TestCLI:
             if self.voice_pipeline.follow_up_mode:
                 # FOLLOW-UP MODE: Listen for response WITHOUT wake word
                 # Do this HERE inside the callback, before returning
-                log_print(f"{Colors.CYAN}🔄 Follow-up mode - listening for response (10s)...{Colors.RESET}")
+                log_print(f"\n{Colors.CYAN}🔄 Follow-up mode - listening for response (10s)...{Colors.RESET}")
                 
                 # RESET the timer NOW - so user has full 10 seconds AFTER TTS finishes
                 import time as time_module
@@ -472,7 +577,9 @@ class TestCLI:
                 
                 try:
                     with sr.Microphone() as source:
-                        recognizer.adjust_for_ambient_noise(source, duration=0.3)
+                        # Quick adjustment (user is waiting)
+                        recognizer.adjust_for_ambient_noise(source, duration=0.5) 
+                        log_print(f"{Colors.GREEN}   (Mic Open){Colors.RESET}", "debug")
                         audio = recognizer.listen(source, timeout=10, phrase_time_limit=5)
                         
                         try:
@@ -590,6 +697,10 @@ class TestCLI:
                         self._show_logs()
                     elif cmd == "/prefs":
                         self._show_prefs()
+                    elif cmd == "/verify":
+                        self._verify_memory()
+                    elif cmd == "/learn":
+                        self._test_learning_loop()
                     elif cmd.startswith("/transcribe"):
                         parts = user_input.split(maxsplit=1)
                         if len(parts) > 1:
@@ -623,7 +734,38 @@ def main():
         print()
     
     cli = TestCLI()
-    cli.run()
+    
+    # Check for one-shot command
+    if len(sys.argv) > 1:
+        command = " ".join(sys.argv[1:])
+        print(f"🚀 Running one-shot command: {command}")
+        if command.startswith("/"):
+            # Execute special command directly
+            print(f"Executing special command: {command}")
+            # We need to simulate the input processing loop logic
+            cmd = command.lower()
+            if cmd == "/memory":
+                cli._test_memory_tool()
+            elif cmd == "/verify":
+                cli._verify_memory()
+            elif cmd == "/prefs":
+                cli._show_prefs()
+            elif cmd == "/learn":
+                cli._test_learning_loop()
+            elif cmd == "/state":
+                cli._show_state()
+            elif cmd == "/chat":
+                cli._run_chat_mode()
+            else:
+                print(f"One-shot command '{cmd}' not supported yet. Use interactive mode.")
+        else:
+            # Inject command into processing
+            cli.send_voice_command(command)
+        
+        # Wait a bit for processing to complete
+        time.sleep(10)
+    else:
+        cli.run()
 
 
 if __name__ == "__main__":

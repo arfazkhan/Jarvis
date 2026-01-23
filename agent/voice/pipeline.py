@@ -432,6 +432,117 @@ class VoicePipeline:
         
     def _init_tts(self):
         """Initialize the TTS engine and stream."""
+        
+        # Edge TTS - Microsoft's cloud-based, free TTS (no API key needed)
+        if self._tts_engine_name == "edgetts":
+            try:
+                from agent.voice.edgetts_engine import EdgeTTSEngine, EdgeTTSTTSStream, EDGETTS_AVAILABLE
+                
+                if not EDGETTS_AVAILABLE:
+                    logger.warning("Edge TTS not available, falling back to Kokoro")
+                    self._tts_engine_name = "kokoro"
+                else:
+                    logger.info("Initializing EdgeTTSEngine...")
+                    import os
+                    voice = os.getenv("EDGETTS_VOICE", "guy")
+                    rate = os.getenv("EDGETTS_RATE", "+0%")
+                    
+                    self._tts_engine = EdgeTTSEngine(
+                        voice=voice,
+                        rate=rate,
+                    )
+                    self._tts_stream = EdgeTTSTTSStream(
+                        self._tts_engine,
+                        on_audio_stream_start=self._on_tts_start,
+                        on_audio_stream_stop=self._on_tts_stop,
+                    )
+                    
+                    # Prewarm
+                    logger.info("Prewarming Edge TTS engine...")
+                    self._tts_stream.feed(".")
+                    self._tts_stream.play(muted=True)
+                    logger.info("⚡ Edge TTS engine ready")
+                    return
+                    
+            except Exception as e:
+                logger.error(f"Edge TTS init failed: {e}, falling back to Kokoro")
+                self._tts_engine_name = "kokoro"
+        
+        # VibeVoice - Microsoft's high-quality, real-time TTS
+        if self._tts_engine_name == "vibevoice":
+            try:
+                from agent.voice.vibevoice_engine import VibeVoiceEngine, VibeVoiceTTSStream, VIBEVOICE_AVAILABLE
+                
+                if not VIBEVOICE_AVAILABLE:
+                    logger.warning("VibeVoice not available, falling back to Kokoro")
+                    self._tts_engine_name = "kokoro"
+                else:
+                    logger.info("Initializing VibeVoiceEngine...")
+                    import os
+                    model = os.getenv("VIBEVOICE_MODEL", "microsoft/VibeVoice-Realtime-0.5B")
+                    device = os.getenv("VIBEVOICE_DEVICE", "cuda")
+                    speaker = os.getenv("VIBEVOICE_SPEAKER", "carter")
+                    
+                    self._tts_engine = VibeVoiceEngine(
+                        model_path=model,
+                        device=device,
+                        speaker=speaker,
+                    )
+                    self._tts_stream = VibeVoiceTTSStream(
+                        self._tts_engine,
+                        on_audio_stream_start=self._on_tts_start,
+                        on_audio_stream_stop=self._on_tts_stop,
+                    )
+                    
+                    # Prewarm
+                    logger.info("Prewarming VibeVoice engine...")
+                    self._tts_stream.feed(".")
+                    self._tts_stream.play(muted=True)
+                    logger.info("⚡ VibeVoice engine ready")
+                    return
+                    
+            except Exception as e:
+                logger.error(f"VibeVoice init failed: {e}, falling back to Kokoro")
+                self._tts_engine_name = "kokoro"
+        
+        # CosyVoice - High-quality, low-latency alternative
+        if self._tts_engine_name == "cosyvoice":
+            try:
+                from agent.voice.cosyvoice_engine import CosyVoiceEngine, CosyVoiceTTSStream, COSYVOICE_AVAILABLE
+                
+                if not COSYVOICE_AVAILABLE:
+                    logger.warning("CosyVoice not available, falling back to Coqui")
+                    self._tts_engine_name = "coqui"
+                else:
+                    logger.info("Initializing CosyVoiceEngine...")
+                    import os
+                    model = os.getenv("COSYVOICE_MODEL", "Fun-CosyVoice3-0.5B")
+                    device = os.getenv("COSYVOICE_DEVICE", "cuda")
+                    speaker = os.getenv("COSYVOICE_SPEAKER", "英文女")
+                    
+                    self._tts_engine = CosyVoiceEngine(
+                        model_name=model,
+                        device=device,
+                        speaker=speaker,
+                    )
+                    self._tts_stream = CosyVoiceTTSStream(
+                        self._tts_engine,
+                        on_audio_stream_start=self._on_tts_start,
+                        on_audio_stream_stop=self._on_tts_stop,
+                    )
+                    
+                    # Prewarm
+                    logger.info("Prewarming CosyVoice engine...")
+                    self._tts_stream.feed(".")
+                    self._tts_stream.play(muted=True)
+                    logger.info("⚡ CosyVoice engine ready")
+                    return
+                    
+            except Exception as e:
+                logger.error(f"CosyVoice init failed: {e}, falling back to Coqui")
+                self._tts_engine_name = "coqui"
+        
+        # RealtimeTTS engines (Coqui, Kokoro, Piper)
         from RealtimeTTS import TextToAudioStream
         
         if self._tts_engine_name == "coqui":
@@ -599,38 +710,45 @@ class VoicePipeline:
         if not self._running:
             raise RuntimeError("VoicePipeline not started")
         
-        # Track if any text was queued for playback
-        text_queued = False
-        
-        def _on_text_streaming(text: str):
-            """Queue text for TTS (no playback yet - we play at the end)."""
-            nonlocal text_queued
-            if self._tts_stream and text.strip():
-                self._tts_stream.feed(text)
-                text_queued = True
-                logger.debug(f"Queued for TTS: {text[:50]}...")
-        
-        # Temporarily replace callback for streaming mode
-        original_callback = self.router._text_callback
-        self.router._text_callback = _on_text_streaming
-        
-        try:
-            # Process all tokens through the router - this queues text
-            for token in token_generator:
-                self.router.process_token(token)
-                
-            # Flush remaining text (handles tool messages like ask_user)
-            self.router.flush()
+        # Create a generator that feeds the router and yields text for TTS
+        # This runs INSIDE the TTS thread (via play_async consuming it)
+        def _tts_feeder():
+            # Temporarily replace callback to capture text
+            original_callback = self.router._text_callback
             
-            # NOW play all queued text at once
-            if text_queued and self._tts_stream:
-                logger.info("Playing queued TTS audio...")
-                self._tts_stream.play()  # Blocking - speaks all queued text
-                logger.info("TTS playback complete")
+            # Queue to pass text from router callback to generator
+            text_queue = Queue()
+            
+            def _on_text_streaming(text: str):
+                if text.strip():
+                    text_queue.put(text)
+            
+            self.router._text_callback = _on_text_streaming
+            
+            try:
+                # Process tokens
+                for token in token_generator:
+                    self.router.process_token(token)
+                    
+                    # Yield any text produced by this token
+                    while not text_queue.empty():
+                        yield text_queue.get_nowait()
                 
-        finally:
-            # Restore original callback
-            self.router._text_callback = original_callback
+                # Flush router at end
+                self.router.flush()
+                while not text_queue.empty():
+                     yield text_queue.get_nowait()
+                     
+            finally:
+                # Restore callback
+                self.router._text_callback = original_callback
+
+        # Start streaming playback
+        # VibeVoiceTTSStream.play_async() will wait for the generator
+        if self._tts_stream:
+             logger.info("Starting async TTS stream...")
+             self._tts_stream.feed(_tts_feeder())
+             self._tts_stream.play_async()
             
     def process_llm_stream_async(self, token_generator: Iterator[str]):
         """
@@ -712,7 +830,7 @@ class VoicePipeline:
             except Empty:
                 break
     
-    def stop(self):
+    def shutdown(self):
         """Shutdown pipeline."""
         logger.info("Stopping VoicePipeline...")
         self._running = False
