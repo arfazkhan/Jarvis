@@ -2,8 +2,9 @@
 ARVIS Unified LLM Client
 ========================
 
-Wrapper around existing ARVIS LLM infrastructure (k2think).
-Provides interface compatible with agent hierarchy.
+Wrapper around existing ARVIS LLM infrastructure.
+- k2think: For reasoning/planning (no function calling)
+- Groq: For tool calling (supports OpenAI function format)
 """
 
 import os
@@ -20,44 +21,54 @@ class UnifiedLLM(BaseModel):
     """
     Unified LLM client for ARVIS agents.
     
-    Uses existing k2think infrastructure for LLM calls.
-    Falls back to OpenAI-compatible API if k2think not configured.
+    Uses:
+    - k2think for reasoning/planning (ask method)
+    - Groq for tool calling (ask_tool method)
     """
     
     config_name: str = Field(default="default", description="LLM config name")
-    _client: Any = PrivateAttr(default=None)
-    _provider: str = PrivateAttr(default="openai")
+    _provider: str = PrivateAttr(default="groq")
+    _reasoning_provider: str = PrivateAttr(default="k2think")
     
     model_config = {"arbitrary_types_allowed": True}
     
     def model_post_init(self, __context) -> None:
         """Initialize the underlying LLM client."""
-        self._init_client()
+        self._init_providers()
     
-    def _init_client(self):
-        """Initialize the underlying LLM client."""
-        # Determine provider based on available keys
+    def _init_providers(self):
+        """Determine available providers based on API keys."""
+        # Reasoning provider (k2think preferred)
         if os.environ.get("K2THINK_API_KEY"):
-            self._provider = "k2think"
-            logger.info("Using K2 Think LLM provider")
+            self._reasoning_provider = "k2think"
         elif os.environ.get("GROQ_API_KEY"):
+            self._reasoning_provider = "groq"
+        elif os.environ.get("OPENAI_API_KEY"):
+            self._reasoning_provider = "openai"
+        else:
+            self._reasoning_provider = None
+            logger.warning("No reasoning LLM API key found")
+        
+        # Tool calling provider (Groq preferred, k2think doesn't support tools)
+        if os.environ.get("GROQ_API_KEY"):
             self._provider = "groq"
-            logger.info("Using Groq LLM provider")
         elif os.environ.get("OPENAI_API_KEY"):
             self._provider = "openai"
-            logger.info("Using OpenAI LLM provider")
         else:
-            logger.warning("No LLM API key found - calls will fail without configuration")
+            self._provider = None
+            logger.warning("No tool-calling LLM API key found")
+        
+        logger.info(f"Reasoning provider: {self._reasoning_provider}, Tool provider: {self._provider}")
     
-    def _get_api_config(self) -> Dict[str, str]:
+    def _get_api_config(self, provider: str) -> Dict[str, str]:
         """Get API configuration based on provider."""
-        if self._provider == "k2think":
+        if provider == "k2think":
             return {
                 "api_key": os.environ.get("K2THINK_API_KEY"),
                 "base_url": "https://api.k2think.ai/v2",
                 "model": os.environ.get("K2THINK_MODEL", "MBZUAI-IFM/K2-Think")
             }
-        elif self._provider == "groq":
+        elif provider == "groq":
             return {
                 "api_key": os.environ.get("GROQ_API_KEY"),
                 "base_url": "https://api.groq.com/openai/v1",
@@ -78,21 +89,13 @@ class UnifiedLLM(BaseModel):
         temperature: Optional[float] = None
     ) -> Any:
         """
-        Send messages to LLM and get response.
-        
-        Args:
-            messages: List of message dicts
-            system_msgs: Optional system messages
-            stream: Whether to stream response
-            temperature: Optional temperature override
-            
-        Returns:
-            LLM response
+        Send messages to LLM for reasoning/planning.
+        Uses k2think if available (better reasoning).
         """
         try:
             from openai import AsyncOpenAI
             
-            config = self._get_api_config()
+            config = self._get_api_config(self._reasoning_provider or "groq")
             
             client = AsyncOpenAI(
                 api_key=config["api_key"],
@@ -129,21 +132,13 @@ class UnifiedLLM(BaseModel):
     ) -> Any:
         """
         Send messages with tools to LLM.
-        
-        Args:
-            messages: List of message dicts
-            system_msgs: Optional system messages
-            tools: List of tool definitions
-            tool_choice: Tool choice strategy
-            temperature: Optional temperature
-            
-        Returns:
-            LLM response with potential tool calls
+        Uses Groq (k2think doesn't support function calling).
         """
         try:
             from openai import AsyncOpenAI
             
-            config = self._get_api_config()
+            # Use tool-calling provider (NOT k2think)
+            config = self._get_api_config(self._provider or "groq")
             
             client = AsyncOpenAI(
                 api_key=config["api_key"],
@@ -177,5 +172,10 @@ class UnifiedLLM(BaseModel):
     
     @property
     def provider(self) -> str:
-        """Get current LLM provider."""
+        """Get current tool-calling LLM provider."""
         return self._provider
+    
+    @property
+    def reasoning_provider(self) -> str:
+        """Get current reasoning LLM provider."""
+        return self._reasoning_provider

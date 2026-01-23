@@ -12,6 +12,10 @@ import json
 import os
 import pytest
 
+# Load environment variables from .env
+from dotenv import load_dotenv
+load_dotenv()
+
 from agent_unified.schema import AgentState
 from agent_unified.agents.toolcall import ARVISToolAgent
 from agent_unified.tools.base import BaseTool, ToolResult
@@ -21,7 +25,7 @@ from agent_unified.llm import UnifiedLLM
 
 # Skip if no API key configured
 pytestmark = pytest.mark.skipif(
-    not (os.getenv("OPENAI_API_KEY") or os.getenv("GROQ_API_KEY")),
+    not (os.getenv("K2THINK_API_KEY") or os.getenv("GROQ_API_KEY") or os.getenv("OPENAI_API_KEY")),
     reason="No LLM API key configured"
 )
 
