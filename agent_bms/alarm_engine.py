@@ -178,6 +178,8 @@ class AlarmEngine:
         # Equipment topology (for correlation)
         self.equipment: Dict[str, Equipment] = {}
         self.equipment_relationships: Dict[str, Set[str]] = defaultdict(set)  # eq -> related eq
+        import numpy as np # For random/math if needed
+        self.np = np
         
         # Suppression tracking
         self.alarm_toggle_count: Dict[str, List[datetime]] = defaultdict(list)
@@ -188,6 +190,8 @@ class AlarmEngine:
             "alarms_suppressed": 0,
             "clusters_created": 0,
         }
+        
+        self.llm_provider = None # Will be injected by OpsCopilot
         
         logger.info("AlarmEngine initialized")
     
@@ -224,7 +228,7 @@ class AlarmEngine:
     # ALARM INGESTION
     # ═══════════════════════════════════════════════════════════════════════
     
-    def ingest_alarm(self, alarm: Alarm) -> ProcessedAlarm:
+    async def ingest_alarm(self, alarm: Alarm) -> ProcessedAlarm:
         """
         Process an incoming alarm.
         
@@ -255,7 +259,7 @@ class AlarmEngine:
         # ─────────────────────────────────────────────────────────────────
         # 2. Cluster analysis
         # ─────────────────────────────────────────────────────────────────
-        cluster = self._find_or_create_cluster(alarm)
+        cluster = await self._find_or_create_cluster(alarm)
         if cluster:
             processed.cluster_id = cluster.cluster_id
             processed.is_root_cause = (alarm.alarm_id == cluster.alarm_ids[0])
@@ -334,7 +338,7 @@ class AlarmEngine:
     # CLUSTERING
     # ═══════════════════════════════════════════════════════════════════════
     
-    def _find_or_create_cluster(self, alarm: Alarm) -> Optional[AlarmCluster]:
+    async def _find_or_create_cluster(self, alarm: Alarm) -> Optional[AlarmCluster]:
         """
         Find existing cluster for alarm or create new one.
         
@@ -372,7 +376,7 @@ class AlarmEngine:
             )
             
             # Determine root cause
-            root_cause = self._determine_root_cause(cluster)
+            root_cause = await self._determine_root_cause(cluster)
             cluster.probable_root_cause = root_cause["cause"]
             cluster.root_cause_equipment_id = root_cause["equipment_id"]
             cluster.root_cause_confidence = root_cause["confidence"]
@@ -448,7 +452,7 @@ class AlarmEngine:
         
         return False
     
-    def _determine_root_cause(self, cluster: AlarmCluster) -> Dict[str, Any]:
+    async def _determine_root_cause(self, cluster: AlarmCluster) -> Dict[str, Any]:
         """
         Determine probable root cause of alarm cluster.
         
@@ -515,6 +519,62 @@ class AlarmEngine:
             "equipment_id": root_equipment_id,
             "confidence": confidence,
         }
+
+    def set_llm_provider(self, provider: Any) -> None:
+        """Set LLM provider for semantic analysis."""
+        self.llm_provider = provider
+        logger.info("AlarmEngine: Connected to Cognitive Layer (LLM)")
+
+    async def _analyze_root_cause_with_llm(self, cluster: AlarmCluster) -> Dict[str, Any]:
+        """
+        Ask LLM to determine root cause when rules are uncertain.
+        """
+        if not self.llm_provider:
+            return {"cause": "Unknown (Analysis Unavailable)", "confidence": 0.0}
+
+        # Prepare context for LLM
+        alarms_desc = []
+        for aid in cluster.alarm_ids:
+            if aid in self.active_alarms:
+                a = self.active_alarms[aid].alarm
+                # Use triggered_at instead of timestamp, and handle missing alarm_type
+                atype = getattr(a, 'alarm_type', a.message)
+                time_str = a.triggered_at.strftime("%H:%M:%S") if a.triggered_at else "Unknown"
+                alarms_desc.append(f"- {time_str}: {a.equipment_id} ({atype}) - {a.message}")
+        
+        prompt = f"""
+        Analyze this cluster of BMS alarms to find the semantic root cause.
+        
+        ALARMS:
+        {chr(10).join(alarms_desc)}
+        
+        Topology:
+        - Parent/Child links may be missing.
+        - Look for causal keywords (e.g., 'Power Loss' -> 'Device Offline').
+        
+        Return JSON items: 'cause' (string) and 'confidence' (0.0-1.0).
+        """
+        
+        try:
+            # We assume provider has a simple 'reason' or 'chat' interface
+            # Using UnifiedLLM.chat directly style
+            response = await self.llm_provider.chat([{"role": "user", "content": prompt}])
+            text = response.content
+            
+            # Simple parsing (robustness would require structured output)
+            import json
+            if "{" in text and "}" in text:
+                json_str = text[text.find("{"):text.rfind("}")+1]
+                data = json.loads(json_str)
+                return {
+                    "cause": data.get("cause", "LLM Analysis Failed"),
+                    "equipment_id": cluster.root_cause_equipment_id, # Keep rule-based guess
+                    "confidence": float(data.get("confidence", 0.5))
+                }
+        except Exception as e:
+            logger.error(f"LLM Root Cause Analysis failed: {e}")
+            
+        return {"cause": "Unknown", "confidence": 0.0}
     
     # ═══════════════════════════════════════════════════════════════════════
     # PRIORITY RANKING

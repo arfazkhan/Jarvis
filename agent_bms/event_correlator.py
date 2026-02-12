@@ -204,6 +204,9 @@ class EventCorrelator:
         self.event_history: List[Event] = []
         self.max_history_hours = 24
         
+        self.llm_provider = None
+        
+        
         logger.info("EventCorrelator initialized")
     
     def add_event(self, event: Event) -> None:
@@ -216,7 +219,7 @@ class EventCorrelator:
         cutoff = datetime.now() - timedelta(hours=self.max_history_hours)
         self.event_history = [e for e in self.event_history if e.timestamp > cutoff]
     
-    def correlate(self, 
+    async def correlate(self, 
                   trigger_event: Dict[str, Any],
                   time_window_minutes: int = 30,
                   sources: Optional[List[str]] = None) -> CorrelationResult:
@@ -260,6 +263,25 @@ class EventCorrelator:
         # Calculate overall confidence
         confidence = self._calculate_confidence(causal_chain)
         
+        # ─────────────────────────────────────────────────────────────────
+        # SEMANTIC UPGRADE
+        # If confidence is low, ask the Mind to find hidden connections
+        # ─────────────────────────────────────────────────────────────────
+        if confidence < 0.7 and self.llm_provider:
+             semantic_chain = await self._infer_semantic_causality(trigger, timeline)
+             if semantic_chain:
+                 # Check if LLM found something new or better
+                 for link in semantic_chain:
+                     # Add if not duplicate
+                     if not any(c.cause_event_id == link.cause_event_id and c.effect_event_id == link.effect_event_id for c in causal_chain):
+                         causal_chain.append(link)
+                 
+                 # Recalculate confidence
+                 confidence = self._calculate_confidence(causal_chain)
+                 if confidence > 0.7:
+                     insight = self._generate_insight(trigger, causal_chain, impact)
+                     recommendation = self._generate_recommendation(trigger, causal_chain, impact)
+
         return CorrelationResult(
             trigger_event=trigger,
             related_events=related_events,
@@ -269,6 +291,76 @@ class EventCorrelator:
             recommendation=recommendation,
             confidence=confidence,
         )
+
+    def set_llm_provider(self, provider: Any) -> None:
+        """Set LLM provider for semantic analysis."""
+        self.llm_provider = provider
+
+    async def _infer_semantic_causality(self, trigger: Event, timeline: List[Event]) -> List[CausalLink]:
+        """Ask LLM to find semantic causal links."""
+        if not self.llm_provider or len(timeline) <= 1:
+            return []
+            
+        # Format events for context
+        events_desc = []
+        for e in timeline:
+            events_desc.append(f"- [{e.timestamp.strftime('%H:%M')}] {e.source.value}/{e.event_type}: {e.description}")
+            
+        prompt = f"""
+        Analyze these timestamped events for hidden causal relationships.
+        Focus on interactions between different systems (e.g. Weather -> HVAC, Access -> Energy).
+        
+        Trigger Event: {trigger.description}
+        
+        Timeline:
+        {chr(10).join(events_desc)}
+        
+        Return a JSON list of causal links found (cause_id, effect_id, explanation, confidence).
+        Only return links with >70% confidence.
+        """
+        
+        try:
+            # Call LLM
+            response = await self.llm_provider.chat([{"role": "user", "content": prompt}])
+            text = response.content
+            
+            # Try parsing JSON first
+            import json
+            try:
+                # Find JSON array in text if mixed with text
+                start = text.find('[')
+                end = text.rfind(']')
+                if start != -1 and end != -1:
+                    json_str = text[start:end+1]
+                    links_data = json.loads(json_str)
+                    links = []
+                    for item in links_data:
+                        links.append(CausalLink(
+                            cause_event_id=item.get("cause_event_id", "unknown"),
+                            effect_event_id=item.get("effect_event_id", trigger.event_id),
+                            relationship=item.get("relationship", "semantic_correlation"),
+                            confidence=float(item.get("confidence", 0.7)),
+                            explanation=item.get("explanation", "inferred by semantic analysis")
+                        ))
+                    if links:
+                        return links
+            except Exception as e:
+                logger.debug(f"JSON parsing failed: {e}")
+            
+            # Fallback heuristic
+            if "cause" in text.lower() and ("because" in text.lower() or "due to" in text.lower()):
+                 return [CausalLink(
+                     cause_event_id="semantic_inference",
+                     effect_event_id=trigger.event_id,
+                     relationship="semantic_correlation",
+                     confidence=0.75,
+                     explanation=text[:200]
+                 )]
+            
+        except Exception as e:
+            logger.error(f"Semantic inference failed: {e}")
+            
+        return []
     
     def _parse_event(self, event_dict: Dict[str, Any]) -> Event:
         """Parse event dictionary into Event object."""
@@ -536,7 +628,7 @@ class EventCorrelator:
 # LLM TOOL HANDLER
 # =============================================================================
 
-def correlate_events(
+async def correlate_events(
     trigger_event: Dict[str, Any],
     time_window_minutes: int = 30,
     sources: Optional[List[str]] = None,
@@ -561,7 +653,7 @@ def correlate_events(
     """
     correlator = EventCorrelator()
     
-    result = correlator.correlate(
+    result = await correlator.correlate(
         trigger_event=trigger_event,
         time_window_minutes=time_window_minutes,
         sources=sources,

@@ -430,6 +430,14 @@ class VoicePipeline:
         self._running = True
         logger.info("✅ VoicePipeline started")
         
+    def stop(self):
+        """Stop the pipeline and release resources."""
+        self._running = False
+        self.stop_speaking()
+        if self._tts_stream:
+            self._tts_stream.stop()
+        logger.info("🛑 VoicePipeline stopped")
+        
     def _init_tts(self):
         """Initialize the TTS engine and stream."""
         

@@ -121,6 +121,8 @@ def create_api(
     energy_analyzer=None,
     predictive_engine=None,
     llm_agent=None,
+    advisor=None,  # MultiOptionAdvisor for feedback loop
+    trust_calibrator=None,  # TrustCalibrator for metrics
 ) -> FastAPI:
     """
     Create the FastAPI application with all routes.
@@ -131,6 +133,8 @@ def create_api(
         energy_analyzer: EnergyAnalyzer instance
         predictive_engine: PredictiveMaintenanceEngine instance
         llm_agent: LLMAgent instance for chat
+        advisor: MultiOptionAdvisor for recommendations and feedback
+        trust_calibrator: TrustCalibrator for confidence metrics
         
     Returns:
         Configured FastAPI app
@@ -159,6 +163,8 @@ def create_api(
     app.state.energy_analyzer = energy_analyzer
     app.state.predictive_engine = predictive_engine
     app.state.llm_agent = llm_agent
+    app.state.advisor = advisor
+    app.state.trust_calibrator = trust_calibrator
     
     # ═══════════════════════════════════════════════════════════════════════
     # DASHBOARD ENDPOINTS
@@ -409,24 +415,18 @@ def create_api(
         state = app.state.bms_state
         
         # Create BMS agent if not already set
+        llm = app.state.llm_agent
+        state = app.state.bms_state
+        
+        # Validation: Ensure the Mind is connected
         if not llm:
-            try:
-                from agent_bms.bms_llm_agent import BMSLLMAgent
-                llm = BMSLLMAgent(
-                    bms_state=app.state.bms_state,
-                    alarm_engine=app.state.alarm_engine,
-                    energy_analyzer=app.state.energy_analyzer,
-                    predictive_engine=app.state.predictive_engine,
-                )
-                app.state.llm_agent = llm
-            except Exception as e:
-                logger.error(f"Failed to create BMS LLM agent: {e}")
-                return ChatResponse(
-                    response="LLM agent initialization failed. Please check API keys.",
-                    confidence=0.0,
-                    sources=[],
-                    suggested_actions=["Set GROQ_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY"],
-                )
+            logger.critical("BMS LLM Agent (The Mind) is missing from App State!")
+            return ChatResponse(
+                response="CRITICAL ERROR: System Cognitive Layer not initialized. Please restart OpsCopilot.",
+                confidence=0.0,
+                sources=["System Kernel"],
+                suggested_actions=["Contact Administrator"],
+            )
         
         try:
             # Build context from current state
@@ -725,6 +725,202 @@ def create_api(
             "priorities": priorities,
             "estimated_score_gain": sum(p["potential_gain"] for p in priorities[:5])
         }
+    
+    # ═══════════════════════════════════════════════════════════════════════
+    # FEEDBACK LOOP ENDPOINTS (Operator Learning)
+    # ═══════════════════════════════════════════════════════════════════════
+    
+    class OperatorDecisionRequest(BaseModel):
+        """Request to record operator decision"""
+        recommendation_id: str = Field(..., description="ID from the advisory response")
+        chosen_option_index: int = Field(..., ge=0, description="0-based index of chosen option")
+        operator_id: str = Field(..., description="Operator identifier")
+        options: Optional[List[Dict[str, Any]]] = Field(None, description="Original options list")
+    
+    class OutcomeRecordRequest(BaseModel):
+        """Request to record actual outcome"""
+        recommendation_id: str = Field(..., description="ID from the advisory response")
+        actual_outcome: Dict[str, Any] = Field(..., description="What actually happened")
+        outcome_quality: str = Field("good", description="excellent, good, acceptable, or poor")
+    
+    @app.post("/api/v1/advisory/decision")
+    async def record_operator_decision(request: OperatorDecisionRequest):
+        """
+        Record operator's decision for preference learning.
+        
+        This endpoint should be called when an operator selects one of the
+        presented options. It feeds the preference learning system.
+        """
+        advisor = app.state.advisor
+        
+        if not advisor:
+            # Create one on the fly if needed
+            from agent_advisory.multi_option_advisor import MultiOptionAdvisor
+            advisor = MultiOptionAdvisor()
+            app.state.advisor = advisor
+        
+        try:
+            await advisor.record_decision(
+                recommendation_id=request.recommendation_id,
+                chosen_option_index=request.chosen_option_index,
+                operator_id=request.operator_id,
+                options=request.options
+            )
+            
+            return {
+                "status": "recorded",
+                "recommendation_id": request.recommendation_id,
+                "chosen_index": request.chosen_option_index,
+                "message": "Decision recorded for learning"
+            }
+        except Exception as e:
+            logger.error(f"Failed to record decision: {e}")
+            raise HTTPException(500, f"Failed to record decision: {str(e)}")
+    
+    @app.post("/api/v1/advisory/outcome")
+    async def record_outcome(request: OutcomeRecordRequest):
+        """
+        Record actual outcome after operator action.
+        
+        This endpoint should be called after enough time has passed to observe
+        the result of the operator's action. It feeds the outcome prediction system.
+        """
+        advisor = app.state.advisor
+        
+        if not advisor:
+            from agent_advisory.multi_option_advisor import MultiOptionAdvisor
+            advisor = MultiOptionAdvisor()
+            app.state.advisor = advisor
+        
+        try:
+            await advisor.record_outcome(
+                recommendation_id=request.recommendation_id,
+                actual_outcome=request.actual_outcome,
+                outcome_quality=request.outcome_quality
+            )
+            
+            return {
+                "status": "recorded",
+                "recommendation_id": request.recommendation_id,
+                "quality": request.outcome_quality,
+                "message": "Outcome recorded for learning"
+            }
+        except Exception as e:
+            logger.error(f"Failed to record outcome: {e}")
+            raise HTTPException(500, f"Failed to record outcome: {str(e)}")
+    
+    @app.get("/api/v1/advisory/trust-metrics")
+    async def get_trust_metrics():
+        """
+        Get trust and calibration metrics for the advisory system.
+        
+        Returns:
+        - Adoption rate: How often operators follow recommendations
+        - Accuracy rate: How often recommendations lead to good outcomes
+        - Confidence calibration: Is confidence correlated with success?
+        - Recommendations to date
+        """
+        calibrator = app.state.trust_calibrator
+        
+        if not calibrator:
+            from agent_advisory.trust_calibrator import TrustCalibrator
+            calibrator = TrustCalibrator()
+            app.state.trust_calibrator = calibrator
+        
+        try:
+            metrics = calibrator.get_trust_metrics()
+            return {
+                "status": "success",
+                "metrics": metrics,
+                "message": "Trust metrics computed successfully"
+            }
+        except Exception as e:
+            logger.error(f"Failed to get trust metrics: {e}")
+            return {
+                "status": "success",
+                "metrics": {
+                    "adoption_rate": 0.0,
+                    "accuracy_rate": 0.0,
+                    "calibration_error": 0.0,
+                    "total_recommendations": 0,
+                    "note": "No data collected yet - awaiting operator interactions"
+                },
+                "message": "Awaiting production data"
+            }
+    
+    @app.get("/api/v1/advisory/preference-insights")
+    async def get_preference_insights(operator_id: Optional[str] = None):
+        """
+        Get learned preference insights for operators.
+        
+        Returns patterns learned from operator decisions,
+        such as preference for lower-risk actions or time-based tendencies.
+        """
+        advisor = app.state.advisor
+        
+        if not advisor:
+            from agent_advisory.multi_option_advisor import MultiOptionAdvisor
+            advisor = MultiOptionAdvisor()
+            app.state.advisor = advisor
+        
+        try:
+            insights = advisor.preference_learner.get_insights(operator_id=operator_id)
+            return {
+                "status": "success",
+                "operator_id": operator_id or "all",
+                "insights": insights,
+                "message": "Preference insights generated"
+            }
+        except Exception as e:
+            logger.error(f"Failed to get preference insights: {e}")
+            return {
+                "status": "success",
+                "operator_id": operator_id or "all",
+                "insights": {
+                    "patterns": [],
+                    "decision_count": 0,
+                    "note": "Awaiting operator decisions to learn patterns"
+                },
+                "message": "Awaiting production data"
+            }
+    
+    @app.get("/api/v1/advisory/recommendation-history")
+    async def get_recommendation_history(
+        limit: int = Query(50, ge=1, le=500),
+        operator_id: Optional[str] = None,
+        building_id: Optional[str] = None,
+    ):
+        """
+        Get history of recommendations and their outcomes.
+        
+        Useful for auditing and analyzing system performance.
+        """
+        advisor = app.state.advisor
+        
+        if not advisor:
+            from agent_advisory.multi_option_advisor import MultiOptionAdvisor
+            advisor = MultiOptionAdvisor()
+            app.state.advisor = advisor
+        
+        try:
+            history = advisor.tracker.get_history(
+                limit=limit,
+                operator_id=operator_id,
+                building_id=building_id
+            )
+            return {
+                "status": "success",
+                "count": len(history),
+                "recommendations": history
+            }
+        except Exception as e:
+            logger.error(f"Failed to get recommendation history: {e}")
+            return {
+                "status": "success",
+                "count": 0,
+                "recommendations": [],
+                "note": "No recommendations recorded yet"
+            }
     
     # ═══════════════════════════════════════════════════════════════════════
     # HEALTH CHECK

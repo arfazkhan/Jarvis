@@ -200,6 +200,28 @@ class BuildingSkillbook:
                 CREATE INDEX IF NOT EXISTS idx_skills_type 
                 ON skills(skill_type)
             """)
+
+            # Meta-Cognition: Decisions Table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS decisions (
+                    decision_id TEXT PRIMARY KEY,
+                    building_id TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    context TEXT,
+                    chosen_action TEXT,
+                    alternatives TEXT,
+                    confidence REAL,
+                    reasoning TEXT,
+                    outcome TEXT,
+                    outcome_quality TEXT,
+                    event_id TEXT
+                )
+            """)
+            
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_decisions_time 
+                ON decisions(timestamp)
+            """)
             
             conn.commit()
     
@@ -545,6 +567,80 @@ class BuildingSkillbook:
                 "total_skills": total,
                 "by_type": by_type,
             }
+    
+    def log_decision(self,
+                     decision_id: str,
+                     context: Dict[str, Any],
+                     chosen_action: str,
+                     alternatives: List[str],
+                     confidence: float,
+                     reasoning: str,
+                     event_id: Optional[str] = None) -> None:
+        """Log a cognitive decision for later reflection."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                INSERT INTO decisions 
+                (decision_id, building_id, timestamp, context, chosen_action,
+                 alternatives, confidence, reasoning, event_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                decision_id,
+                self.building_id,
+                datetime.now().isoformat(),
+                json.dumps(context),
+                chosen_action,
+                json.dumps(alternatives),
+                confidence,
+                reasoning,
+                event_id
+            ))
+            conn.commit()
+            
+    def update_decision_outcome(self, decision_id: str, outcome: str, quality: str) -> bool:
+        """Update a decision with its observed outcome."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("""
+                UPDATE decisions 
+                SET outcome = ?, outcome_quality = ?
+                WHERE decision_id = ?
+            """, (outcome, quality, decision_id))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def get_recent_decisions(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """Get recent decisions for reflection."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute("""
+                SELECT * FROM decisions 
+                WHERE building_id = ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+            """, (self.building_id, limit))
+            
+            results = []
+            for row in cursor.fetchall():
+                # Safe JSON parsing
+                try:
+                    context = json.loads(row["context"]) if row["context"] else {}
+                    alternatives = json.loads(row["alternatives"]) if row["alternatives"] else []
+                except json.JSONDecodeError:
+                    context = {}
+                    alternatives = []
+                    
+                results.append({
+                    "decision_id": row["decision_id"],
+                    "timestamp": row["timestamp"],
+                    "context": context,
+                    "chosen_action": row["chosen_action"],
+                    "alternatives": alternatives,
+                    "confidence": row["confidence"],
+                    "reasoning": row["reasoning"],
+                    "outcome": row["outcome"],
+                    "outcome_quality": row["outcome_quality"],
+                    "event_id": row["event_id"]
+                })
+            return results
 
 
 # =============================================================================

@@ -1,7 +1,10 @@
 import threading
 import time
 import logging
+import datetime
+import uuid
 from typing import Dict, Any, Optional
+from agent_cognitive.meta_cognition import MetaCognition
 
 class MetaAgent:
     """
@@ -28,6 +31,9 @@ class MetaAgent:
         self.event_bus.subscribe("state_changed", self._on_state_change)
         self.event_bus.subscribe("mission_status_changed", self._on_mission_status)
         self.event_bus.subscribe("safety_violation", self._on_safety_violation)
+        
+        # Meta-Cognition Wrapper
+        self.meta_cognition = MetaCognition()
 
     def start(self):
         """Start the cognitive loop."""
@@ -109,6 +115,15 @@ class MetaAgent:
         self.logger.info("Triggering proactive action due to high urgency")
         print("[MetaAgent] 💡 I have a proactive suggestion...")
         
+        # Meta-Cognition: Record the decision to act
+        decision_id = self.meta_cognition.record_decision(
+            context={"focus": self.focus, "urgency": self.urgency, "phase": "proactive_trigger"},
+            chosen_action="proactive_notification",
+            alternatives=["wait", "log_only"],
+            confidence=min(1.0, self.urgency),
+            reasoning=f"Urgency {self.urgency} exceeded 0.8 threshold"
+        )
+        
         # Reset urgency after acting
         self.urgency = 0.0
         
@@ -118,6 +133,7 @@ class MetaAgent:
             "payload": {
                 "type": "proactive_suggestion",
                 "source": "MetaAgent",
+                "decision_id": decision_id,
                 "content": "I noticed something requires attention." # Placeholder
             }
         })

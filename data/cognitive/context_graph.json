@@ -6,7 +6,48 @@
     {
       "type": "location",
       "id": "home"
+    },
+    {
+      "type": "unknown",
+      "id": "user"
+    },
+    {
+      "type": "unknown",
+      "id": "cooking"
+    },
+    {
+      "model": "Carrier 19XR",
+      "type": "chiller",
+      "updated_at": 1770122919.6124475,
+      "id": "CH-01"
+    },
+    {
+      "parent": "CH-01",
+      "type": "ahu",
+      "updated_at": 1770122919.6124475,
+      "id": "AHU-01"
+    },
+    {
+      "parent": "AHU-01",
+      "type": "vav",
+      "updated_at": 1770122919.6139529,
+      "id": "VAV-01"
     }
   ],
-  "edges": []
+  "edges": [
+    {
+      "relation": "feeds_water",
+      "updated_at": 1770122919.6139529,
+      "source": "CH-01",
+      "target": "AHU-01",
+      "key": 0
+    },
+    {
+      "relation": "feeds_air",
+      "updated_at": 1770122919.6139529,
+      "source": "AHU-01",
+      "target": "VAV-01",
+      "key": 0
+    }
+  ]
 }

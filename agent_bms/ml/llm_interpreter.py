@@ -41,61 +41,39 @@ logger = logging.getLogger("arvis.ml.interpreter")
 # K2 THINK LLM CLIENT
 # =============================================================================
 
-class K2ThinkClient:
+from agent_unified.llm import UnifiedLLM
+from agent_unified.schema import Message
+
+class UnifiedInterpreterClient:
     """
-    Client for K2 Think reasoning model.
-    Uses OpenAI-compatible API with existing env config.
-    
-    Reads from:
-    - K2THINK_API_KEY (already in .env)
-    - K2THINK_MODEL (already in .env)
+    Client for ML interpretation using the UnifiedLLM stack.
+    Respects LLM_PROVIDER and LLM_MODEL settings.
     """
     
-    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
-        # Use existing env variables
-        self.api_key = api_key or os.environ.get("K2THINK_API_KEY")
-        self.model = model or os.environ.get("K2THINK_MODEL", "MBZUAI-IFM/K2-Think")
-        self.base_url = "https://api.k2think.ai/v2"
-        self.client = None
-        
-        if self.api_key:
-            try:
-                from openai import OpenAI
-                self.client = OpenAI(
-                    api_key=self.api_key,
-                    base_url=self.base_url
-                )
-                logger.info(f"K2 Think client initialized: {self.model}")
-            except ImportError:
-                logger.warning("OpenAI package not installed")
-            except Exception as e:
-                logger.warning(f"K2 Think init failed: {e}")
-        else:
-            logger.warning("K2THINK_API_KEY not found in environment")
+    def __init__(self, provider: Optional[str] = None, model: Optional[str] = None):
+        self.unified_llm = UnifiedLLM()
+        self.provider = provider or os.environ.get("LLM_PROVIDER", "k2think")
+        logger.info(f"Interpreter client initialized with {self.provider}")
     
-    def chat(self, 
+    async def chat(self, 
              messages: List[Dict[str, str]], 
              max_tokens: int = 500,
              temperature: float = 0.2) -> Dict[str, Any]:
         """
-        Send chat completion request to K2 Think.
+        Send chat completion request using UnifiedLLM.
         """
-        if not self.client:
-            raise RuntimeError("K2 Think client not initialized - check K2THINK_API_KEY in .env")
-        
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
+            # We use ask() which routes to the Reasoning Agent (K2 or Groq/Llama)
+            response = await self.unified_llm.ask(
                 messages=messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
+                max_tokens=max_tokens if hasattr(self.unified_llm, 'ask') else 500
             )
             
-            content = response.choices[0].message.content
-            return {"content": content}
+            # response is a Message object from UnifiedLLM
+            return {"content": response.content}
             
         except Exception as e:
-            logger.error(f"K2 Think API error: {e}")
+            logger.error(f"Interpreter LLM error: {e}")
             raise
 
 
@@ -297,13 +275,13 @@ class MLInterpreter:
     """
     
     def __init__(self, 
-                 llm_client: Optional[K2ThinkClient] = None,
+                 llm_client: Optional[UnifiedInterpreterClient] = None,
                  confidence_threshold: float = CONFIDENCE_THRESHOLD):
-        self.llm_client = llm_client
+        self.llm_client = llm_client or create_unified_interpreter()
         self.confidence_threshold = confidence_threshold
         logger.info("MLInterpreter initialized")
     
-    def interpret(self,
+    async def interpret(self,
                   interpretation_type: InterpretationType,
                   ml_result: Dict[str, Any],
                   use_llm: bool = True) -> InterpretedResult:
@@ -324,7 +302,7 @@ class MLInterpreter:
         
         thinking = ""
         if use_llm and self.llm_client:
-            explanation, thinking = self._generate_llm_explanation(context)
+            explanation, thinking = await self._generate_llm_explanation(context)
             verified, notes = self._verify_grounding(explanation, key_facts, ml_result)
             
             # If verification fails, fall back to template
@@ -381,9 +359,8 @@ class MLInterpreter:
                 facts.append(bench["building_id"])
         
         return facts
-    
-    def _generate_llm_explanation(self, context: GroundedContext) -> tuple:
-        """Generate LLM explanation with K2 Think."""
+    async def _generate_llm_explanation(self, context: GroundedContext) -> tuple:
+        """Generate LLM explanation with reasoning."""
         template = GROUNDED_PROMPTS.get(context.interpretation_type.value)
         
         if not template:
@@ -393,7 +370,7 @@ class MLInterpreter:
         user_prompt = template.format(data_json=context.to_json())
         
         try:
-            response = self.llm_client.chat(
+            response = await self.llm_client.chat(
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt}
@@ -404,11 +381,14 @@ class MLInterpreter:
             
             content = response.get("content", "").strip()
             
-            # K2 Think uses <think>/<answer> tags for reasoning
+            # ─────────────────────────────────────────────────────────────
+            # Reasoning Extraction (Handles K2 Think <think> tags)
+            # ─────────────────────────────────────────────────────────────
             thinking = ""
             import re
             
-            # Extract thinking (may be <think> or <thinking>)
+            # UnifiedLLM might have already stripped <think> if using k2think provider
+            # but if it's raw or from another provider, we double-check.
             think_match = re.search(r"<think(?:ing)?>(.*?)</think(?:ing)?>", content, re.DOTALL)
             if think_match:
                 thinking = think_match.group(1).strip()
@@ -424,7 +404,7 @@ class MLInterpreter:
             return content, thinking
             
         except Exception as e:
-            logger.error(f"K2 Think call failed: {e}")
+            logger.error(f"Interpreter LLM call failed: {e}")
             return self._template_explanation(context), ""
     
     def _template_explanation(self, context: GroundedContext) -> str:
@@ -558,37 +538,39 @@ class MLInterpreter:
     
     # Convenience methods (async-compatible)
     async def interpret_fault(self, data: Dict) -> InterpretedResult:
-        return self.interpret(InterpretationType.FAULT_DETECTION, data)
+        return await self.interpret(InterpretationType.FAULT_DETECTION, data)
     
     async def interpret_forecast(self, data: Dict) -> InterpretedResult:
-        return self.interpret(InterpretationType.ENERGY_FORECAST, data)
+        return await self.interpret(InterpretationType.ENERGY_FORECAST, data)
     
     async def interpret_simulation(self, data: Dict) -> InterpretedResult:
-        return self.interpret(InterpretationType.SIMULATION, data)
+        return await self.interpret(InterpretationType.SIMULATION, data)
     
     async def interpret_root_cause(self, data: Dict) -> InterpretedResult:
-        return self.interpret(InterpretationType.ROOT_CAUSE, data)
+        return await self.interpret(InterpretationType.ROOT_CAUSE, data)
     
     async def interpret_benchmark(self, data: Dict) -> InterpretedResult:
-        return self.interpret(InterpretationType.FLEET_BENCHMARK, data)
+        return await self.interpret(InterpretationType.FLEET_BENCHMARK, data)
 
 
 # =============================================================================
 # FACTORY FUNCTIONS
 # =============================================================================
 
-def create_k2_interpreter() -> MLInterpreter:
-    """Create interpreter with K2 Think LLM client."""
-    client = K2ThinkClient()
+def create_unified_interpreter() -> MLInterpreter:
+    """Create interpreter with Unified LLM client."""
+    client = UnifiedInterpreterClient()
     return MLInterpreter(llm_client=client)
 
+# ALIAS for backward compatibility
+create_k2_interpreter = create_unified_interpreter
 
 def get_interpreter(llm_client=None) -> MLInterpreter:
     """Get or create interpreter instance."""
     return MLInterpreter(llm_client=llm_client)
 
 
-def interpret_ml_result(
+async def interpret_ml_result(
     result_type: str,
     ml_result: Dict[str, Any],
     use_llm: bool = True,
@@ -607,11 +589,15 @@ def interpret_ml_result(
     itype = type_map.get(result_type, InterpretationType.FAULT_DETECTION)
     
     if use_llm:
-        interpreter = create_k2_interpreter()
+        interpreter = create_unified_interpreter()
     else:
         interpreter = MLInterpreter()
     
-    result = interpreter.interpret(itype, ml_result, use_llm=use_llm)
+    # interpret is not async in MLInterpreter class currently
+    # but we should make sure it doesn't block if possible.
+    # For now, it's called synchronously or with appropriate await if made async.
+    # Looking at the class definition, it is synchronous.
+    result = await interpreter.interpret(itype, ml_result, use_llm=use_llm)
     return result.to_dict()
 
 

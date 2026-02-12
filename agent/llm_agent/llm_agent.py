@@ -268,8 +268,10 @@ class RateLimiter:
         return max(0, self.daily_limit - self.count)
 
 
+
 class LLMAgent:
-    def __init__(self, event_bus, state_engine, automations, learning_engine=None, subscribe_to_voice=True):
+    def __init__(self, event_bus, state_engine, automations, learning_engine=None, subscribe_to_voice=True, 
+                 override_provider=None, override_model=None):
         self.event_bus = event_bus
         self.state_engine = state_engine
         self.automations = automations
@@ -282,19 +284,23 @@ class LLMAgent:
         
         # Initialize Memory System
         from agent.memory import MemoryOrchestrator
-        self.memory = MemoryOrchestrator(
-            persist_dir="./data/memories",
-            max_conversation_turns=10,
-            observation_decay_days=30
-        )
-        print("[LLMAgent] Memory system initialized")
+        # Only init memory if not in "dummy" mode (event_bus is not None)
+        if event_bus and hasattr(event_bus, 'subscribe'):
+            self.memory = MemoryOrchestrator(
+                persist_dir="./data/memories",
+                max_conversation_turns=10,
+                observation_decay_days=30
+            ) 
+            print("[LLMAgent] Memory system initialized")
+        else:
+            self.memory = None
         
         # ═══════════════════════════════════════════════════════════
         # CACHING AND RATE LIMITING
         # ═══════════════════════════════════════════════════════════
         self.semantic_cache = SemanticCache(max_size=SEMANTIC_CACHE_SIZE)
         self.rate_limiter = RateLimiter(daily_limit=GEMINI_DAILY_LIMIT)
-        print(f"[LLMAgent] Rate limit: {self.rate_limiter.get_remaining()}/{GEMINI_DAILY_LIMIT} remaining today")
+        # print(f"[LLMAgent] Rate limit: {self.rate_limiter.get_remaining()}/{GEMINI_DAILY_LIMIT} remaining today")
         
         # ═══════════════════════════════════════════════════════════
         # LLM PROVIDER SELECTION: Gemini (primary) or Groq (fallback)
@@ -304,8 +310,12 @@ class LLMAgent:
         self.gemini_model = None
         
         # LLM_PROVIDER env: "gemini", "groq", "lmstudio", or "auto" (default)
-        preferred_provider = os.environ.get("LLM_PROVIDER", "auto").lower()
-        print(f"[LLMAgent] LLM_PROVIDER={preferred_provider}")
+        if override_provider:
+             preferred_provider = override_provider.lower()
+             print(f"[LLMAgent] Using OVERRIDE provider: {preferred_provider}")
+        else:
+             preferred_provider = os.environ.get("LLM_PROVIDER", "auto").lower()
+             print(f"[LLMAgent] LLM_PROVIDER={preferred_provider}")
         
         # Initialize based on preference
         if preferred_provider in ("gemini", "auto"):
@@ -490,15 +500,15 @@ class LLMAgent:
                 if self.provider == "groq":
                     model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
                 elif self.provider == "openai":
-                    model = getattr(self, "openai_model", "gpt-4o-mini")
+                    model = override_model or getattr(self, "openai_model", "gpt-4o-mini")
                 elif self.provider == "synthetic":
-                    model = getattr(self, "synthetic_model", "hf:meta-llama/Llama-3.3-70B-Instruct")
+                    model = override_model or getattr(self, "synthetic_model", "hf:meta-llama/Llama-3.3-70B-Instruct")
                 elif self.provider == "openrouter":
-                    model = getattr(self, "openrouter_model", "meta-llama/llama-3.3-70b-instruct")
+                    model = override_model or getattr(self, "openrouter_model", "meta-llama/llama-3.3-70b-instruct")
                 elif self.provider == "lmstudio":
-                    model = getattr(self, "lmstudio_model", "local-model")
+                    model = override_model or getattr(self, "lmstudio_model", "local-model")
                 elif self.provider == "k2think":
-                    model = getattr(self, "k2think_model", "MBZUAI-IFM/K2-Think")
+                    model = override_model or getattr(self, "k2think_model", "MBZUAI-IFM/K2-Think")
 
                 messages = [
                     {"role": "system", "content": system_prompt},
@@ -1108,14 +1118,21 @@ Output ONLY the response message, nothing else."""
                     except json.JSONDecodeError:
                         print(f"[LLMAgent] Failed to parse tool args: {tool_args_buffer}")
             
-            elif self.provider == "openai":
+            elif self.provider in ("openai", "k2think"):
                 # ═══════════════════════════════════════════════════════════
-                # OPENAI STREAMING (GPT-4o, GPT-4, etc.)
+                # OPENAI & K2 THINK STREAMING
                 # ═══════════════════════════════════════════════════════════
                 self.rate_limiter.increment()
                 
+                # Model selection
+                model = "gpt-4o" # Default fallback
+                if self.provider == "openai":
+                    model = getattr(self, "openai_model", "gpt-4o")
+                elif self.provider == "k2think":
+                    model = getattr(self, "k2think_model", "MBZUAI-IFM/K2-Think")
+                
                 stream = self.client.chat.completions.create(
-                    model=self.openai_model,
+                    model=model,
                     messages=[
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": json.dumps(context)}

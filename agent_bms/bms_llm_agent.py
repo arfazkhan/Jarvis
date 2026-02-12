@@ -22,15 +22,22 @@ import logging
 import asyncio
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
+from datetime import datetime
 
 # Ensure project root is in path
 from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+    
+from agent_unified.llm import UnifiedLLM
+from agent_unified.schema import Message
 
 from dotenv import load_dotenv
 load_dotenv()
+
+from agent_bms.prompt_builder import BMSContext, OpsPromptBuilder
+from agent_advisory.economy import ToolEconomyPolicy
 
 logger = logging.getLogger("arvis.bms.llm")
 
@@ -38,6 +45,12 @@ logger = logging.getLogger("arvis.bms.llm")
 # ═══════════════════════════════════════════════════════════════════════════
 # RESPONSE MODELS
 # ═══════════════════════════════════════════════════════════════════════════
+
+# Configuration
+# Default to K2-Think for reasoning (English)
+DEFAULT_ENGLISH_MODEL = "MBZUAI-IFM/K2-Think" 
+# Default to Jais-V2 for Arabic (via OpenRouter or supported provider)
+DEFAULT_ARABIC_MODEL = os.getenv("ARABIC_MODEL", "core42/jais-30b-chat-v3") 
 
 @dataclass
 class ChatResponse:
@@ -99,6 +112,19 @@ class BMSLLMAgent:
         self.pm_engine = predictive_engine
         self.gsas_reporter = gsas_reporter
         
+        # Phase 2: Multi-Option Advisory System (Production Production)
+        from agent_advisory import MultiOptionAdvisor
+        
+        # Initialize the full Advisor
+        self.advisor = MultiOptionAdvisor()
+        
+        # We also keep Phase 1 components for backward compatibility/direct access
+        self.tracker = self.advisor.tracker
+        self.calibrator = self.advisor.calibrator
+        self.preference_learner = self.advisor.preference_learner
+        
+        logger.info("Phase 2 Multi-Option Advisor initialized")
+        
         # Import tools
         from agent_bms.tools_schema import get_bms_tools, BMSToolHandler
         
@@ -123,27 +149,103 @@ class BMSLLMAgent:
         self.energy_prompt = get_ops_energy_prompt()
         self.maintenance_prompt = get_ops_maintenance_prompt()
         
-        # Create tool handler
+        # Phase 3: Proactive Layers (Goal Generator & Briefing Scheduler)
+        from agent_advisory.goal_generator import GoalGenerator
+        from agent_advisory.briefing_scheduler import BriefingScheduler
+        from agent_advisory.feedback_loop import ActiveLearner
+        from agent_advisory.world_model import WorldModel, StateTransitionModel
+        from agent_advisory.explainer import ExplanationEngine
+        from agent_advisory.online_learner import OnlineLearner
+        from agent_advisory.trust_calibrator import TrustCalibrator
+        from agent_advisory.knowledge_base import TechnicalKnowledgeBase, GraphRAGNavigator
+        
+        # Phase 5, 6, 7 & 8: Adaptive & Grounded Intelligence
+        self.transition_model = StateTransitionModel()
+        self.world_model = WorldModel(self.transition_model)
+        self.explainer = ExplanationEngine(self.world_model)
+        self.online_learner = OnlineLearner(self.world_model)
+        self.knowledge_base = TechnicalKnowledgeBase()
+        
+        # Phase 8: Graph-RAG initialization
+        from agent_cognitive.context_graph import ContextGraph
+        self.context_graph = ContextGraph()
+        self.graph_rag = GraphRAGNavigator(self.knowledge_base, self.context_graph)
+        
+        # Initialize Advisor with tracker
+        from agent_advisory import MultiOptionAdvisor
+        self.advisor = MultiOptionAdvisor()
+        self.trust_calibrator = TrustCalibrator(self.advisor.tracker)
+        
+        # Initialize Goal Generator with World Model for simulation validation
+        self.goal_generator = GoalGenerator(
+            fleet_intelligence=None,
+            predictive_engine=predictive_engine,
+            energy_analyzer=energy_analyzer,
+            world_model=self.world_model
+        )
+        
+        # Initialize Briefing Scheduler
+        self.briefing_scheduler = BriefingScheduler(self.goal_generator)
+        # Start the scheduler
+        self.briefing_scheduler.start()
+        # Active Agency: Start dreaming about the building immediately
+        building_id = getattr(self.bms_state, 'building_id', 'West Bay Tower')
+        self.briefing_scheduler.add_building(building_id)
+        
+        # Initialize Feedback Loop (Active Learner)
+        self.feedback_loop = ActiveLearner(self.tracker)
+        
+        logger.info("Phase 3 Proactive Layers initialized (GoalGenerator, BriefingScheduler, FeedbackLoop)")
+        
+        # Create tool handler - pass advisory components
         self.tool_handler = BMSToolHandler(
             bms_state=bms_state,
             alarm_engine=alarm_engine,
             energy_analyzer=energy_analyzer,
             predictive_engine=predictive_engine,
+            # Phase 1: Pass advisory components to tool handler
+            recommendation_tracker=self.tracker,
+            preference_learner=self.preference_learner,
+            # Phase 2: Full Advisor
+            advisor=self.advisor,
+            # Phase 3 components
+            goal_generator=self.goal_generator,
+            briefing_scheduler=self.briefing_scheduler,
+            feedback_loop=self.feedback_loop,
+            # Phase 5: Explainer & World Model
+            explainer=self.explainer,
+            world_model=self.world_model,
+            # Phase 6: Trust & Online Learning
+            online_learner=self.online_learner,
+            trust_calibrator=self.trust_calibrator,
+            # Phase 7 & 8: Grounding & Graph-RAG
+            knowledge_base=self.knowledge_base,
+            graph_rag=self.graph_rag
         )
         
-        # Initialize LLM client based on available providers
-        self.client = None
-        self.provider = None
-        self._init_llm_client()
+        # Initialize UnifiedLLM
+        self.llm = UnifiedLLM()
+        self.provider = "unified"
+        # self.client removed in favor of UnifiedLLM
         
-        logger.info(f"BMSLLMAgent initialized with provider: {self.provider}")
+        logger.info(f"BMSLLMAgent initialized with UnifiedLLM")
         logger.info(f"Prompt layers available: {len(self.prompt_builder.LAYERS)}")
+        
+        # Phase 1: Start advisory scheduler for daily metrics
+        from agent_bms.advisory_scheduler import start_advisory_scheduler
+        self.advisory_scheduler = start_advisory_scheduler(
+            tracker=self.tracker,
+            calibrator=self.calibrator,
+            preference_learner=self.preference_learner
+        )
+        self.economy_policy = ToolEconomyPolicy()
+        logger.info("Advisory scheduler and ToolEconomyPolicy initialized")
     
-    def _init_llm_client(self):
-        """Initialize the LLM client from available providers"""
+    # _init_llm_client removed
         
         # Try providers in order of preference
         providers = [
+            ("k2think", "K2THINK_API_KEY"),  # Priority for Ops Copilot
             ("groq", "GROQ_API_KEY"),
             ("openrouter", "OPENROUTER_API_KEY"),
             ("openai", "OPENAI_API_KEY"),
@@ -154,7 +256,18 @@ class BMSLLMAgent:
             api_key = os.getenv(env_key)
             if api_key:
                 try:
-                    if provider_name == "groq":
+                    if provider_name == "k2think":
+                        from openai import OpenAI
+                        self.client = OpenAI(
+                            api_key=api_key,
+                            base_url="https://api.k2think.ai/v2"
+                        )
+                        self.provider = "k2think"
+                        self.model = os.getenv("K2THINK_MODEL", DEFAULT_ENGLISH_MODEL)
+                        logger.info(f"Using K2-Think with model: {self.model}")
+                        return
+
+                    elif provider_name == "groq":
                         from openai import OpenAI
                         self.client = OpenAI(
                             api_key=api_key,
@@ -205,61 +318,154 @@ class BMSLLMAgent:
         arabic_chars = sum(1 for c in text if '\u0600' <= c <= '\u06FF')
         return "ar" if arabic_chars > len(text) * 0.3 else "en"
     
-    def _get_system_prompt(self, language: str) -> str:
-        """Get system prompt for the detected language"""
-        return self.system_prompt_ar if language == "ar" else self.system_prompt_en
+    async def _get_dynamic_context(self, query: str, language: str) -> BMSContext:
+        """Populate BMSContext with real-time advisor history and site status."""
+        is_arabic = (language == "ar")
+        query_type = "general"
+        if any(w in query.lower() for w in ["alarm", "fault", "failure"]): query_type = "alarm"
+        elif any(w in query.lower() for w in ["energy", "kwh", "cost"]): query_type = "energy"
+        elif "gsas" in query.lower(): query_type = "gsas"
+        
+        # Pull history from tracker (Titan Memory)
+        recent_recs = self.tracker.get_recent_recommendations(window_days=7)
+        history_summary = "No recent trends analyzed."
+        last_action = "No recent actions recorded."
+        
+        if recent_recs:
+            last_action = recent_recs[0].recommended_action.get("action", "unknown")
+            # Create a compact summary for the prompt
+            summary_parts = []
+            for r in recent_recs[:3]:
+                ts = datetime.fromtimestamp(r.timestamp).strftime("%m/%d %H:%M")
+                summary_parts.append(f"[{ts}] {r.recommended_action.get('action')}: {r.reasoning}")
+            history_summary = " | ".join(summary_parts)
+
+        # Get calibration & preferences from ACE
+        calibration = {}
+        if hasattr(self, 'trust_calibrator') and self.trust_calibrator:
+            try:
+                metrics = self.trust_calibrator.calculate_trust_metrics(window_days=7)
+                calibration['trust_calibration'] = {
+                    'description': f"Adoption Rate: {metrics.get('adoption_rate', 0):.1%}, Trust Score: {metrics.get('overall_trust_score', 0):.2f}",
+                    'weight_adjustment': metrics.get('overall_trust_score', 0)
+                }
+            except Exception as te:
+                logger.warning(f"Failed to pull trust metrics: {te}")
+                
+        if hasattr(self, 'preference_learner') and self.preference_learner:
+            try:
+                prefs = self.preference_learner.get_operator_preferences_summary("default")
+                for i, pref in enumerate(prefs.get('top_preferences', [])[:2]):
+                    calibration[f"operator_pref_{i}"] = {
+                        'description': f"Preference: {pref.get('preference', 'N/A')}",
+                        'weight_adjustment': 1.0
+                    }
+            except Exception as pe:
+                logger.warning(f"Failed to pull operator preferences: {pe}")
+        
+        return BMSContext(
+            building_id=getattr(self.bms_state, 'building_id', 'West Bay Tower'),
+            is_critical=any(w in query.lower() for w in ["critical", "emergency", "icu", "patient"]),
+            is_arabic=is_arabic,
+            query_type=query_type,
+            history_summary=history_summary,
+            last_action_taken=last_action,
+            active_calibration=calibration
+        )
+
+    async def _get_system_prompt(self, query: str, language: str) -> str:
+        """Get context-aware dynamic system prompt."""
+        ctx = await self._get_dynamic_context(query, language)
+        return self.prompt_builder.build_full_prompt(ctx)
     
+    def _verify_tool_adequacy(self, query: str, planned_tools: List[Dict[str, Any]], context: Optional[Dict] = None) -> List[Dict[str, Any]]:
+        """
+        External Verification Layer: Smart Economy Enforcement.
+        Uses learned utility to decide whether to intervene in the agent's plan.
+        """
+        query_lower = query.lower()
+        existing_tool_names = {t['tool'] for t in planned_tools}
+        forced_tools = []
+
+        # Use the Smart Policy to get the 'forced' set
+        if hasattr(self, 'economy_policy'):
+            # Detect urgency from context or query
+            urgency = "normal"
+            if context and context.get("is_critical"):
+                urgency = "critical"
+            elif any(w in query_lower for w in ["urgent", "emergency", "fire", "danger", "immediately"]):
+                urgency = "high"
+                
+            minimal_set = self.economy_policy.get_minimal_sufficient_set(query, context, urgency=urgency)
+            
+            # We ONLY force if the category is ENTIRELY missing
+            # E.g. if we need GSAS, we only force GSAS status if NEITHER gsas tool was planned.
+            for tool_name in minimal_set:
+                if tool_name not in existing_tool_names:
+                    # We check if a 'sibling' tool exists to avoid redundancy
+                    if tool_name == "get_gsas_status" and "get_gsas_improvement_priorities" in existing_tool_names: continue
+                    if tool_name == "analyze_energy" and "get_energy_anomalies" in existing_tool_names: continue
+                    
+                    forced_tools.append({"tool": tool_name, "args": {}})
+
+        # Deduplication logic
+        unique_forced = []
+        for t in forced_tools:
+            if t['tool'] not in existing_tool_names:
+                unique_forced.append(t)
+                existing_tool_names.add(t['tool'])
+
+        if unique_forced:
+            logger.warning(f"[VerificationLayer] ENFORCING TOOLS: {[t['tool'] for t in unique_forced]}")
+            planned_tools.extend(unique_forced)
+            
+        return planned_tools
+
     async def chat(self, query: str, context: Dict[str, Any] = None) -> ChatResponse:
         """
         Process a natural language query about BMS.
-        
-        Args:
-            query: User's question (English or Arabic)
-            context: Optional additional context
-            
-        Returns:
-            ChatResponse with text, tool results, etc.
         """
-        # Detect language
         language = self._detect_language(query)
-        system_prompt = self._get_system_prompt(language)
+        system_prompt = await self._get_system_prompt(query, language)
         
-        # Add context to prompt if provided
         if context:
-            context_str = json.dumps(context, indent=2)
-            system_prompt += f"\n\nCurrent Context:\n{context_str}"
-        
-        # Generate response based on provider
-        if self.provider == "fallback":
-            return self._fallback_response(query, language)
+            system_prompt += f"\n\nCurrent Context:\n{json.dumps(context)}"
         
         try:
-            # Get tool calls from LLM
-            tool_calls = await self._generate_tool_calls(system_prompt, query)
+            # 1. Normal Path (Intelligence)
+            tool_calls = await self._generate_tool_calls(query, language)
             
-            # Execute tools
+            # --- VERIFICATION LAYER (EXTERNAL ENFORCEMENT) ---
+            # "Trust but Verify" - Programmatically enforce tool checks for specific claims
+            tool_calls = self._verify_tool_adequacy(query, tool_calls, context)
+            # -------------------------------------------------
+            
             tool_results = []
             for tc in tool_calls:
                 result = await self.tool_handler.execute(tc["tool"], tc["args"])
-                tool_results.append({
-                    "tool": tc["tool"],
-                    "result": result
-                })
+                tool_results.append({"tool": tc["tool"], "result": result})
             
-            # If no tools called, get direct response
+            # --- DATA DRIVEN ECONOMY: Record Utility ---
+            if hasattr(self, 'economy_policy'):
+                site_type = context.get('site_type') if context else "Standard"
+                self.economy_policy.record_utility(query, site_type, tool_calls, [r['result'] for r in tool_results])
+
             if not tool_calls:
-                text = await self._generate_text_response(system_prompt, query)
+                text = await self._generate_text_response(query, language)
             else:
-                # Generate summary response from tool results
                 text = await self._summarize_tool_results(query, tool_results, language)
-                
-                # Log successful query for learning (Titans Update loop)
-                try:
-                    from agent_bms.learning.learning_engine import get_learning_engine
-                    learning = get_learning_engine()
-                    learning.log_query_success(query, tool_calls)
-                except Exception as le:
-                    logger.debug(f"Learning engine log failed: {le}")
+
+            # 4. RECORD DECISION (Long Term Memory Update)
+            try:
+                self.tracker.log_recommendation(
+                    context={"query": query, "tools": [tc['tool'] for tc in tool_calls]},
+                    recommended_action={"action": text[:50] + "...", "raw_text": text},
+                    confidence=0.9,
+                    reasoning="Ops Copilot natural language interaction",
+                    building_id=getattr(self.bms_state, 'building_id', 'West Bay Tower')
+                )
+            except Exception as le:
+                logger.error(f"Failed to log decision to Skillbook: {le}")
             
             return ChatResponse(
                 text=text,
@@ -267,248 +473,155 @@ class BMSLLMAgent:
                 tool_results=tool_results,
                 confidence=0.9,
                 language=language,
-                sources=["BMS State Engine", "Ops Copilot"],
+                sources=["UnifiedLLM", "BMS Engines"],
             )
             
         except Exception as e:
-            logger.error(f"Chat error: {e}")
-            return ChatResponse(
-                text=f"I encountered an error processing your request: {str(e)}",
-                tool_calls=[],
-                tool_results=[],
-                confidence=0.0,
-                language=language,
-                sources=[],
-            )
-    
-    async def _generate_tool_calls(self, system_prompt: str, query: str) -> List[Dict]:
-        """Generate tool calls using the LLM"""
+            logger.error(f"LLM Path failed, triggering Edge Safeties: {e}")
+            # 2. EMERGENCY PATH (Edge Safeties / Heuristics)
+            return await self.run_edge_safeties(query, language)
+
+    async def run_edge_safeties(self, query: str, language: str) -> ChatResponse:
+        """
+        Heuristic-only fallback for critical equipment protection.
+        No LLM used. Zero narration. Safety only.
+        """
+        logger.warning("[BMSLLMAgent] RUNNING IN DEGRADED INTELLIGENCE MODE (EDGE SAFETIES)")
         
-        if self.provider == "gemini":
-            return await self._generate_gemini_tool_calls(system_prompt, query)
-        
-        elif self.client:
-            return await self._generate_openai_tool_calls(system_prompt, query)
-        
-        return []
-    
-    async def _generate_openai_tool_calls(self, system_prompt: str, query: str) -> List[Dict]:
-        """Generate tool calls using OpenAI-compatible API"""
+        # 1. Fetch current critical sensor state
+        # (Assuming we have access to bms_state)
+        vibration = 0.0
         try:
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": query}
-            ]
+            chiller_state = await self.tool_handler.execute("get_equipment_status", {"equipment_id": "CHILLER-01"})
+            vibration_str = str(chiller_state).split("Vibration: ")[1].split(" ")[0] if "Vibration" in str(chiller_state) else "0.0"
+            vibration = float(vibration_str)
+        except:
+            pass
             
-            # Convert tools to OpenAI format
-            openai_tools = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": tool["name"],
-                        "description": tool["description"],
-                        "parameters": tool["parameters"]
-                    }
-                }
-                for tool in self.tools
-            ]
-            
-            # Run in thread pool to make it async
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    tools=openai_tools,
-                    tool_choice="auto"
-                )
-            )
-            
-            if not response.choices:
-                return []
-            
-            message = response.choices[0].message
-            
-            if message.tool_calls:
-                return [
-                    {
-                        "tool": tc.function.name,
-                        "args": json.loads(tc.function.arguments)
-                    }
-                    for tc in message.tool_calls
-                ]
-            
-            return []
-            
-        except Exception as e:
-            logger.error(f"OpenAI tool generation failed: {e}")
-            return []
-    
-    async def _generate_gemini_tool_calls(self, system_prompt: str, query: str) -> List[Dict]:
-        """Generate tool calls using Gemini"""
+        # 2. Check Trends (Historical Evidence)
+        tes_score = 0.0
         try:
-            from google.generativeai import protos
+            from agent_cognitive.meta_cognition import MetaCognition
+            from agent.memory.orchestrator import MemoryOrchestrator
             
-            # Convert tools to Gemini format
-            gemini_tools = []
-            for tool in self.tools:
-                params = tool["parameters"]
-                properties = {}
-                
-                for prop_name, prop_def in params.get("properties", {}).items():
-                    prop_type = prop_def.get("type", "string").upper()
-                    properties[prop_name] = protos.Schema(
-                        type=getattr(protos.Type, prop_type, protos.Type.STRING),
-                        description=prop_def.get("description", "")
-                    )
-                
-                gemini_tools.append(protos.FunctionDeclaration(
-                    name=tool["name"],
-                    description=tool["description"],
-                    parameters=protos.Schema(
-                        type=protos.Type.OBJECT,
-                        properties=properties,
-                        required=params.get("required", [])
-                    )
-                ))
-            
-            chat = self.gemini_model.start_chat(history=[
-                {"role": "user", "parts": [system_prompt]}
-            ])
-            
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: chat.send_message(query)
-            )
-            
-            tool_calls = []
-            for part in response.parts:
-                if fn := part.function_call:
-                    args = {key: value for key, value in fn.args.items()}
-                    tool_calls.append({"tool": fn.name, "args": args})
-            
-            return tool_calls
-            
-        except Exception as e:
-            logger.error(f"Gemini tool generation failed: {e}")
-            return []
-    
-    async def _generate_text_response(self, system_prompt: str, query: str) -> str:
-        """Generate a text-only response (no tools)"""
-        
-        if self.provider == "gemini":
-            try:
-                chat = self.gemini_model.start_chat(history=[
-                    {"role": "user", "parts": [system_prompt]}
-                ])
-                loop = asyncio.get_event_loop()
-                response = await loop.run_in_executor(
-                    None,
-                    lambda: chat.send_message(query)
-                )
-                return response.text
-            except Exception as e:
-                logger.error(f"Gemini text generation failed: {e}")
-                return "I couldn't generate a response."
-        
-        elif self.client:
-            try:
-                messages = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": query}
-                ]
-                
-                loop = asyncio.get_event_loop()
-                response = await loop.run_in_executor(
-                    None,
-                    lambda: self.client.chat.completions.create(
-                        model=self.model,
-                        messages=messages,
-                    )
-                )
-                
-                if response.choices:
-                    return response.choices[0].message.content
-                return "I couldn't generate a response."
-                
-            except Exception as e:
-                logger.error(f"Text generation failed: {e}")
-                return "I couldn't generate a response."
-        
-        return "No LLM provider configured."
-    
-    async def _summarize_tool_results(
-        self, 
-        query: str, 
-        tool_results: List[Dict], 
-        language: str
-    ) -> str:
-        """Generate a natural language summary of tool results"""
-        
-        # Build context from tool results
-        results_str = json.dumps(tool_results, indent=2, default=str)
-        
-        summary_prompt = f"""Based on the following tool execution results, provide a concise, 
-helpful response to the user's question. Use the data provided to give specific information.
+            # Using same persist dir as orchestrator
+            memory = MemoryOrchestrator()
+            brain = MetaCognition("degraded_mode") # Use generic or passed ID
+            all_obs = memory.recall("vibration", memory_type="observation", limit=20)
+            tes_score = brain.get_trend_evidence_score(all_obs, "vibration", r"Vibration: ([\d.]+)")
+        except:
+            pass
 
-User Question: {query}
-
-Tool Results:
-{results_str}
-
-Respond in {'Arabic' if language == 'ar' else 'English'}. Be concise but informative.
-If there are any issues or alarms, highlight them clearly."""
+        # 3. Decision Matrix (BMS Constitution - Hardcoded)
+        action_text = "Standard operation."
+        tool_calls = []
+        confidence = 0.5
         
-        return await self._generate_text_response(
-            "You are a helpful BMS analyst. Summarize tool results for facility managers.",
-            summary_prompt
-        )
-    
-    def _fallback_response(self, query: str, language: str) -> ChatResponse:
-        """Fallback response when no LLM is available"""
-        
-        # Try to match query to a tool
-        query_lower = query.lower()
-        
-        if any(word in query_lower for word in ["alarm", "alert", "إنذار"]):
-            return ChatResponse(
-                text="To view alarms, I'll need to check the alarm engine. Please ensure an LLM provider is configured for full functionality.",
-                tool_calls=[{"tool": "get_active_alarms", "args": {}}],
-                tool_results=[],
-                confidence=0.5,
-                language=language,
-                sources=["Fallback Mode"],
-            )
-        
-        elif any(word in query_lower for word in ["chiller", "ahu", "equipment", "معدات"]):
-            return ChatResponse(
-                text="To check equipment status, I'll search the BMS state. Configure an LLM provider for natural language responses.",
-                tool_calls=[{"tool": "list_equipment", "args": {}}],
-                tool_results=[],
-                confidence=0.5,
-                language=language,
-                sources=["Fallback Mode"],
-            )
-        
-        elif any(word in query_lower for word in ["gsas", "compliance", "report"]):
-            return ChatResponse(
-                text="For GSAS compliance information, I can generate a report. Configure an LLM provider for detailed analysis.",
-                tool_calls=[{"tool": "get_gsas_status", "args": {}}],
-                tool_results=[],
-                confidence=0.5,
-                language=language,
-                sources=["Fallback Mode"],
-            )
-        
+        # Rule: Vibration Spike OR Rising Trend + High Value
+        if vibration > 4.0:
+            action_text = "🚨 DEGRADED MODE ALERT: CRITICAL VIBRATION DETECTED. RECOMMENDING EMERGENCY SHUTDOWN."
+            tool_calls = [{"tool": "emergency_shutdown", "args": {"equipment_id": "CHILLER-01", "reason": "Edge Safety Threshold Exceeded"}}]
+            confidence = 1.0
+        elif vibration > 2.5 and tes_score > 0.3:
+            action_text = "🚨 DEGRADED MODE ALERT: SUSTAINED VIBRATION DRIFT DETECTED. RECOMMENDING IMMEDIATE INSPECTION."
+            tool_calls = [{"tool": "schedule_maintenance", "args": {"equipment_id": "CHILLER-01", "priority": "CRITICAL"}}]
+            confidence = 0.85
+            
         return ChatResponse(
-            text="I'm running in fallback mode without an LLM provider. Please configure GROQ_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY for full functionality.",
+            text=action_text + " (Note: LLM Reasoning Unavailable - Fixed Safety Fallback Active)",
+            tool_calls=tool_calls,
+            tool_results=[],
+            confidence=confidence,
+            language=language,
+            sources=["Edge Safeties Heuristics"],
+        )
+
+    async def _generate_tool_calls(self, query: str, language: str) -> List[Dict[str, Any]]:
+        """
+        Generates tool calls using the specialized Tool Agent (Groq).
+        """
+        system_prompt = await self._get_system_prompt(query, language)
+        messages = [{"role": "user", "content": query}]
+        system_msgs = [{"content": system_prompt}]
+        
+        # Tools definitions
+        tools_def = [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool["description"],
+                    "parameters": tool["parameters"]
+                }
+            } 
+            for tool in self.tools
+        ]
+        
+        response = await self.llm.ask_tool(
+            messages=messages,
+            system_msgs=system_msgs,
+            tools=tools_def,
+            tool_choice="auto"
+        )
+        
+        if response.tool_calls:
+            return [
+                {
+                    "tool": tc.function.name,
+                    "args": json.loads(tc.function.arguments)
+                } 
+                for tc in response.tool_calls
+            ]
+        return []
+
+    async def _generate_text_response(self, query: str, language: str) -> str:
+        """
+        Generates a direct text response using the Reasoning Agent.
+        """
+        system_prompt = await self._get_system_prompt(query, language)
+        messages = [{"role": "user", "content": query}]
+        system_msgs = [{"content": system_prompt}]
+        
+        response = await self.llm.ask(
+            messages=messages,
+            system_msgs=system_msgs
+        )
+        return response.content or ""
+
+    async def _summarize_tool_results(self, query: str, tool_results: List[Dict], language: str) -> str:
+        """
+        Summarizes the tool execution results into a final answer.
+        """
+        # Brief result summary
+        results_text = json.dumps(tool_results, indent=2)
+        
+        prompt = f"""
+        User Query: {query}
+        
+        Tool Execution Results:
+        {results_text}
+        
+        Based on these results, provide the final response in JSON format as per the Output Rules.
+        """
+        
+        messages = [{"role": "user", "content": prompt}]
+        system_msgs = [{"content": await self._get_system_prompt(query, language)}]
+        
+        response = await self.llm.ask(
+            messages=messages,
+            system_msgs=system_msgs
+        )
+        return response.content or ""
+
+    def _fallback_response(self, query: str, language: str) -> ChatResponse:
+        """Legacy fallback - now deprecated in favor of edge safeties"""
+        return ChatResponse(
+            text="Service Temporarily Unavailable",
             tool_calls=[],
             tool_results=[],
             confidence=0.0,
             language=language,
-            sources=["Fallback Mode"],
+            sources=[]
         )
 
 

@@ -80,7 +80,9 @@ class BriefingItem:
     impact: Optional[str] = None
     action: Optional[str] = None
     cost_qar: Optional[float] = None
+    cost_qar: Optional[float] = None
     timestamp: Optional[datetime] = None
+    narrative: Optional[str] = None # Added for LLM summary
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -140,6 +142,7 @@ class Briefing:
     info: List[BriefingItem] = field(default_factory=list)
     context: Optional[TodayContext] = None
     recommendations: List[str] = field(default_factory=list)
+    narrative: Optional[str] = None # Added for LLM summary
     generated_at: datetime = field(default_factory=datetime.now)
     
     def to_dict(self) -> Dict[str, Any]:
@@ -307,9 +310,15 @@ class BriefingGenerator:
         
         self.weather_service = WeatherService()
         
+        self.llm_provider = None
+        
         logger.info(f"BriefingGenerator initialized for {building_id}")
+
+    def set_llm_provider(self, provider: Any) -> None:
+        """Set LLM provider for narrative generation."""
+        self.llm_provider = provider
     
-    def generate(self,
+    async def generate(self,
                  period: str = "overnight",
                  user_id: Optional[str] = None,
                  language: str = "en") -> Briefing:
@@ -345,6 +354,14 @@ class BriefingGenerator:
         # Generate recommendations
         recommendations = self._generate_recommendations(context, critical, attention)
         
+        # ─────────────────────────────────────────────────────────────────
+        # NARRATIVE UPGRADE
+        # Synthesize a cohesive executive summary using the Mind
+        # ─────────────────────────────────────────────────────────────────
+        narrative = None
+        if self.llm_provider:
+             narrative = await self._generate_narrative(context, critical, attention, wins)
+
         return Briefing(
             building_id=self.building_id,
             period=period_enum,
@@ -355,7 +372,42 @@ class BriefingGenerator:
             wins=wins,
             context=context,
             recommendations=recommendations,
+            narrative=narrative, # New field
         )
+
+    async def _generate_narrative(self, context: TodayContext, critical: List[BriefingItem], attention: List[BriefingItem], wins: List[BriefingItem]) -> str:
+        """Generate a cohesive narrative summary using LLM."""
+        if not self.llm_provider:
+            return None
+            
+        data_summary = {
+            "period": "overnight",
+            "critical_count": len(critical),
+            "attention_count": len(attention),
+            "wins_count": len(wins),
+            "weather": f"{context.outdoor_temp}C, {context.weather_condition}",
+            "top_issue": critical[0].title if critical else (attention[0].title if attention else "None"),
+        }
+        
+        prompt = f"""
+        Write a concise, professional executive summary for a Facility Manager's morning briefing.
+        Style: "Jarvis" from Iron Man but professional.
+        
+        Data:
+        {data_summary}
+        
+        Key Critical Issue: {data_summary['top_issue']}
+        
+        Context: The building is in Doha, Qatar.
+        
+        Output a single paragraph (max 3 sentences).
+        """
+        
+        try:
+             response = await self.llm_provider.chat([{"role": "user", "content": prompt}])
+             return response.content.strip()
+        except Exception:
+             return None
     
     def _get_period_hours(self, period: BriefingPeriod) -> int:
         """Get hours to look back for the period."""
@@ -565,7 +617,7 @@ class BriefingGenerator:
 # LLM TOOL HANDLER
 # =============================================================================
 
-def generate_briefing(
+async def generate_briefing(
     building_id: str = "default",
     period: str = "overnight",
     user_id: Optional[str] = None,
@@ -575,18 +627,18 @@ def generate_briefing(
     Generate an operations briefing.
     
     This is the LLM tool handler.
-    
-    Args:
-        building_id: Building identifier
-        period: "overnight", "daily", or "weekly"
-        user_id: User for personalization
-        language: "en" or "ar"
-        
-    Returns:
-        Complete briefing with critical issues, context, and recommendations
     """
     generator = BriefingGenerator(building_id)
-    briefing = generator.generate(
+    
+    # Inject Mind for narrative
+    try:
+        from agent_unified.llm import UnifiedLLM
+        llm = UnifiedLLM()
+        generator.set_llm_provider(llm)
+    except Exception:
+        pass
+
+    briefing = await generator.generate(
         period=period,
         user_id=user_id,
         language=language,

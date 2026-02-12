@@ -29,6 +29,8 @@ from agent.event_bus.event_bus import EventBus
 from agent_cognitive.memory_manager import MemoryManager
 from agent_cognitive.context_graph import ContextGraph
 from agent_cognitive.prediction_engine import PredictionEngine
+from agent_advisory.goal_generator import GoalGenerator, GoalDiscoveryEngine
+from agent_cognitive.meta_cognition import MetaCognition
 
 logger = logging.getLogger("arvis.cognitive")
 
@@ -58,7 +60,14 @@ class CognitiveLoop:
         self._bms_state = None
         self._alarm_engine = None
         self._energy_analyzer = None
+        self._energy_analyzer = None
         self._pm_engine = None
+        self._fleet_intelligence = None
+        
+        # New Agentic Engines
+        self.goal_generator = None
+        self.goal_discovery = None
+        self.meta_cognition = MetaCognition() # Always available (uses shared DB)
         
         self.running = False
         self.thread = None
@@ -79,13 +88,30 @@ class CognitiveLoop:
             from agent_bms.alarm_engine import AlarmEngine
             from agent_bms.energy_analyzer import EnergyAnalyzer
             from agent_bms.predictive_maintenance import PredictiveMaintenanceEngine
+            from agent_bms.fleet_intelligence import FleetIntelligence
             
             self._bms_state = BMSStateEngine()
             self._alarm_engine = AlarmEngine()
             self._energy_analyzer = EnergyAnalyzer()
             self._pm_engine = PredictiveMaintenanceEngine()
+            self._fleet_intelligence = FleetIntelligence()
             
-            logger.info("BMS engines initialized for commercial mode")
+            # Initialize Goal Discovery Stack
+            self.goal_generator = GoalGenerator(
+                fleet_intelligence=self._fleet_intelligence,
+                predictive_engine=self._pm_engine,
+                energy_analyzer=self._energy_analyzer,
+                world_model=None # Circular dep if we add WorldModel here, can inject later
+            )
+            
+            # Auto-discovery with 15 minute interval (900s)
+            self.goal_discovery = GoalDiscoveryEngine(
+                goal_generator=self.goal_generator,
+                event_bus=self.event_bus,
+                check_interval_seconds=900
+            )
+            
+            logger.info("BMS engines and Goal Discovery initialized for commercial mode")
         except ImportError as e:
             logger.warning(f"Could not initialize BMS engines: {e}")
 
@@ -278,7 +304,22 @@ class CognitiveLoop:
             maintenance = self._check_predictive_maintenance()
             suggestions.extend(maintenance)
         
-        # 5. Publish Insights
+        # 5. Proactive Goal Discovery (NEW)
+        if self.goal_discovery:
+            # Building ID is needed - assume context graph has it or default
+            building_id = self.dispatcher.config.get("building_id", "default")
+            new_goals = self.goal_discovery.run_discovery_cycle(building_id)
+            if new_goals:
+                logger.info(f"Discovered {len(new_goals)} proactive goals")
+        
+        # 6. Meta-Cognition Reflection (NEW)
+        # Reflect once per hour (roughly)
+        if int(time.time()) % 3600 < 300: # Simple probabilistic check or use timer
+             reflection = self.meta_cognition.reflect()
+             if reflection.get("calibration", {}).get("verdict") == "overconfident":
+                 logger.warning("Meta-Cognition: I am detecting overconfidence in my recent decisions.")
+
+        # 7. Publish Insights
         self._publish_suggestions(suggestions, source="ops_copilot")
 
     def _check_equipment_health(self) -> List[Dict[str, Any]]:

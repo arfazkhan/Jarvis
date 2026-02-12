@@ -118,9 +118,45 @@ class OpsCopilot:
         from agent_bms.learning.learning_engine import get_learning_engine
         self.learning_engine = get_learning_engine(interval_minutes=30)
         
+        # ═══════════════════════════════════════════════════════════════════════
+        # CONNECTING THE MIND (Tier 15 Integration)
+        # ═══════════════════════════════════════════════════════════════════════
+        
+        # Initialize the Cognitive Layer (The Mind)
+        # This brings in: 
+        # - World Model (Tier 11)
+        # - Online Learner / Autopoiesis (Tier 12)
+        # - Dreaming / Briefing Scheduler (Tier 13)
+        # - Tool Economy (Tier 10)
+        from agent_bms.bms_llm_agent import BMSLLMAgent
+        
+        logger.info("Initializing Cognitive Layer (BMSLLMAgent)...")
+        self.llm_agent = BMSLLMAgent(
+            bms_state=self.state_engine,
+            alarm_engine=self.alarm_engine,
+            energy_analyzer=self.energy_analyzer,
+            predictive_engine=self.predictive_engine,
+            # We pass the shared database if needed, but Agent usually handles its own memory
+        )
+        
+        # CONNECT MIND TO BODY (Smart Agency Upgrade)
+        # Give AlarmEngine access to the Mind for semantic root cause analysis
+        if hasattr(self.llm_agent, 'llm'):
+            self.alarm_engine.set_llm_provider(self.llm_agent.llm)
+        else:
+             logger.warning("BMSLLMAgent has no 'llm' attribute - Smart Alarms disabled")
+        
+        # Expose key cognitive components to OpsCopilot for direct access if needed
+        self.advisor = self.llm_agent.advisor
+        self.online_learner = self.llm_agent.online_learner
+        self.trust_calibrator = self.llm_agent.trust_calibrator
+        
+        # Note: shared learning_engine (Titans) is separate but compatible
+        
         # State
         self._running = False
         self._tasks = []
+        self.last_prediction = None  # For Cognitive Loop
         
         logger.info(f"OpsCopilot initialized in {mode} mode")
     
@@ -415,6 +451,41 @@ class OpsCopilot:
                 for point in points:
                     self.state_engine.update_point_sync(point)
                 
+                # ═══════════════════════════════════════════════════════════════════
+                # COGNITIVE LOOP (Tier 11 & 12 Activation)
+                # ═══════════════════════════════════════════════════════════════════
+                try:
+                    # 1. PERCEIVE
+                    current_state = await self.state_engine.get_current_values()
+                    
+                    # 2. VERIFY (Autopoiesis - Tier 12)
+                    # If the Mind predicted this moment, check if it was right
+                    if self.last_prediction:
+                        # Feed the error signal back to the Online Learner
+                        # This triggers self-repair if reality deviates from the mental model
+                        self.llm_agent.online_learner.log_observation(
+                            prediction=self.last_prediction,
+                            actual=current_state
+                        )
+
+                    # 3. ANTICIPATE (Predictive Survival - Tier 11)
+                    # Ask the Mind to dream the next time step
+                    # "What will happen in 30 seconds?"
+                    if hasattr(self.llm_agent, 'world_model'):
+                        trajectory = self.llm_agent.world_model.simulate_action(
+                            current_state=current_state,
+                            action="wait", # Passive observation
+                            horizon=1
+                        )
+                        if trajectory and trajectory.predicted_states:
+                            self.last_prediction = trajectory.predicted_states[0]
+                            
+                except Exception as cognitive_err:
+                    # Cognition should not crash the motor functions
+                    logger.warning(f"Cognitive Loop Glitch: {cognitive_err}")
+                    self.last_prediction = None
+                # ═══════════════════════════════════════════════════════════════════
+                
                 # Add energy readings to analyzer AND persist to database
                 for point in points:
                     if "KW" in point.point_id:
@@ -467,7 +538,7 @@ class OpsCopilot:
             severity=template[2],
         )
         
-        processed = self.alarm_engine.ingest_alarm(alarm)
+        processed = await self.alarm_engine.ingest_alarm(alarm)
         await self.state_engine.add_alarm(alarm)
         
         # Persist alarm to database
@@ -496,7 +567,10 @@ class OpsCopilot:
             alarm_engine=self.alarm_engine,
             energy_analyzer=self.energy_analyzer,
             predictive_engine=self.predictive_engine,
-            llm_agent=None,  # Would be connected to ARVIS LLMAgent
+
+            llm_agent=self.llm_agent,  # CONNECTED: The Mind is now attached to the API
+            advisor=self.advisor,  # Feedback loop
+            trust_calibrator=self.trust_calibrator,  # Trust metrics
         )
         
         config = uvicorn.Config(

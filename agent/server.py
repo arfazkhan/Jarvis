@@ -25,7 +25,10 @@ from agent.tools.executor import ToolExecutor
 from agent.learning.learning_engine import LearningEngine
 from agent.llm_agent.llm_agent import LLMAgent
 from agent.voice.transcriber import VoiceTranscriber
-from agent.voice.pipeline import VoicePipeline
+from agent.voice.transcriber import VoiceTranscriber
+from agent_unified.voice.coordinator import VoiceCoordinator
+# from agent.voice.pipeline import VoicePipeline # Replaced by Coordinator
+
 from agent.llm_agent.local_agent import LocalAgent
 from agent.llm_agent.hybrid_orchestrator import HybridOrchestrator
 
@@ -46,7 +49,8 @@ class SystemState:
     tool_executor: ToolExecutor
     learning_engine: LearningEngine
     llm_agent: LLMAgent
-    voice_pipeline: VoicePipeline
+    llm_agent: LLMAgent
+    voice: VoiceCoordinator
     local_agent: Optional[LocalAgent] = None
     hybrid_orchestrator: Optional[HybridOrchestrator] = None
 
@@ -90,14 +94,19 @@ async def lifespan(app: FastAPI):
     )
     arvis.learning_engine.tool_executor = arvis.tool_executor
     
-    # 4. Voice (For server, we might NOT need local mic/speaker, 
-    #    but we DO need the pipeline for processing incoming audio streams)
-    #    For now, we just init the pipeline for STT/TTS logic if needed server-side
-    tts_engine = os.environ.get("TTS_ENGINE", "vibevoice")
-    arvis.voice_pipeline = VoicePipeline(tts_engine=tts_engine)
-    # We don't call start() here because we might not want local playback
-    # But for now, let's allow it for debugging
-    arvis.voice_pipeline.start()
+    # 4. Voice Coordinator (Unified)
+    # This manages STT (Ears), Agent (Brain), and TTS (Mouth)
+    arvis.voice = VoiceCoordinator()
+    
+    # Start the voice loop (background)
+    # Note: verify if we want to auto-start listening or wait for API command
+    # await arvis.voice.start() 
+    # For now, let's start it to verify integration
+    try:
+        await arvis.voice.start()
+        logger.info("✅ Voice Coordinator started")
+    except Exception as e:
+         logger.error(f"❌ Voice Coordinator failed to start: {e}")
 
     # 5. Agents
     # Initialize LocalAgent (Qwen) - Optional for heavy servers
@@ -133,8 +142,8 @@ async def lifespan(app: FastAPI):
     
     # Cleanup
     logger.info("🛑 Shutting down...")
-    if arvis.voice_pipeline:
-        arvis.voice_pipeline.shutdown()
+    if hasattr(arvis, 'voice') and arvis.voice:
+        await arvis.voice.stop()
 
 # ═══════════════════════════════════════════════════════════
 # API APP

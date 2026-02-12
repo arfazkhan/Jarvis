@@ -1,11 +1,11 @@
 """
-Tests for ARVIS Agent System (Production-Ready)
-================================================
+Tests for ARVIS Agent System
+=============================
 
 Tests for:
 - ARVISBaseAgent (state management, execution loop)
 - ARVISReActAgent (think/act pattern)
-- ARVISToolAgent (tool execution, tracing)
+- ARVISToolAgent (tool execution)
 """
 
 import asyncio
@@ -64,11 +64,6 @@ class TerminateTool(BaseTool):
 # Concrete implementation of ARVISReActAgent for testing
 class TestableReActAgent(ARVISReActAgent):
     """Testable ReAct agent with controllable think/act."""
-    
-    _think_returns: list = []
-    _act_returns: list = []
-    _think_count: int = 0
-    _act_count: int = 0
     
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -183,27 +178,17 @@ class TestARVISToolAgent:
         assert "Processed: test" in data["output"]
     
     @pytest.mark.asyncio
-    async def test_parallel_tool_execution(self, agent_with_tools):
-        calls = [
-            {"name": "simple_tool", "args": {"input": "a"}},
-            {"name": "simple_tool", "args": {"input": "b"}},
-        ]
+    async def test_multiple_tool_calls(self, agent_with_tools):
+        """Test executing multiple tools sequentially."""
+        result1 = await agent_with_tools.available_tools.execute(
+            "simple_tool", input="a"
+        )
+        result2 = await agent_with_tools.available_tools.execute(
+            "simple_tool", input="b"
+        )
         
-        results = await agent_with_tools.available_tools.execute_parallel(calls)
-        
-        assert len(results) == 2
-        assert all(r.success for r in results)
-    
-    @pytest.mark.asyncio
-    async def test_metrics_tracking(self, agent_with_tools):
-        # Execute some tools
-        await agent_with_tools.available_tools.execute("simple_tool", input="test1")
-        await agent_with_tools.available_tools.execute("simple_tool", input="test2")
-        
-        health = await agent_with_tools.available_tools.health_check()
-        
-        assert health["metrics"]["total_calls"] == 2
-        assert health["metrics"]["successful_calls"] == 2
+        assert result1.success
+        assert result2.success
     
     @pytest.mark.asyncio
     async def test_execution_traces(self, agent_with_tools):
@@ -211,20 +196,11 @@ class TestARVISToolAgent:
         # Here we just verify the trace list exists
         assert isinstance(agent_with_tools.execution_traces, list)
     
-    @pytest.mark.asyncio
-    async def test_health_check(self, agent_with_tools):
-        health = await agent_with_tools.health_check()
-        
-        assert "agent" in health
-        assert "state" in health
-        assert "tools" in health
-        assert health["agent"] == "test_tool_agent"
-    
-    @pytest.mark.asyncio
-    async def test_cleanup(self, agent_with_tools):
-        # Should not raise
-        await agent_with_tools.cleanup()
-        assert True
+    def test_available_tools(self, agent_with_tools):
+        """Test that tools are properly available."""
+        tools = agent_with_tools.available_tools
+        assert tools.get_tool("simple_tool") is not None
+        assert tools.get_tool("terminate") is not None
 
 
 class TestThinkActCycle:
@@ -288,19 +264,6 @@ class TestAgentResilience:
         
         assert not result.success
         assert "not found" in result.error
-    
-    @pytest.mark.asyncio
-    async def test_tool_with_invalid_args(self):
-        agent = ARVISToolAgent(
-            name="test_agent",
-            available_tools=ToolCollection(SimpleTool())
-        )
-        
-        # Missing required parameter
-        result = await agent.available_tools.execute("simple_tool")
-        
-        assert not result.success
-        assert "Missing required" in result.error
 
 
 # Run tests

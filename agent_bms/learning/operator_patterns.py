@@ -199,11 +199,11 @@ class OperatorPatternStore:
         try:
             results = self.query_collection.query(
                 query_texts=[query],
-                n_results=min(k, self.query_collection.count())
+                n_results=k
             )
             
             patterns = []
-            if results and results.get('documents'):
+            if results and results['documents']:
                 for i, doc in enumerate(results['documents'][0]):
                     metadata = results['metadatas'][0][i] if results.get('metadatas') else {}
                     distance = results['distances'][0][i] if results.get('distances') else 1.0

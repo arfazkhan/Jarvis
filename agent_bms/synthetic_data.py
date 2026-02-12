@@ -452,7 +452,7 @@ class RealisticScenarioGenerator:
             results["data_points"].extend(data_points)
             
             # Check alarms
-            alarms = self._check_alarms()
+            alarms = await self._check_alarms()
             results["alarms"].extend(alarms)
             
             # Energy readings
@@ -580,13 +580,13 @@ class RealisticScenarioGenerator:
         
         return all_points
     
-    def _check_alarms(self) -> List[Dict]:
+    async def _check_alarms(self) -> List[Dict]:
         """Check equipment for alarm conditions"""
         alarms = []
         
         for ahu in self.ahus.values():
             for alarm in ahu.check_alarms():
-                processed = self.alarm_engine.ingest_alarm(alarm)
+                processed = await self.alarm_engine.ingest_alarm(alarm)
                 alarms.append(processed.to_dict())
         
         return alarms

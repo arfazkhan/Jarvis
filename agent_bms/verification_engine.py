@@ -50,6 +50,7 @@ class VerificationResult:
     expected_improvement_pct: float
     message: str
     timestamp: datetime = field(default_factory=datetime.now)
+    recommendation_id: Optional[str] = None  # Phase 1: Link to recommendation tracker
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -228,10 +229,13 @@ class MaintenanceVerifier:
     POST_MAINTENANCE_WINDOW_HOURS = 4
     MIN_STABLE_READINGS = 3
     
-    def __init__(self):
+    def __init__(self, recommendation_tracker=None):
         # Store pending work orders
         self.pending_verifications: Dict[str, Dict] = {}
         self.completed_verifications: List[VerificationResult] = []
+        
+        # Phase 1: Advisory System Integration
+        self.tracker = recommendation_tracker
         
         logger.info("MaintenanceVerifier initialized with %d task rules", 
                     len(VERIFICATION_RULES))
@@ -362,6 +366,36 @@ class MaintenanceVerifier:
         
         # Store for history
         self.completed_verifications.append(result)
+        
+        # Phase 1: Log outcome to advisory system
+        if self.tracker and hasattr(result, 'recommendation_id'):
+            # Map verification status to outcome quality
+            from agent_advisory.schemas import OutcomeQuality
+            
+            quality_map = {
+                VerificationStatus.VERIFIED: OutcomeQuality.EXCELLENT,
+                VerificationStatus.WEAK: OutcomeQuality.ACCEPTABLE,
+                VerificationStatus.FAILED: OutcomeQuality.POOR,
+                VerificationStatus.NO_DATA: OutcomeQuality.UNKNOWN,
+                VerificationStatus.UNKNOWN: OutcomeQuality.UNKNOWN,
+            }
+            
+            outcome_quality = quality_map.get(result.status, OutcomeQuality.UNKNOWN)
+            
+            # Log to tracker if there's a linked recommendation
+            self.tracker.log_outcome(
+                recommendation_id=result.recommendation_id,
+                actual_outcome={
+                    "work_order_id": work_order_id,
+                    "equipment_id": equipment_id,
+                    "task_type": task_type,
+                    "improvement_pct": improvement,
+                    "metric_name": metric_key,
+                    "value_before": val_before,
+                    "value_after": val_after,
+                },
+                outcome_quality=outcome_quality
+            )
         
         # Log
         logger.info(

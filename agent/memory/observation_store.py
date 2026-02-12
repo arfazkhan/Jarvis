@@ -78,7 +78,7 @@ class ObservationStore:
     
     def add(self, content: str, category: str = "general",
             importance: float = 0.5, ttl_hours: Optional[int] = None,
-            metadata: Optional[Dict] = None) -> str:
+            metadata: Optional[Dict] = None, timestamp: Optional[datetime] = None) -> str:
         """
         Add an observation.
         
@@ -88,28 +88,30 @@ class ObservationStore:
             importance: How important (0-1), affects decay
             ttl_hours: Custom TTL, or use default decay
             metadata: Additional data
+            timestamp: Optional explicit timestamp (for simulations)
             
         Returns:
             Observation ID
         """
-        obs_id = f"obs_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+        now = timestamp or datetime.now()
+        obs_id = f"obs_{now.strftime('%Y%m%d%H%M%S%f')}"
         
         # Calculate expiry based on importance
         if ttl_hours:
-            expires = datetime.now() + timedelta(hours=ttl_hours)
+            expires = now + timedelta(hours=ttl_hours)
         else:
             # Higher importance = longer retention
             adjusted_days = self.decay_days * (0.5 + importance)
-            expires = datetime.now() + timedelta(days=adjusted_days)
+            expires = now + timedelta(days=adjusted_days)
         
         meta_json = json.dumps(metadata) if metadata else None
         
         with self._get_connection() as conn:
             conn.execute("""
                 INSERT INTO observations 
-                (id, content, category, importance, expires_at, metadata)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (obs_id, content, category, importance, expires, meta_json))
+                (id, content, category, importance, created_at, expires_at, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (obs_id, content, category, importance, now.isoformat(), expires.isoformat(), meta_json))
             conn.commit()
         
         logger.debug(f"[ObservationStore] Added: {content[:50]}...")
@@ -167,15 +169,24 @@ class ObservationStore:
         return sorted(observations, key=lambda x: x['score'], reverse=True)
     
     def search(self, query: str, limit: int = 10) -> List[Dict]:
-        """Simple keyword search in observations."""
+        """Keyword search in observations (supports multi-word)."""
+        keywords = query.split()
+        if not keywords:
+            return []
+            
+        where_clause = " AND ".join(["content LIKE ?" for _ in keywords])
+        params = [f"%{k}%" for k in keywords]
+        params.append(datetime.now()) # for expires_at
+        params.append(limit)
+        
         with self._get_connection() as conn:
-            rows = conn.execute("""
+            rows = conn.execute(f"""
                 SELECT * FROM observations 
-                WHERE content LIKE ? 
+                WHERE ({where_clause})
                 AND (expires_at IS NULL OR expires_at > ?)
                 ORDER BY importance DESC, created_at DESC
                 LIMIT ?
-            """, (f"%{query}%", datetime.now(), limit)).fetchall()
+            """, params).fetchall()
         
         return [self._row_to_dict(row) for row in rows]
     

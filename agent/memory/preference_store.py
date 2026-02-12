@@ -158,6 +158,13 @@ class PreferenceStore:
             where=where_filter
         )
         
+        # DEBUG PRINT
+        if not (results and results['documents'] and results['documents'][0]):
+             logger.warning(f"[PreferenceStore] Query returned empty: {results}")
+             # Check if we should ignore context filter? No, user didn't ask.
+        else:
+             logger.info(f"[PreferenceStore] Query hits: {len(results['documents'][0])}")
+
         matches = []
         if results and results['documents']:
             for i, doc in enumerate(results['documents'][0]):

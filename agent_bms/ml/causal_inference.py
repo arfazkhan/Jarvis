@@ -42,31 +42,9 @@ except ImportError:
 
 
 # =============================================================================
-# EQUIPMENT TOPOLOGY (Prior Knowledge)
-# =============================================================================
-
 # Standard BMS equipment hierarchy
-# Parent → Child means parent failure affects child
-EQUIPMENT_HIERARCHY = {
-    # Chilled Water System
-    "chiller": ["chw_pump", "ahu"],
-    "chw_pump": ["ahu"],
-    "cooling_tower": ["chiller"],
-    "condenser_pump": ["cooling_tower"],
-    
-    # Air Handling
-    "ahu": ["vav", "fcu"],
-    "vav": ["room"],
-    "fcu": ["room"],
-    
-    # Hot Water System
-    "boiler": ["hw_pump", "ahu"],
-    "hw_pump": ["ahu"],
-    
-    # Electrical
-    "main_breaker": ["panel", "chiller", "ahu"],
-    "panel": ["vav", "fcu", "lighting"],
-}
+# MOVED TO agent_bms/graph.py
+# Using BMSGraph class for topology management
 
 # Common fault cascade patterns
 FAULT_CASCADES = {
@@ -155,9 +133,9 @@ class CausalInferenceEngine:
         self.bn_model: Optional[BayesianNetwork] = None
         self.inference_engine = None
         
-        # Equipment topology graph
-        self.equipment_graph: Dict[str, List[str]] = defaultdict(list)
-        self.reverse_graph: Dict[str, List[str]] = defaultdict(list)
+        # Equipment topology graph (Managed by BMSGraph)
+        from agent_bms.graph import BMSGraph
+        self.graph = BMSGraph()
         
         # Learned edge weights (strength of causal relationships)
         self.edge_weights: Dict[Tuple[str, str], float] = {}
@@ -165,19 +143,13 @@ class CausalInferenceEngine:
         # Alarm history for learning
         self.alarm_history: List[Dict[str, Any]] = []
         
-        # Initialize with domain knowledge
-        self._init_topology()
+        # self._init_topology() - No longer needed, graph initialized internally
         
         self.is_trained = False
         
         logger.info("CausalInferenceEngine initialized")
-    
-    def _init_topology(self) -> None:
-        """Initialize equipment topology from domain knowledge."""
-        for parent, children in EQUIPMENT_HIERARCHY.items():
-            for child in children:
-                self.equipment_graph[parent].append(child)
-                self.reverse_graph[child].append(parent)
+
+    # _init_topology removed as it is now handled by BMSGraph
     
     def add_alarm(self, alarm: Dict[str, Any]) -> None:
         """Add an alarm to history for structure learning."""
@@ -265,7 +237,9 @@ class CausalInferenceEngine:
             
             if support >= min_support:
                 # Check if topology supports this relationship
-                topology_weight = 1.0 if eq_b in self.equipment_graph.get(eq_a, []) else 0.5
+                # Use BMSGraph to check topological connection
+                downstream = self.graph.get_downstream(eq_a)
+                topology_weight = 1.0 if eq_b in downstream else 0.5
                 
                 self.edge_weights[(eq_a, eq_b)] = support * topology_weight
         
@@ -389,7 +363,7 @@ class CausalInferenceEngine:
         upstream_candidate = None
         for node in nodes:
             # Is this equipment upstream of others?
-            downstream_types = set(self.equipment_graph.get(node.equipment_type, []))
+            downstream_types = set(self.graph.get_downstream(node.equipment_type))
             observed_types = {n.equipment_type for n in nodes if n != node}
             
             if downstream_types & observed_types:

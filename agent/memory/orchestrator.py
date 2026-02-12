@@ -99,7 +99,8 @@ class MemoryOrchestrator:
     
     def remember(self, content: str, memory_type: str = "preference",
                  key: str = None, context: str = "general",
-                 importance: float = 0.7, **kwargs) -> str:
+                 importance: float = 0.7, timestamp: Optional[datetime] = None, 
+                 **kwargs) -> str:
         """
         Store a memory.
         
@@ -109,12 +110,13 @@ class MemoryOrchestrator:
             key: Key for preferences
             context: When this applies
             importance: How important (0-1)
+            timestamp: Optional explicit timestamp
             
         Returns:
             Memory ID
         """
         if memory_type == "preference":
-            key = key or f"auto_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            key = key or f"auto_{(timestamp or datetime.now()).strftime('%Y%m%d%H%M%S')}"
             return self.preferences.add(
                 content=content,
                 key=key,
@@ -125,9 +127,18 @@ class MemoryOrchestrator:
         elif memory_type == "observation":
             return self.observations.add(
                 content=content,
-                category=context,
+                category=context or "routine",
                 importance=importance,
-                metadata=kwargs
+                metadata=kwargs,
+                timestamp=timestamp
+            )
+        elif memory_type == "behavior":
+            return self.observations.add(
+                content=content,
+                category="behavior",
+                importance=importance,
+                metadata=kwargs,
+                timestamp=timestamp
             )
         else:
             raise ValueError(f"Unknown memory type: {memory_type}")
@@ -147,13 +158,21 @@ class MemoryOrchestrator:
         """
         results = []
         
+        # DEBUG: Trace call
+        print(f"[DEBUG] MemoryOrchestrator.recall called with query='{query}', memory_type='{memory_type}'")
+        
+        # Normalize memory_type to plural if singular
+        if memory_type == "preference": memory_type = "preferences"
+        if memory_type == "observation": memory_type = "observations"
+        if memory_type == "behavior": memory_type = "behaviors"
+        
         if memory_type in ("preferences", "all"):
             pref_matches = self.preferences.search(query, limit=limit)
             for match in pref_matches:
                 match['memory_type'] = 'preference'
                 results.append(match)
         
-        if memory_type in ("observations", "all"):
+        if memory_type in ("observations", "behaviors", "all"):
             obs_matches = self.observations.search(query, limit=limit)
             for match in obs_matches:
                 match['memory_type'] = 'observation'
@@ -262,13 +281,57 @@ class MemoryOrchestrator:
     # ==================== Maintenance ====================
     
     def cleanup(self):
-        """Run maintenance tasks."""
-        # Clean up expired observations
-        expired = self.observations.cleanup_expired()
-        if expired:
-            logger.info(f"[MemoryOrchestrator] Cleaned up {expired} expired items")
-    
-    def get_stats(self) -> Dict:
+        """Prune expired observations."""
+        self.observations.cleanup()
+        logger.info("[MemoryOrchestrator] Cleanup completed.")
+
+    def summarize_history(self, query: str, limit: int = 10) -> str:
+        """
+        Retrieves recent observations and generates a trend summary.
+        """
+        try:
+            from agent.memory.summarizer import MemorySummarizer
+            
+            # 1. Recall relevant observations
+            obs = self.recall(query, memory_type="observations", limit=limit)
+            
+            # 1b. Explicitly ensure latest GROUND TRUTH is included
+            gts = self.recall("GROUND TRUTH", memory_type="observations", limit=3)
+            # Merge and deduplicate
+            seen_ids = {o.get('id') for o in obs}
+            for gt in gts:
+                if gt.get('id') not in seen_ids:
+                    obs.append(gt)
+            
+            # 2. Define patterns we care about for BMS
+            patterns = {
+                "vibration": r"Vibration: ([\d.]+)",
+                "efficiency": r"Efficiency: ([\d.]+)",
+                "zone temperature": r"Zone Temp ([\d.]+)",
+                "power": r"Power: ([\d.]+)"
+            }
+            
+            # 3. Generate Summary
+            trend_text = MemorySummarizer.extract_numerical_trends(obs, patterns)
+            conflict_text = MemorySummarizer.summarize_conflicts(obs)
+            
+            return f"{trend_text}\n{conflict_text}".strip()
+            
+        except Exception as e:
+            logger.error(f"[MemoryOrchestrator] Summary failed: {e}")
+            return "Unable to generate history summary."
+
+    def get_inaction_count(self, query: str = "vibration") -> int:
+        """Returns the number of cycles a specific recommendation has been ignored."""
+        try:
+            from agent.memory.summarizer import MemorySummarizer
+            obs = self.recall(query, memory_type="observations", limit=15)
+            streak = MemorySummarizer.detect_inaction_streak(obs)
+            return streak['count'] if streak else 0
+        except:
+            return 0
+
+    def get_stats(self) -> Dict[str, Any]:
         """Get memory system statistics."""
         return {
             "preferences_count": len(self.preferences.list_all()),
