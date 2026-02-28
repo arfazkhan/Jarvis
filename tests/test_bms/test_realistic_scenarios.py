@@ -12,17 +12,17 @@ import asyncio
 import numpy as np
 from datetime import datetime, timedelta
 
-from agent_bms.synthetic_data import (
+from agent_commercial.synthetic_data import (
     RealisticScenarioGenerator,
     QatarClimateModel,
     BuildingModel,
     ChillerModel,
 )
-from agent_bms.bms_data_model import AlarmSeverity
-from agent_bms.predictive_maintenance import PredictiveMaintenanceEngine, EquipmentFeatures
-from agent_bms.energy_analyzer import EnergyAnalyzer, EnergyReading
-from agent_bms.alarm_engine import AlarmEngine
-from agent_bms.gsas_reporter import GSASReporter, GSASStarRating
+from agent_commercial.bms_data_model import AlarmSeverity
+from agent_commercial.predictive_maintenance import PredictiveMaintenanceEngine, EquipmentFeatures
+from agent_commercial.energy_analyzer import EnergyAnalyzer, EnergyReading
+from agent_commercial.alarm_engine import AlarmEngine
+from agent_commercial.gsas_reporter import GSASReporter, GSASStarRating
 
 
 class TestQatarClimateModel:
@@ -392,7 +392,7 @@ class TestAlarmEngineIntegration:
         engine = AlarmEngine()
         
         # Set up topology
-        from agent_bms.bms_data_model import Equipment, EquipmentType
+        from agent_commercial.bms_data_model import Equipment, EquipmentType
         
         equipment = [
             Equipment(
@@ -416,7 +416,7 @@ class TestAlarmEngineIntegration:
         ]
         engine.set_equipment_topology(equipment)
         
-        from agent_bms.bms_data_model import Alarm
+        from agent_commercial.bms_data_model import Alarm
         
         now = datetime.now()
         

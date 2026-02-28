@@ -8,7 +8,7 @@ from pathlib import Path
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 from agent_cognitive.cognitive_loop import CognitiveLoop
 from agent_cognitive.context_graph import ContextGraph
 

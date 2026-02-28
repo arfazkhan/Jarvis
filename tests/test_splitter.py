@@ -2,7 +2,7 @@
 import sys
 import os
 sys.path.insert(0, os.getcwd())
-from agent.voice.vibevoice_engine import SentenceSplitter
+from agent_home.voice.vibevoice_engine import SentenceSplitter
 
 def test_splitter():
     splitter = SentenceSplitter()

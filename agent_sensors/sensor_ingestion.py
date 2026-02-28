@@ -6,7 +6,7 @@ Ingests raw sensor events, validates them, and publishes normalized events.
 
 import time
 from typing import Dict, Any, Optional
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 from agent_sensors.sensor_models import SensorEvent
 from agent_sensors.sensor_registry import SensorRegistry
 

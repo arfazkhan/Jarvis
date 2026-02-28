@@ -7,8 +7,8 @@ import os
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from agent.agent_cognitive.proactive_engine import ProactiveEngine
-from agent.event_bus.event_bus import EventBus
+from agent_home.agent_cognitive.proactive_engine import ProactiveEngine
+from arvis_core.event_bus.event_bus import EventBus
 
 class TestProactiveEngine(unittest.TestCase):
     def setUp(self):

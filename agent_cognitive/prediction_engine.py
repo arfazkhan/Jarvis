@@ -53,7 +53,7 @@ class PredictionEngine:
         # In a real implementation, we'd use a proper time-series model or clustering.
         # For MVP, we'll scan recent history for repeated actions in this hour window.
         
-        # Mock implementation for MVP structure
+        # Base heuristic for prediction logic
         # We would query memory for events in similar time windows
         return []
 

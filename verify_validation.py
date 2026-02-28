@@ -8,8 +8,8 @@ logger = logging.getLogger("ValidationTest")
 
 load_dotenv()
 
-from agent.event_bus.event_bus import EventBus
-from agent.llm_agent.llm_agent import LLMAgent, TOOLS_SCHEMA
+from arvis_core.event_bus.event_bus import EventBus
+from agent_home.llm_agent.llm_agent import LLMAgent, TOOLS_SCHEMA
 
 # Setup Mock classes
 class MockStateEngine:

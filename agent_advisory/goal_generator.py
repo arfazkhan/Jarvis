@@ -12,13 +12,18 @@ such as "Prevent Chiller Failure" or "Reduce Energy Waste by 15%".
 import logging
 import uuid
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
 from datetime import datetime, timedelta
 
 # Import data models from other engines
-from agent_bms.fleet_intelligence import FleetIntelligence, BenchmarkResult
-from agent_bms.predictive_maintenance import PredictiveMaintenanceEngine, FailurePrediction
-from agent_bms.energy_analyzer import EnergyAnalyzer, WastePattern
+from agent_commercial.fleet_intelligence import FleetIntelligence, BenchmarkResult
+from agent_commercial.predictive_maintenance import PredictiveMaintenanceEngine, FailurePrediction
+from agent_commercial.energy_analyzer import EnergyAnalyzer, WastePattern
+
+if TYPE_CHECKING:
+    from agent_advisory.memory_conflict_resolver import MemoryConflictResolver
+    from agent_advisory.terminal_advisory import TerminalAdvisoryEngine
+    from agent_advisory.trust_governor import TrustGovernor
 
 logger = logging.getLogger("arvis.advisory.goals")
 
@@ -55,6 +60,9 @@ class ProactiveGoal:
     
     # Simulation Result (Phase 4: World Model)
     simulated_impact: Dict[str, Any] = field(default_factory=dict) # E.g., {"confidence": 0.85, "predicted_utility": 45.2}
+    
+    # Memory Conflict Annotations (Phase 5: Conflict Resolution)
+    memory_conflicts: List[Dict[str, Any]] = field(default_factory=list)
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -130,13 +138,21 @@ class GoalGenerator:
         fleet_intelligence: Optional[FleetIntelligence] = None,
         predictive_engine: Optional[PredictiveMaintenanceEngine] = None,
         energy_analyzer: Optional[EnergyAnalyzer] = None,
-        world_model: Optional[Any] = None # Avoiding circular import or using WorldModel type
+        world_model: Optional[Any] = None, # Avoiding circular import or using WorldModel type
+        memory_resolver: Optional["MemoryConflictResolver"] = None,
+        terminal_engine: Optional["TerminalAdvisoryEngine"] = None,
+        trust_governor: Optional["TrustGovernor"] = None
     ):
         self.fleet = fleet_intelligence
         self.predictive = predictive_engine
         self.energy = energy_analyzer
         self.world_model = world_model
+        self.memory_resolver = memory_resolver
+        self.terminal_engine = terminal_engine
+        self.trust_governor = trust_governor
         self.scorer = GoalScorer()
+        self._last_resolution = None  # Cache for briefing access
+        self._last_terminal_advisory = None  # Cache for briefing access
         
     def generate_goals(self, building_id: str) -> List[ProactiveGoal]:
         """
@@ -165,9 +181,12 @@ class GoalGenerator:
         # 4. Filter and Validate with World Model (if available)
         if self.world_model:
             # We assume current building state can be retrieved
-            # For this prototype: Assume building_id has a current state we can mock
-            # In production: self.world_model.transition_model.fe.get_current_state(building_id)
-            current_state = {"total_power_kw": 450, "zone_temp_avg_c": 24.0, "outdoor_temp_c": 42.0}
+            current_state = {"total_power_kw": 0, "zone_temp_avg_c": 23.0, "outdoor_temp_c": 35.0} # fallback
+            if hasattr(self.world_model, "get_current_state"):
+                try:
+                    current_state = self.world_model.get_current_state(building_id)
+                except Exception:
+                    pass
             
             for goal in goals:
                 if goal.suggested_actions:
@@ -187,7 +206,76 @@ class GoalGenerator:
                         goal.score *= 0.5
                         goal.priority = "medium" if goal.priority == "high" else "low"
 
-        # Sort by score (descending)
+        # 5. Memory Conflict Resolution (if resolver available)
+        if self.memory_resolver:
+            try:
+                resolution = self.memory_resolver.resolve_conflicts(goals, building_id)
+                self._last_resolution = resolution
+                goals = resolution.resolved_goals
+                
+                # Annotate surviving goals with any related conflicts
+                conflict_map = {}
+                for conflict in resolution.conflicts:
+                    conflict_map.setdefault(conflict.winner_id, []).append(conflict.to_dict())
+                
+                for goal in goals:
+                    if goal.goal_id in conflict_map:
+                        goal.memory_conflicts = conflict_map[goal.goal_id]
+                
+                logger.info(
+                    f"[GOALS] Conflict resolution: {resolution.original_count} → {len(goals)} goals, "
+                    f"entropy={resolution.entropy_level.value}"
+                )
+            except Exception as e:
+                logger.error(f"[GOALS] Conflict resolution failed (proceeding without): {e}")
+        
+        # 6. Terminal Advisory Evaluation (non-suppressible)
+        if self.terminal_engine:
+            try:
+                # Get current building state from world model or default
+                building_state = {}
+                if self.world_model:
+                    building_state = getattr(self.world_model, '_current_state', {})
+
+                advisory = self.terminal_engine.evaluate(building_state, building_id)
+                self._last_terminal_advisory = advisory
+
+                if advisory:
+                    from agent_advisory.terminal_advisory import AdvisorySeverity
+                    # Inject TERMINAL goal at top of list — cannot be suppressed
+                    terminal_goal = ProactiveGoal(
+                        goal_id=f"TERMINAL-{advisory.advisory_id[:8]}",
+                        title=f"⛔ TERMINAL ADVISORY: {advisory.severity.value.upper()}",
+                        description=advisory.summary,
+                        goal_type="safety",
+                        priority="critical",
+                        confidence=1.0,  # Terminal = certainty
+                        score=1.0,       # Always top priority
+                        source="terminal_advisory_engine",
+                        suggested_actions=[{
+                            "action": "acknowledge_terminal_advisory",
+                            "advisory_id": advisory.advisory_id,
+                            "severity": advisory.severity.value,
+                            "time_to_breach_hours": advisory.time_to_breach_hours,
+                            "affected_equipment": advisory.affected_equipment,
+                        }],
+                    )
+                    goals.insert(0, terminal_goal)  # Always first
+                    logger.warning(
+                        f"[GOALS] ⛔ Terminal advisory injected: {advisory.severity.value.upper()} "
+                        f"(active {advisory.active_duration_str})"
+                    )
+            except Exception as e:
+                logger.error(f"[GOALS] Terminal advisory evaluation failed: {e}")
+
+        # 7. Trust-Weighted Reasoning (confidence dampening + proactive throttle)
+        if self.trust_governor:
+            try:
+                goals = self.trust_governor.apply_to_goals(goals, building_id)
+            except Exception as e:
+                logger.error(f"[GOALS] Trust governor failed (proceeding without): {e}")
+
+        # Sort by score (descending) — TERMINAL goal stays at top (score=1.0)
         goals.sort(key=lambda g: g.score, reverse=True)
         
         return goals
@@ -211,24 +299,40 @@ class GoalGenerator:
                 
             # Get latest features
             history = self.predictive.equipment_history.get(eq_id)
-            if not history:
+            if not history or not len(history):
                 continue
                 
-            latest_features = history[-1]
+            try:
+                # Handle both list and dict-like indexing
+                latest_features = history[-1] if isinstance(history, list) else list(history.values())[-1]
+            except (IndexError, KeyError, AttributeError):
+                continue
             
             # Predict
             prediction = self.predictive.predict_failure(eq_id, latest_features)
             
-            if prediction.risk_level in ["critical", "high"]:
+            # Defensive check for prediction result format (handle both objects and dicts)
+            risk_level = getattr(prediction, 'risk_level', None)
+            if risk_level is None and isinstance(prediction, dict):
+                risk_level = prediction.get('risk_level') or prediction.get('risk')
+            
+            if risk_level in ["critical", "high"]:
                 goal_id = str(uuid.uuid4())
                 
-                # Calculate urgency based on RUL
-                rul = prediction.predicted_rul_days
-                urgency = max(1, rul) if rul != -1 else (3 if prediction.risk_level == "critical" else 14)
+                # Get RUL from object or dict
+                rul = getattr(prediction, 'predicted_rul_days', -1)
+                if rul == -1 and isinstance(prediction, dict):
+                    rul = prediction.get('predicted_rul_days') or prediction.get('window_days', -1)
+
+                urgency = max(1, rul) if rul != -1 else (3 if risk_level == "critical" else 14)
                 
                 # Calculate potential impact (avoided cost of failure)
-                # Placeholder: Critical failure costs QAR 20,000 to fix vs QAR 2,000 maintenance
-                avoided_cost = 18000 
+                avoided_cost = getattr(prediction, 'estimated_replacement_cost_qar', None)
+                if not avoided_cost and isinstance(prediction, dict):
+                    avoided_cost = prediction.get('estimated_replacement_cost_qar')
+                if not avoided_cost:
+                    # Fallback heuristic based on risk
+                    avoided_cost = 25000.0 if risk_level == "critical" else 5000.0
                 
                 score = self.scorer.calculate_score(
                     goal_type="risk_mitigation",
@@ -313,8 +417,8 @@ class GoalGenerator:
                     # Estimate savings (rough)
                     savings = 0.0
                     if opp['metric'] == 'eui':
-                        # EUI gap * size * rate (simplified)
-                        savings = 50000 # Placeholder for calculated savings
+                        # EUI gap * area (assume 10k sqm) * rate (0.05 QAR/kWh)
+                        savings = abs(opp['gap']) * 10000 * 0.05
                         
                     score = self.scorer.calculate_score(
                         goal_type="optimization",

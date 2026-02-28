@@ -23,8 +23,8 @@ from agent_advisory import RecommendationTracker, TrustCalibrator, PreferenceLea
 from agent_advisory.schemas import OutcomeQuality, RecommendationStatus
 
 # BMS components
-from agent_bms.bms_llm_agent import BMSLLMAgent
-from agent_bms.verification_engine import MaintenanceVerifier, VerificationStatus
+from agent_commercial.bms_llm_agent import BMSLLMAgent
+from agent_commercial.verification_engine import MaintenanceVerifier, VerificationStatus
 
 
 class TestPhase1Integration:
@@ -232,7 +232,7 @@ class TestPhase1Integration:
                 )
             
             # Manually trigger metrics calculation (like scheduler would)
-            from agent_bms.advisory_scheduler import AdvisoryScheduler
+            from agent_commercial.advisory_scheduler import AdvisoryScheduler
             
             scheduler = AdvisoryScheduler(tracker, calibrator, preference_learner)
             

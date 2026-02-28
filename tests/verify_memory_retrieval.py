@@ -21,7 +21,7 @@ init()
 
 import gc
 import time
-from agent.memory.orchestrator import MemoryOrchestrator
+from arvis_core.memory.orchestrator import MemoryOrchestrator
 
 # Configure Logging
 # Enable INFO logs for agent.memory to see initialization status (Chroma vs Fallback)

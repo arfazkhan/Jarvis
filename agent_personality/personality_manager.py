@@ -8,7 +8,7 @@ Manages current persona, computes context, and integrates emotion.
 from typing import Dict, Any, Optional
 import time
 
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 from agent_sensors.sensor_models import HomeSituation, EmotionalState
 from agent_personality.persona_profiles import PersonaProfiles, Persona
 from agent_personality.emotion_engine import EmotionEngine

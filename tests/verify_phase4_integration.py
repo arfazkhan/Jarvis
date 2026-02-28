@@ -5,8 +5,8 @@ from unittest.mock import MagicMock
 from datetime import datetime
 
 # Import components
-from agent_bms.bms_llm_agent import BMSLLMAgent
-from agent_bms.predictive_maintenance import FailurePrediction
+from agent_commercial.bms_llm_agent import BMSLLMAgent
+from agent_commercial.predictive_maintenance import FailurePrediction
 from agent_advisory.goal_generator import ProactiveGoal
 
 # Configure logging
@@ -75,7 +75,7 @@ async def test_phase4_integration():
     # But does BMSToolHandler automatically pick up methods from the passed objects?
     # Usually it needs updates. I suspect I missed updating BMSToolHandler in verify_phase2_integration.py
     # or wherever it lives (it lives in tools_schema.py usually or a separate file).
-    # Ah, 'from agent_bms.tools_schema import get_bms_tools, BMSToolHandler'
+    # Ah, 'from agent_commercial.tools_schema import get_bms_tools, BMSToolHandler'
     
     # So I need to update BMSToolHandler in tools_schema.py to handle 'check_goals' etc.
     # Let's assume for now I will fix this. I'll write the test to EXPECT success.

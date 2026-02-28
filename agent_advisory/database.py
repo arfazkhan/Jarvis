@@ -6,10 +6,12 @@ Manages SQLite database for recommendations and trust metrics.
 """
 
 import sqlite3
+import aiosqlite
+import asyncio
 import logging
 from pathlib import Path
-from typing import Optional
-from contextlib import contextmanager
+from typing import Optional, List, Dict, Any
+from contextlib import asynccontextmanager
 
 logger = logging.getLogger("arvis.advisory.database")
 
@@ -31,17 +33,27 @@ class AdvisoryDatabase:
             db_path = str(base_path / "advisory.db")
         
         self.db_path = db_path
-        self._init_database()
+        self._async_conn: Optional[aiosqlite.Connection] = None
+        self._lock = asyncio.Lock()
+        
+        # We can't await in __init__, so we'll ensure init'd on first connection
+        self._initialized = False
+        
         logger.info(f"Advisory database initialized at {db_path}")
     
-    def _init_database(self):
-        """Create tables if they don't exist"""
+    async def _ensure_initialized(self):
+        """Ensure database schema is created"""
+        async with self._lock:
+            if not self._initialized:
+                await self._init_database()
+                self._initialized = True
+
+    async def _init_database(self):
+        """Create tables if they don't exist (Async)"""
         
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            
+        async with self.get_async_connection() as conn:
             # Recommendations table
-            cursor.execute("""
+            await conn.execute("""
                 CREATE TABLE IF NOT EXISTS recommendations (
                     id TEXT PRIMARY KEY,
                     timestamp REAL NOT NULL,
@@ -67,7 +79,7 @@ class AdvisoryDatabase:
             """)
             
             # Trust metrics table
-            cursor.execute("""
+            await conn.execute("""
                 CREATE TABLE IF NOT EXISTS trust_metrics (
                     date TEXT PRIMARY KEY,
                     total_recommendations INTEGER,
@@ -89,7 +101,7 @@ class AdvisoryDatabase:
             """)
             
             # Operator preferences table (SQLite fallback for ChromaDB)
-            cursor.execute("""
+            await conn.execute("""
                 CREATE TABLE IF NOT EXISTS operator_preferences (
                     id TEXT PRIMARY KEY,
                     timestamp REAL NOT NULL,
@@ -108,7 +120,7 @@ class AdvisoryDatabase:
             """)
             
             # Tool Economy Trajectories table
-            cursor.execute("""
+            await conn.execute("""
                 CREATE TABLE IF NOT EXISTS economy_trajectories (
                     id TEXT PRIMARY KEY,
                     timestamp REAL NOT NULL,
@@ -123,86 +135,95 @@ class AdvisoryDatabase:
             """)
             
             # Create indices for performance
-            cursor.execute("""
+            await conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_econ_query 
                 ON economy_trajectories(query)
             """)
             
-            cursor.execute("""
+            await conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_rec_status 
                 ON recommendations(status)
             """)
             
-            cursor.execute("""
+            await conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_rec_operator 
                 ON recommendations(operator_id)
             """)
             
-            cursor.execute("""
+            await conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_rec_building 
                 ON recommendations(building_id)
             """)
             
-            cursor.execute("""
+            await conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_pref_operator 
                 ON operator_preferences(operator_id)
             """)
             
-            cursor.execute("""
+            await conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_pref_context 
                 ON operator_preferences(context_type)
             """)
             
-            conn.commit()
-            logger.info("Database schema initialized successfully")
+            await conn.commit()
+            logger.info("Advisory database schema initialized successfully")
     
-    @contextmanager
-    def get_connection(self):
-        """Context manager for database connection"""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row  # Return rows as dictionaries
-        try:
-            yield conn
-        finally:
-            conn.close()
-    
-    def execute(self, query: str, params: tuple = ()):
-        """Execute a single query"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(query, params)
-            conn.commit()
+    @asynccontextmanager
+    async def get_async_connection(self):
+        """Context manager for asynchronous database connection with WAL mode enabled"""
+        async with self._lock:
+            if self._async_conn is None:
+                self._async_conn = await aiosqlite.connect(self.db_path)
+                self._async_conn.row_factory = aiosqlite.Row
+                
+                # Enable WAL mode for high concurrency
+                try:
+                    await self._async_conn.execute("PRAGMA journal_mode=WAL")
+                    await self._async_conn.execute("PRAGMA synchronous=NORMAL")
+                except Exception as e:
+                    logger.warning(f"Failed to enable WAL mode in Advisory async: {e}")
+            
+            yield self._async_conn
+
+    async def execute(self, query: str, params: tuple = ()):
+        """Execute a single query (Async)"""
+        await self._ensure_initialized()
+        async with self.get_async_connection() as conn:
+            cursor = await conn.execute(query, params)
+            await conn.commit()
             return cursor.lastrowid
     
-    def fetch_one(self, query: str, params: tuple = ()):
-        """Fetch single row"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(query, params)
-            row = cursor.fetchone()
-            return dict(row) if row else None
+    async def fetch_one(self, query: str, params: tuple = ()) -> Optional[Dict[str, Any]]:
+        """Fetch single row (Async)"""
+        await self._ensure_initialized()
+        async with self.get_async_connection() as conn:
+            async with conn.execute(query, params) as cursor:
+                row = await cursor.fetchone()
+                return dict(row) if row else None
     
-    def fetch_all(self, query: str, params: tuple = ()):
-        """Fetch all rows"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(query, params)
-            rows = cursor.fetchall()
-            return [dict(row) for row in rows]
+    async def fetch_all(self, query: str, params: tuple = ()) -> List[Dict[str, Any]]:
+        """Fetch all rows (Async)"""
+        await self._ensure_initialized()
+        async with self.get_async_connection() as conn:
+            async with conn.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
     
-    def get_stats(self):
-        """Get database statistics"""
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
+    async def get_stats(self):
+        """Get database statistics (Async)"""
+        await self._ensure_initialized()
+        async with self.get_async_connection() as conn:
+            async with conn.execute("SELECT COUNT(*) as count FROM recommendations") as cursor:
+                row = await cursor.fetchone()
+                rec_count = row["count"]
             
-            cursor.execute("SELECT COUNT(*) as count FROM recommendations")
-            rec_count = cursor.fetchone()["count"]
+            async with conn.execute("SELECT COUNT(*) as count FROM trust_metrics") as cursor:
+                row = await cursor.fetchone()
+                metrics_count = row["count"]
             
-            cursor.execute("SELECT COUNT(*) as count FROM trust_metrics")
-            metrics_count = cursor.fetchone()["count"]
-            
-            cursor.execute("SELECT COUNT(*) as count FROM operator_preferences")
-            pref_count = cursor.fetchone()["count"]
+            async with conn.execute("SELECT COUNT(*) as count FROM operator_preferences") as cursor:
+                row = await cursor.fetchone()
+                pref_count = row["count"]
             
             return {
                 "recommendations": rec_count,
@@ -210,3 +231,10 @@ class AdvisoryDatabase:
                 "preferences": pref_count,
                 "db_path": self.db_path
             }
+
+    async def close(self):
+        """Close database connections (Async)"""
+        async with self._lock:
+            if self._async_conn:
+                await self._async_conn.close()
+                self._async_conn = None

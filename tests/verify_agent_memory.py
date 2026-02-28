@@ -8,7 +8,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from agent_bms.bms_llm_agent import BMSLLMAgent
+from agent_commercial.bms_llm_agent import BMSLLMAgent
 from tests.super_gauntlet import MockBMSState, MockAlarmEngine, MockEnergyAnalyzer, MockPredictiveEngine
 
 async def test_memory_injection():

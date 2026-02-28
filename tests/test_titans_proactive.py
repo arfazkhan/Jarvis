@@ -3,8 +3,8 @@ import unittest
 import time
 import json
 from unittest.mock import MagicMock, patch
-from agent.learning.learning_engine import LearningEngine
-from agent.llm_agent.prompt import TOOLS_SCHEMA
+from agent_home.learning.learning_engine import LearningEngine
+from agent_home.llm_agent.prompt import TOOLS_SCHEMA
 
 class TestTitansProactive(unittest.TestCase):
     def setUp(self):

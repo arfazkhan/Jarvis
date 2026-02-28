@@ -21,10 +21,10 @@ os.environ["LLM_MODEL"] = "llama-3.3-70b-versatile"
 
 sys.path.append(os.getcwd())
 
-from agent.memory.orchestrator import MemoryOrchestrator
+from arvis_core.memory.orchestrator import MemoryOrchestrator
 from agent_cognitive.meta_cognition import MetaCognition
 from agent_unified.llm import UnifiedLLM
-from agent_bms.prompt_builder import get_ops_prompt_builder, BMSContext
+from agent_commercial.prompt_builder import get_ops_prompt_builder, BMSContext
 
 init(autoreset=True)
 logging.basicConfig(level=logging.ERROR)

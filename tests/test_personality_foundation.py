@@ -1,7 +1,7 @@
 import unittest
 import time
 from unittest.mock import MagicMock
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 from agent_sensors.sensor_models import HomeSituation, HomePresence, SleepState, EmotionalState
 from agent_personality.persona_profiles import PersonaProfiles
 from agent_personality.emotion_engine import EmotionEngine

@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 
-from agent_bms.bms_data_model import (
+from agent_commercial.bms_data_model import (
     BMSDataPoint,
     Equipment,
     EquipmentType,
@@ -27,13 +27,13 @@ from agent_bms.bms_data_model import (
     EnergyReading,
     FailurePrediction,
 )
-from agent_bms.bms_state_engine import BMSStateEngine
-from agent_bms.predictive_maintenance import (
+from agent_commercial.bms_state_engine import BMSStateEngine
+from agent_commercial.predictive_maintenance import (
     PredictiveMaintenanceEngine,
     EquipmentFeatures,
 )
-from agent_bms.energy_analyzer import EnergyAnalyzer
-from agent_bms.alarm_engine import AlarmEngine
+from agent_commercial.energy_analyzer import EnergyAnalyzer
+from agent_commercial.alarm_engine import AlarmEngine
 
 
 class TestBMSDataModel:

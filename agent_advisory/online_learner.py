@@ -38,7 +38,7 @@ class OnlineLearner:
         
         # Buffer to store (prediction, actual) pairs
         self.experience_buffer = deque(maxlen=1000)
-        self.baseline_rmse = 1.0 # Initial placeholder
+        self.baseline_rmse = 0.0 # Will be populated dynamically after buffer fills
         
     def log_observation(self, prediction: Dict[str, Any], actual: Dict[str, Any]):
         """
@@ -78,7 +78,7 @@ class OnlineLearner:
         current_rmse = np.mean(recent_errors)
         
         # Update baseline if this is the first real run
-        if self.baseline_rmse == 1.0 and len(self.experience_buffer) > 50:
+        if self.baseline_rmse <= 0.0 and len(self.experience_buffer) > 50:
             self.baseline_rmse = np.mean([r["error"] for r in list(self.experience_buffer)[:50]])
             logger.info(f"Established baseline RMSE: {self.baseline_rmse:.3f}")
             
@@ -102,7 +102,7 @@ class OnlineLearner:
             scenario = {
                 "context": rec["actual"],
                 "operator_decision": "no_op", # Simplification: assume drift happens during no-op
-                "outcome": {"utility_score": 1.0} # Placeholder
+                "outcome": {"utility_score": rec.get("utility_score", getattr(self.world_model, 'calculate_utility', lambda s: 0.0)(rec["actual"]))}
             }
             historical_scenarios.append(scenario)
             

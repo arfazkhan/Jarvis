@@ -18,7 +18,7 @@ import json # Ensure json is imported
 # Lazy import for UnifiedLLM to avoid potential circular/import-time issues
 # from agent_unified.llm import UnifiedLLM
 
-from agent_bms.skillbook import get_skillbook, BuildingSkillbook
+from agent_commercial.skillbook import get_skillbook, BuildingSkillbook
 
 logger = logging.getLogger("arvis.cognitive.meta")
 

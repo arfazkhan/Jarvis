@@ -1,5 +1,5 @@
 import unittest
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 from agent_mission.mission_store import MissionStore
 from agent_mission.mission_monitor import MissionMonitor
 from agent_mission.base.mission import Mission, MissionStatus

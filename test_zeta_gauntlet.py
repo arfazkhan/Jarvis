@@ -27,10 +27,10 @@ async def run_zeta_gauntlet():
          print("⚠️ WARNING: No API Keys found in .env. Real LLM calls may fail.")
 
     # 1. Initialize Ops Copilot
-    from agent_bms.main import OpsCopilot
-    from agent_bms.bms_data_model import AlarmSeverity, Equipment
-    from agent_bms.alarm_engine import Alarm, ProcessedAlarm
-    from agent_bms.event_correlator import Event, EventSource, EventCorrelator
+    from agent_commercial.main import OpsCopilot
+    from agent_commercial.bms_data_model import AlarmSeverity, Equipment
+    from agent_commercial.alarm_engine import Alarm, ProcessedAlarm
+    from agent_commercial.event_correlator import Event, EventSource, EventCorrelator
     from agent_advisory.schemas import Recommendation, RecommendationStatus
     
     copilot = OpsCopilot(mode="api_only") # Lightweight mode, but initializes BMSLLMAgent
@@ -91,7 +91,7 @@ async def run_zeta_gauntlet():
     if not copilot.alarm_engine.get_clusters():
         # Force cluster creation if engine didn't auto-cluster (it might need a tick)
         print("   > INFO: Creating cluster for test...")
-        from agent_bms.alarm_engine import AlarmCluster
+        from agent_commercial.alarm_engine import AlarmCluster
         cluster = AlarmCluster(cluster_id="force_cluster", alarm_ids=["chiller_trip"], root_cause_equipment_id="CH-01")
         copilot.alarm_engine.clusters["force_cluster"] = cluster
     
@@ -137,7 +137,7 @@ async def run_zeta_gauntlet():
     print("\n[6] Testing Reflection & Reporting...")
     
     # Briefing
-    from agent_bms.briefing_engine import BriefingGenerator
+    from agent_commercial.briefing_engine import BriefingGenerator
     bg = BriefingGenerator("West Bay Tower")
     bg.set_llm_provider(real_llm)
     

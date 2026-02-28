@@ -1,0 +1,14 @@
+ {"step": 1, "tool": "check_cost_impact", "args": {}, "status": "running"}
+ {"step": 1, "tool": "check_cost_impact", "result": "{'zone_id': 'default', 'current_temp': 24, 'target_temp': 22, 'estimate': {'current_burn_rate_qar_hour': 0.27, 'new_burn_rate_qar_hour': 0.31, 'change_percent': 16.0, 'daily_impact_qar': 0.52, 'monthly_impact_qar': 15.55, 'gsas_impact_points': -0.8, 'recommendation': 'Moderate impact. Proceed if comfort is critical.', 'proceed_warning': False}, 'warning_message': '\u26a0\ufe0f **Cost Warning**\\n\u2022 Current Burn Rate: QAR 0.27/hr\\n\u2022 New Burn Rate: QAR 0.31/hr (+16%)\\n\u2022 Daily Cost Impact: +QAR 0.52\\n\u2022 Monthly..."}
+ {"step": 1, "tool": "find_ghost_spaces", "args": {}, "status": "running"}
+ {"step": 1, "tool": "find_ghost_spaces", "result": "{'error': \"'>' not supported between instances of 'NoneType' and 'int'\"}"}
+ {"step": 1, "tool": "simulate_change", "args": {}, "status": "running"}
+ {"step": 1, "tool": "simulate_change", "result": "{'error': \"name 'logger' is not defined\"}"}
+ {"step": 1, "tool": "analyze_energy", "args": {}, "status": "running"}
+ {"step": 1, "tool": "analyze_energy", "result": "{'error': \"'ScenarioEnergy' object has no attribute 'get_summary'\"}"}
+ {"step": 1, "tool": "get_equipment_status", "args": {}, "status": "running"}
+ {"step": 1, "tool": "get_equipment_status", "result": "{'equipment': {'equipment_id': None, 'name': None, 'equipment_type': 'other', 'location': '', 'status': 'running', 'runtime_hours': 0.0, 'start_stop_cycles': 0, 'last_maintenance': None, 'efficiency': None, 'active_alarms': 0, 'data_point_count': 4}, 'data_points': []}"}
+ {"step": 1, "tool": "list_equipment", "args": {}, "status": "running"}
+ {"step": 1, "tool": "list_equipment", "result": "{'error': \"'ScenarioBMSState' object has no attribute 'get_all_equipment'\"}"}
+ {"step": 1, "tool": "forecast_energy", "args": {}, "status": "running"}
+ {"step": 1, "tool": "forecast_energy", "result": "{'error': \"'EnergyForecaster' object has no attribute 'fit'\"}"}

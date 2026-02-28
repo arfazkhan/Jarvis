@@ -14,11 +14,11 @@ import os
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from agent.event_bus.event_bus import EventBus
-from agent.llm_agent.local_agent import LocalAgent
-from agent.llm_agent.hybrid_orchestrator import HybridOrchestrator
-from agent.memory.orchestrator import MemoryOrchestrator
-from agent.web.app import start_server
+from arvis_core.event_bus.event_bus import EventBus
+from agent_home.llm_agent.local_agent import LocalAgent
+from agent_home.llm_agent.hybrid_orchestrator import HybridOrchestrator
+from arvis_core.memory.orchestrator import MemoryOrchestrator
+from agent_home.web.app import start_server
 
 
 class SimpleStateEngine:

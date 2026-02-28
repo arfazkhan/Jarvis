@@ -16,10 +16,10 @@ load_dotenv()
 if not os.getenv("GROQ_API_KEY") and not os.getenv("OPENROUTER_API_KEY"):
     logger.warning("⚠️  No API Key found! Cloud tests may fail.")
 
-from agent.event_bus.event_bus import EventBus
-from agent.llm_agent.local_agent import LocalAgent
-from agent.llm_agent.llm_agent import LLMAgent
-from agent.llm_agent.hybrid_orchestrator import HybridOrchestrator
+from arvis_core.event_bus.event_bus import EventBus
+from agent_home.llm_agent.local_agent import LocalAgent
+from agent_home.llm_agent.llm_agent import LLMAgent
+from agent_home.llm_agent.hybrid_orchestrator import HybridOrchestrator
 
 # Mock Tool Executor effectively just to capture calls
 class MockExecutor:

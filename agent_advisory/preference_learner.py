@@ -72,7 +72,7 @@ class PreferenceLearningEngine:
             self.use_chromadb = False
             logger.warning("ChromaDB not available - using SQLite fallback")
     
-    def record_decision(
+    async def record_decision(
         self,
         context: Dict[str, Any],
         agent_recommendation: Dict[str, Any],
@@ -129,7 +129,7 @@ class PreferenceLearningEngine:
         
         # Store in database
         data = pref.to_dict()
-        self.db.execute(
+        await self.db.execute(
             """
             INSERT INTO operator_preferences VALUES (
                 ?, ?, ?, ?,
@@ -143,14 +143,24 @@ class PreferenceLearningEngine:
         
         # Also store in ChromaDB if available
         if self.use_chromadb:
+            # Enriched metadata for better search
+            metadata = {
+                "operator_id": operator_id,
+                "context_type": features.get("context_type", "unknown"),
+                "is_agreement": str(is_agreement), # ChromaDB prefers strings for some types
+                "timestamp": str(pref.timestamp),
+                "building_id": building_id
+            }
+            # Add features to metadata for filtering
+            for k, v in features.items():
+                if isinstance(v, (str, int, float, bool)):
+                    metadata[f"feat_{k}"] = v
+            
+            # Chroma is sync in this version, but we should wrap if needed. 
+            # Assuming standard chromadb client.
             self.chroma_collection.add(
                 documents=[preference_signal],
-                metadatas=[{
-                    "operator_id": operator_id,
-                    "context_type": features.get("context_type", "unknown"),
-                    "is_agreement": is_agreement,
-                    "timestamp": str(pref.timestamp)
-                }],
+                metadatas=[metadata],
                 ids=[pref.id]
             )
         
@@ -160,7 +170,7 @@ class PreferenceLearningEngine:
             f"{preference_signal}"
         )
     
-    def rank_options_by_preference(
+    async def rank_options_by_preference(
         self,
         context: Dict[str, Any],
         options: List[Dict[str, Any]],
@@ -181,7 +191,7 @@ class PreferenceLearningEngine:
         features = self._extract_features(context)
         
         # Get similar past decisions
-        similar_decisions = self._get_similar_decisions(
+        similar_decisions = await self._get_similar_decisions(
             features,
             operator_id,
             k=top_k
@@ -216,7 +226,7 @@ class PreferenceLearningEngine:
         
         return ranked
     
-    def get_operator_preferences_summary(
+    async def get_operator_preferences_summary(
         self,
         operator_id: str,
         window_days: int = 90
@@ -233,7 +243,7 @@ class PreferenceLearningEngine:
         
         cutoff = time.time() - (window_days * 24 * 60 * 60)
         
-        prefs = self.db.fetch_all(
+        prefs = await self.db.fetch_all(
             """
             SELECT * FROM operator_preferences
             WHERE operator_id = ? AND timestamp >= ?
@@ -337,20 +347,39 @@ class PreferenceLearningEngine:
         # Generic override
         return f"Operator prefers {operator_action} over {agent_action}"
     
-    def _get_similar_decisions(
+    async def _get_similar_decisions(
         self,
         features: Dict[str, Any],
         operator_id: str,
         k: int = 5
     ) -> List[OperatorPreference]:
-        """Get similar past decisions using simple SQL matching"""
-        
-        # For now, use simple context_type matching
-        # TODO: Implement proper similarity search with ChromaDB
+        """Get similar past decisions using ChromaDB vector search (or SQL fallback)"""
         
         context_type = features.get("context_type", "unknown")
         
-        prefs_data = self.db.fetch_all(
+        # 1. Try Vector Search first
+        if self.use_chromadb:
+            try:
+                results = self.chroma_collection.query(
+                    query_texts=[features.get("alarm_type", context_type)],
+                    n_results=k,
+                    where={"operator_id": operator_id}
+                )
+                
+                if results and results["ids"] and results["ids"][0]:
+                    ids = results["ids"][0]
+                    # Fetch full records from SQLite using the IDs from Chroma
+                    placeholders = ", ".join(["?"] * len(ids))
+                    prefs_data = await self.db.fetch_all(
+                        f"SELECT * FROM operator_preferences WHERE id IN ({placeholders})",
+                        tuple(ids)
+                    )
+                    return self._map_to_objects(prefs_data)
+            except Exception as e:
+                logger.warning(f"ChromaDB query failed: {e}")
+ 
+        # 2. Fallback to SQL matching
+        prefs_data = await self.db.fetch_all(
             """
             SELECT * FROM operator_preferences
             WHERE operator_id = ? AND context_type = ?
@@ -359,8 +388,10 @@ class PreferenceLearningEngine:
             """,
             (operator_id, context_type, k)
         )
-        
-        # Convert to OperatorPreference objects
+        return self._map_to_objects(prefs_data)
+
+    def _map_to_objects(self, prefs_data: List[Dict]) -> List[OperatorPreference]:
+        """Map raw DB rows to OperatorPreference objects"""
         import json
         prefs = []
         for data in prefs_data:
@@ -379,7 +410,6 @@ class PreferenceLearningEngine:
                 building_id=data.get("building_id", "unknown"),
                 equipment_ids=json.loads(data["equipment_ids"]) if data.get("equipment_ids") else []
             ))
-        
         return prefs
     
     def _actions_match(self, action1: Dict, action2: Dict) -> bool:

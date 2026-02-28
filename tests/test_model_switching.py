@@ -7,7 +7,7 @@ import sys
 # Ensure project root is in path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from agent_bms.bms_llm_agent import BMSLLMAgent, DEFAULT_ENGLISH_MODEL, DEFAULT_ARABIC_MODEL
+from agent_commercial.bms_llm_agent import BMSLLMAgent, DEFAULT_ENGLISH_MODEL, DEFAULT_ARABIC_MODEL
 from agent_unified.llm import UnifiedLLM
 from agent_unified.schema import Message
 

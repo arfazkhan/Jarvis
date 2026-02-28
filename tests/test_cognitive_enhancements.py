@@ -1,7 +1,7 @@
 import unittest
 import time
 from unittest.mock import MagicMock, patch
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 from agent_cognitive.cognitive_loop import CognitiveLoop
 
 class TestCognitiveEnhancements(unittest.TestCase):

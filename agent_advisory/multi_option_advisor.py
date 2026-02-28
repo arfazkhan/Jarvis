@@ -270,7 +270,7 @@ class MultiOptionAdvisor:
         # ─────────────────────────────────────────────────────────────────
         # Step 5: Log to Phase 1 Tracker
         # ─────────────────────────────────────────────────────────────────
-        recommendation_id = self.tracker.log_recommendation(
+        recommendation_id = await self.tracker.log_recommendation(
             context=context,
             recommended_action=top_option.option if top_option else {},
             confidence=overall_confidence,
@@ -343,14 +343,14 @@ class MultiOptionAdvisor:
             options: Original options list
         """
         # Get the recommendation from tracker
-        rec = self.tracker.get_recommendation(recommendation_id)
+        rec = await self.tracker.get_recommendation(recommendation_id)
         
         if rec and options:
             chosen_option = options[chosen_option_index] if chosen_option_index < len(options) else None
             
             if chosen_option:
                 # Log to Phase 1 tracker
-                self.tracker.log_operator_decision(
+                await self.tracker.log_operator_decision(
                     recommendation_id=recommendation_id,
                     operator_choice=chosen_option,
                     operator_id=operator_id
@@ -365,7 +365,7 @@ class MultiOptionAdvisor:
                 )
                 
                 # Log to Phase 1 preference learner
-                self.preference_learner.record_decision(
+                await self.preference_learner.record_decision(
                     context=rec.context,
                     agent_recommendation=rec.recommended_action,
                     operator_choice=chosen_option,
@@ -404,14 +404,14 @@ class MultiOptionAdvisor:
         quality = quality_map.get(outcome_quality, OutcomeQuality.UNKNOWN)
         
         # Log to Phase 1 tracker
-        self.tracker.log_outcome(
+        await self.tracker.log_outcome(
             recommendation_id=recommendation_id,
             actual_outcome=actual_outcome,
             outcome_quality=quality
         )
         
         # Get recommendation to update bandit
-        rec = self.tracker.get_recommendation(recommendation_id)
+        rec = await self.tracker.get_recommendation(recommendation_id)
         if rec and rec.recommended_action:
             action_type = rec.recommended_action.get("action_type", "unknown")
             was_successful = outcome_quality in ["excellent", "good"]

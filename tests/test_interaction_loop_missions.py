@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import MagicMock
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 from agent_conversation.interaction_loop import InteractionLoop
 from agent_conversation.dialogue_manager import DialogueManager, DialogueResult
 

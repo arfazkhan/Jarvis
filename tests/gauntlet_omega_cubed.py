@@ -25,9 +25,9 @@ os.environ["LLM_MODEL"] = "llama-3.3-70b-versatile"
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from agent_unified.llm import UnifiedLLM
-from agent.memory.orchestrator import MemoryOrchestrator
+from arvis_core.memory.orchestrator import MemoryOrchestrator
 from agent_cognitive.meta_cognition import MetaCognition
-from agent_bms.prompt_builder import BMSContext, OpsPromptBuilder
+from agent_commercial.prompt_builder import BMSContext, OpsPromptBuilder
 
 # Initialize colorama
 init()

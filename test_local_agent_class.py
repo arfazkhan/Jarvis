@@ -1,4 +1,4 @@
-from agent.llm_agent.local_agent import LocalAgent
+from agent_home.llm_agent.local_agent import LocalAgent
 import json
 
 def test_local_agent():

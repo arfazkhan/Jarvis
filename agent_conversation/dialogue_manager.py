@@ -12,7 +12,7 @@ from typing import List, Dict, Any, Optional
 from groq import Groq
 
 from config.settings import get_config
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 
 CONFIG = get_config("conversation")
 DIALOGUE_CONFIG = CONFIG.get("dialogue", {})
@@ -36,7 +36,7 @@ Example: {"intent": "prepare_date_night", "steps": ["dim lights", "play music"]}
 """
 
 from agent_conversation.intent_classifier import IntentClassifier
-from agent.agent_feedback.action_tone_adapter import ActionToneAdapter
+from agent_home.agent_feedback.action_tone_adapter import ActionToneAdapter
 
 from dataclasses import dataclass, field
 

@@ -11,7 +11,7 @@ Orchestrates the learning process.
 from agent_feedback.correction_detector import CorrectionDetector
 from agent_preferences.preference_classifier import PreferenceClassifier
 from agent_preferences.preference_updater import PreferenceUpdater
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 
 class FeedbackLoop:
     def __init__(self, event_bus: EventBus, updater: PreferenceUpdater):

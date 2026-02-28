@@ -17,7 +17,7 @@ from datetime import datetime
 
 from .simulator import QatarBuildingSimulator, SimulatedScenario
 from agent_unified.llm import UnifiedLLM
-from agent_bms.prompt_builder import get_ops_simulation_prompt
+from agent_commercial.prompt_builder import get_ops_simulation_prompt
 
 logger = logging.getLogger("arvis.advisory.llm_simulator")
 

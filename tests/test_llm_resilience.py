@@ -12,7 +12,7 @@ import pytest
 import time
 import json
 from unittest.mock import Mock, patch
-from agent.llm_agent.llm_agent import LLMAgent
+from agent_home.llm_agent.llm_agent import LLMAgent
 from tests.utils.test_harness import create_deterministic_llm_mock
 
 

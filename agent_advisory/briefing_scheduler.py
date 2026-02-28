@@ -59,7 +59,8 @@ class BriefingGenerator:
     """Generates content for briefings"""
     
     @staticmethod
-    def generate_daily_briefing(building_id: str, goals: List[ProactiveGoal]) -> Briefing:
+    def generate_daily_briefing(building_id: str, goals: List[ProactiveGoal], 
+                                 conflict_resolution=None) -> Briefing:
         # Filter for high/medium priority
         priority_goals = [g for g in goals if g.priority in ["critical", "high", "medium"]]
         # Take top 3
@@ -77,7 +78,20 @@ class BriefingGenerator:
                 content += f"   {goal.description}\n"
                 if goal.potential_savings_qar > 0:
                     content += f"   💰 Impact: QAR {goal.potential_savings_qar:,.0f}/yr\n"
+                # Show conflict annotations if present
+                if goal.memory_conflicts:
+                    content += f"   ⚡ Conflicts resolved: {len(goal.memory_conflicts)}\n"
                 content += "\n"
+        
+        # Append entropy & conflict summary if available
+        if conflict_resolution:
+            entropy_icons = {"calm": "🟢", "elevated": "🟡", "high": "🟠", "critical": "🔴"}
+            e_icon = entropy_icons.get(conflict_resolution.entropy_level.value, "⚪")
+            content += f"\n---\n{e_icon} Building Entropy: **{conflict_resolution.entropy_level.value.upper()}** (score: {conflict_resolution.entropy_score:.2f})\n"
+            if conflict_resolution.suppressed_goals:
+                content += f"📋 {len(conflict_resolution.suppressed_goals)} previously-addressed goals suppressed\n"
+            if conflict_resolution.conflicts:
+                content += f"⚡ {len(conflict_resolution.conflicts)} goal conflicts auto-resolved\n"
                 
         return Briefing(
             briefing_id=str(uuid.uuid4()),
@@ -147,7 +161,9 @@ class BriefingScheduler:
         """Generate and deliver daily briefing"""
         logger.info(f"Generating daily briefing for {building_id}")
         goals = self.goal_generator.generate_goals(building_id)
-        briefing = BriefingGenerator.generate_daily_briefing(building_id, goals)
+        # Pass conflict resolution info to briefing if available
+        resolution = getattr(self.goal_generator, '_last_resolution', None)
+        briefing = BriefingGenerator.generate_daily_briefing(building_id, goals, resolution)
         self._deliver_briefing(briefing)
         
     async def _run_urgent_check(self, building_id: str):
@@ -162,11 +178,42 @@ class BriefingScheduler:
                 self._deliver_briefing(briefing)
                 
     def _deliver_briefing(self, briefing: Briefing):
-        """Mock delivery mechanism"""
+        """Deliver via SMTP and record."""
         briefing.is_delivered = True
         self.generated_briefings.append(briefing)
-        # In production -> Send to WebSocket / Email / Notification Service
         logger.info(f"Delivered Briefing [{briefing.briefing_type.value}]: {briefing.headline}")
+        
+        import os
+        import smtplib
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
+        
+        smtp_host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+        smtp_port = int(os.environ.get("SMTP_PORT", "587"))
+        smtp_user = os.environ.get("SMTP_USER")
+        smtp_pass = os.environ.get("SMTP_PASS")
+        recipient = os.environ.get("OPS_EMAIL_RECIPIENT", "ops@arvis.com")
+
+        if not smtp_user or not smtp_pass:
+            logger.warning(f"SMTP credentials missing. Skipped email delivery for briefing.")
+            return
+            
+        try:
+            msg = MIMEMultipart()
+            msg['From'] = smtp_user
+            msg['To'] = recipient
+            msg['Subject'] = f"[ARVIS Briefing] {briefing.headline}"
+            
+            body = f"Building: {briefing.building_id}\n\n{briefing.content}"
+            msg.attach(MIMEText(body, 'plain'))
+            
+            server = smtplib.SMTP(smtp_host, smtp_port)
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.send_message(msg)
+            server.quit()
+        except Exception as e:
+            logger.error(f"Failed to deliver briefing email: {e}")
         
     def get_latest_briefing(self, building_id: str) -> Optional[Briefing]:
         """Get the most recent briefing for a building"""

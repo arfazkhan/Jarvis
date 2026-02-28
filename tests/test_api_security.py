@@ -159,7 +159,7 @@ class TestConcurrentAPIAccess:
     def test_concurrent_state_reads(self):
         """Multiple clients reading state simultaneously."""
         import threading
-        from agent.web.app import app
+        from agent_home.web.app import app
         
         results = []
         
@@ -184,7 +184,7 @@ class TestConcurrentAPIAccess:
     def test_read_write_concurrency(self):
         """Concurrent reads and writes should not corrupt state."""
         import threading
-        from agent.web.app import app
+        from agent_home.web.app import app
         
         def reader():
             with app.test_client() as c:
@@ -214,7 +214,7 @@ class TestConcurrentAPIAccess:
 @pytest.fixture
 def client():
     """Create Flask test client."""
-    from agent.web.app import app
+    from agent_home.web.app import app
     app.config['TESTING'] = True
     
     with app.test_client() as client:

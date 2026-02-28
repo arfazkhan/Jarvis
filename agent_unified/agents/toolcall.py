@@ -5,13 +5,15 @@ from pydantic import Field
 from .react import ARVISReActAgent
 from agent_unified.schema import AgentState, Message, ToolCall, ToolChoice
 from agent_unified.tools.collection import ToolCollection
+from agent_unified.llm import UnifiedLLM
 
 class ARVISToolAgent(ARVISReActAgent):
     """Agent capable of executing tools"""
     
+    llm: UnifiedLLM = Field(default_factory=UnifiedLLM)
     available_tools: ToolCollection = Field(default_factory=lambda: ToolCollection())
     tool_choices: ToolChoice = ToolChoice.AUTO
-    special_tool_names: List[str] = Field(default_factory=lambda: ["terminate"])
+    special_tool_names: List[str] = Field(default_factory=lambda: ["terminate", "task_boundary"])
     
     # Current tool calls from last think()
     tool_calls: List[ToolCall] = Field(default_factory=list)
@@ -62,9 +64,20 @@ class ARVISToolAgent(ARVISReActAgent):
         
         for tc in self.tool_calls:
             name = tc.function.name
-            args = json.loads(tc.function.arguments) or {}
-            
+            try:
+                args = json.loads(tc.function.arguments) or {}
+            except json.JSONDecodeError:
+                args = {}
+                
             # Execute tool
+            if isinstance(args, list):
+                # Guard against LLM hallucinating list-wrapped arguments
+                if len(args) == 1 and isinstance(args[0], dict):
+                    args = args[0]
+                else:
+                    results.append(f"{name}: Error - Expected dict arguments, got list")
+                    continue
+
             result = await self.available_tools.execute(name, **args)
             
             # Store result
@@ -85,3 +98,17 @@ class ARVISToolAgent(ARVISReActAgent):
         """Handle special tool execution"""
         if name == "terminate":
             self.state = AgentState.FINISHED
+        elif name == "task_boundary":
+            # Update memory with the new active task
+            from agent_unified.schema import TaskBoundary
+            try:
+                # The result is a ToolResult, we need to parse its output back to a dict
+                import json
+                # Handle both success and fail responses
+                if hasattr(result, "output"):
+                    data = json.loads(result.output)
+                    task = TaskBoundary(**data)
+                    self.memory.set_task(task)
+            except Exception as e:
+                # Log but don't crash
+                print(f"Error updating task boundary: {e}")

@@ -7,10 +7,10 @@ Provides fixtures for all core components with mocking and isolation.
 import pytest
 import time
 from unittest.mock import Mock, MagicMock
-from agent.event_bus.event_bus import EventBus
-from agent.state_engine.state_engine import StateEngine
-from agent.automations.automation_engine import AutomationEngine
-from agent.learning.pattern_analyzer import PatternAnalyzer
+from arvis_core.event_bus.event_bus import EventBus
+from agent_home.state_engine.state_engine import StateEngine
+from agent_home.automations.automation_engine import AutomationEngine
+from agent_home.learning.pattern_analyzer import PatternAnalyzer
 
 
 @pytest.fixture
@@ -51,7 +51,7 @@ def pattern_analyzer():
 @pytest.fixture
 def tool_executor(event_bus, state_engine, automation_engine, mock_device_controller):
     """Create ToolExecutor instance."""
-    from agent.tools.executor import ToolExecutor
+    from agent_home.tools.executor import ToolExecutor
     # ToolExecutor takes (device, state_engine, automations, event_bus)
     return ToolExecutor(mock_device_controller, state_engine, automation_engine, event_bus)
 
@@ -68,7 +68,7 @@ def llm_agent():
 @pytest.fixture
 def learning_engine(event_bus, state_engine, automation_engine, tool_executor):
     """Create LearningEngine instance."""
-    from agent.learning.learning_engine import LearningEngine
+    from agent_home.learning.learning_engine import LearningEngine
     # LearningEngine takes (event_bus, state_engine, automation_engine, tool_executor)
     return LearningEngine(event_bus, state_engine, automation_engine, tool_executor)
 
@@ -76,7 +76,7 @@ def learning_engine(event_bus, state_engine, automation_engine, tool_executor):
 @pytest.fixture
 def client():
     """Create Flask test client."""
-    from agent.web.app import app
+    from agent_home.web.app import app
     app.config['TESTING'] = True
     
     with app.test_client() as client:

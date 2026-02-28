@@ -6,7 +6,7 @@ import sys
 # Ensure repo root is in path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agent_bms.bms_llm_agent import BMSLLMAgent
+from agent_commercial.bms_llm_agent import BMSLLMAgent
 
 async def verify_llm_connection():
     print("Initializing BMSLLMAgent...")

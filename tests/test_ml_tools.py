@@ -1,6 +1,6 @@
 """Test ML-powered tools integration"""
 import asyncio
-from agent_bms.tools_schema import BMSToolHandler
+from agent_commercial.tools_schema import BMSToolHandler
 
 
 async def test_ml_tools():

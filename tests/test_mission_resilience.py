@@ -13,7 +13,7 @@ from agent_mission.mission_executor import MissionExecutor, MissionRuntimeState
 from agent_mission.mission_store import MissionStore
 from agent_mission.base.mission import Mission, MissionStatus
 from agent_mission.base.mission_step import MissionStep, StepType, StepStatus
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 from agent_plan.plan_graph import PlanGraph, PlanNode
 
 class TestMissionResilience(unittest.TestCase):

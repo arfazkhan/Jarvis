@@ -5,7 +5,7 @@ import tempfile
 import os
 from datetime import datetime
 from agent_cognitive.meta_cognition import MetaCognition, DecisionRecord
-from agent_bms.skillbook import get_skillbook, BuildingSkillbook
+from agent_commercial.skillbook import get_skillbook, BuildingSkillbook
 
 class TestMetaCognition(unittest.TestCase):
     def setUp(self):
@@ -17,7 +17,7 @@ class TestMetaCognition(unittest.TestCase):
         self.skillbook = BuildingSkillbook("test_building", db_path=self.db_path)
         
         # Reset singleton cache
-        from agent_bms.skillbook import _skillbooks
+        from agent_commercial.skillbook import _skillbooks
         _skillbooks["test_building"] = self.skillbook
         _skillbooks.clear() # Force clear for safety
         

@@ -64,7 +64,7 @@ class RecommendationTracker:
         self.db = AdvisoryDatabase(db_path)
         logger.info("Recommendation tracker initialized")
     
-    def log_recommendation(
+    async def log_recommendation(
         self,
         context: Dict[str, Any],
         recommended_action: Dict[str, Any],
@@ -101,7 +101,7 @@ class RecommendationTracker:
         
         # Store in database
         data = rec.to_dict()
-        self.db.execute(
+        await self.db.execute(
             """
             INSERT INTO recommendations (
                 id, timestamp, context, trigger_type,
@@ -125,7 +125,7 @@ class RecommendationTracker:
         logger.info(f"Logged recommendation {rec.id}: {recommended_action.get('action', 'unknown')}")
         return rec.id
     
-    def log_operator_decision(
+    async def log_operator_decision(
         self,
         recommendation_id: str,
         operator_choice: Dict[str, Any],
@@ -139,7 +139,7 @@ class RecommendationTracker:
         """
         
         # Get current recommendation
-        rec_data = self.db.fetch_one(
+        rec_data = await self.db.fetch_one(
             "SELECT * FROM recommendations WHERE id = ?",
             (recommendation_id,)
         )
@@ -160,7 +160,7 @@ class RecommendationTracker:
         
         # Update database
         import json
-        self.db.execute(
+        await self.db.execute(
             """
             UPDATE recommendations
             SET human_action = ?, status = ?, 
@@ -176,7 +176,7 @@ class RecommendationTracker:
             f"{status.value} ({operator_id})"
         )
     
-    def log_outcome(
+    async def log_outcome(
         self,
         recommendation_id: str,
         actual_outcome: Dict[str, Any],
@@ -190,7 +190,7 @@ class RecommendationTracker:
         """
         
         import json
-        self.db.execute(
+        await self.db.execute(
             """
             UPDATE recommendations
             SET actual_outcome = ?, outcome_quality = ?, 
@@ -206,15 +206,15 @@ class RecommendationTracker:
             f"{outcome_quality.value}"
         )
     
-    def get_recommendation(self, recommendation_id: str) -> Optional[Recommendation]:
+    async def get_recommendation(self, recommendation_id: str) -> Optional[Recommendation]:
         """Get a single recommendation by ID"""
-        data = self.db.fetch_one(
+        data = await self.db.fetch_one(
             "SELECT * FROM recommendations WHERE id = ?",
             (recommendation_id,)
         )
         return Recommendation.from_dict(data) if data else None
     
-    def get_recent_recommendations(
+    async def get_recent_recommendations(
         self,
         window_days: int = 30,
         building_id: Optional[str] = None,
@@ -237,10 +237,10 @@ class RecommendationTracker:
         
         query += " ORDER BY timestamp DESC"
         
-        rows = self.db.fetch_all(query, tuple(params))
+        rows = await self.db.fetch_all(query, tuple(params))
         return [Recommendation.from_dict(row) for row in rows]
     
-    def calculate_trust_metrics(
+    async def calculate_trust_metrics(
         self,
         window_days: int = 30,
         building_id: Optional[str] = None
@@ -252,7 +252,7 @@ class RecommendationTracker:
             TrustMetrics object with adoption rate, accuracy, calibration, etc.
         """
         
-        recs = self.get_recent_recommendations(window_days, building_id)
+        recs = await self.get_recent_recommendations(window_days, building_id)
         
         if not recs:
             # No data
@@ -317,7 +317,7 @@ class RecommendationTracker:
         # Store in database
         import json
         data = metrics.to_dict()
-        self.db.execute(
+        await self.db.execute(
             """
             INSERT OR REPLACE INTO trust_metrics (
                 date, total_recommendations, adoption_rate,
@@ -405,6 +405,6 @@ class RecommendationTracker:
         
         return False
     
-    def get_stats(self) -> Dict[str, Any]:
-        """Get tracker statistics"""
-        return self.db.get_stats()
+    async def get_stats(self) -> Dict[str, Any]:
+        """Get tracker statistics (Async)"""
+        return await self.db.get_stats()

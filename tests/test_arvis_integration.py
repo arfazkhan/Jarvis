@@ -12,12 +12,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("arvis_test")
 
 try:
-    from agent_bms.event_correlator import EventCorrelator, Event
-    from agent_bms.skillbook import get_skillbook, SkillType
-    from agent_bms.briefing_engine import BriefingGenerator, BriefingPeriod
-    from agent_bms.simulator import WhatIfSimulator, ChangeType
-    from agent_bms.fleet_intelligence import get_fleet_intelligence
-    from agent_bms.tools_schema import BMS_TOOLS
+    from agent_commercial.event_correlator import EventCorrelator, Event
+    from agent_commercial.skillbook import get_skillbook, SkillType
+    from agent_commercial.briefing_engine import BriefingGenerator, BriefingPeriod
+    from agent_commercial.simulator import WhatIfSimulator, ChangeType
+    from agent_commercial.fleet_intelligence import get_fleet_intelligence
+    from agent_commercial.tools_schema import BMS_TOOLS
 except ImportError as e:
     logger.error(f"❌ Import failed at top level: {e}")
     sys.exit(1)
@@ -67,7 +67,7 @@ def test_tools_schema():
     """Verify new tools are in schema."""
     logger.info("Testing tools schema...")
     try:
-        from agent_bms.tools_schema import BMS_TOOLS
+        from agent_commercial.tools_schema import BMS_TOOLS
         tool_names = [t["name"] for t in BMS_TOOLS]
         
         required = [

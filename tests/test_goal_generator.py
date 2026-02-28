@@ -3,7 +3,7 @@ import pytest
 from unittest.mock import MagicMock, Mock
 from datetime import datetime, timedelta
 from agent_advisory.goal_generator import GoalGenerator, GoalScorer, ProactiveGoal
-from agent_bms.predictive_maintenance import FailurePrediction
+from agent_commercial.predictive_maintenance import FailurePrediction
 
 class TestGoalGenerator:
     

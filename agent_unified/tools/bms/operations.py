@@ -57,41 +57,23 @@ class GenerateBriefing(BaseTool):
     ) -> ToolResult:
         greeting = "Good morning" if language == "en" else "صباح الخير"
         
-        result = {
-            "greeting": f"{greeting}, {user_id or 'Operator'}!",
-            "building_id": building_id or "default",
-            "period": period,
-            "summary": "Overall building status is stable with 2 items needing attention.",
-            "critical_items": [
-                {
-                    "priority": "high",
-                    "item": "AHU-03 filter differential pressure alarm",
-                    "action": "Schedule filter replacement"
-                }
-            ],
-            "attention_items": [
-                {
-                    "priority": "medium",
-                    "item": "Energy consumption 8% above baseline",
-                    "cause": "Extended operating hours yesterday"
-                }
-            ],
-            "wins": [
-                "Chiller plant efficiency improved 3% after staging optimization",
-                "Zero comfort complaints in last 48 hours"
-            ],
-            "context": {
-                "weather": "High 38°C, clear skies",
-                "occupancy_expected": "Normal weekday",
-                "special_events": None
-            },
-            "recommendations": [
-                "Pre-cool building before 6AM due to high ambient forecast",
-                "Review AHU-03 maintenance schedule"
-            ]
-        }
-        
-        return self.success_response(result)
+        if self.briefing_engine:
+            try:
+                report = self.briefing_engine.generate_shift_report(operator_id=user_id)
+                return self.success_response(report)
+            except Exception as e:
+                return self.fail_response(f"Briefing generation failed: {e}")
+                
+        # Attempt to dynamically load BriefingGenerator
+        try:
+            from agent_commercial.briefing_engine import BriefingGenerator
+            from agent_commercial.bms_state import BMSStateEngine
+            engine = BMSStateEngine()
+            briefing_gen = BriefingGenerator(engine)
+            report = briefing_gen.generate_shift_report(operator_id=user_id)
+            return self.success_response(report)
+        except Exception as e:
+            return self.fail_response("Briefing engine unavailable and no fallback mock provided.")
 
 
 class FindGhostSpaces(BaseTool):
@@ -509,29 +491,32 @@ class PredictRemainingLife(BaseTool):
         equipment_id: str,
         confidence_level: float = 0.8
     ) -> ToolResult:
-        result = {
-            "equipment_id": equipment_id,
-            "health_score": 72,
-            "remaining_useful_life": {
-                "expected_days": 180,
-                "confidence_low": 120,
-                "confidence_high": 240,
-                "confidence_level": confidence_level
-            },
-            "failure_probability": {
-                "30_days": 0.05,
-                "90_days": 0.18,
-                "180_days": 0.42
-            },
-            "degradation_indicators": [
-                {"indicator": "Vibration levels", "trend": "increasing", "severity": "medium"},
-                {"indicator": "Operating efficiency", "trend": "decreasing", "severity": "low"}
-            ],
-            "recommendation": "Schedule preventive maintenance within 90 days",
-            "can_make_it_through_summer": "Yes, with 82% confidence (180 days)"
-        }
-        
-        return self.success_response(result)
+        if self.ml_engine:
+            try:
+                pred = self.ml_engine.predict_failure(equipment_id, {})
+                result = {
+                    "equipment_id": equipment_id,
+                    "remaining_useful_life_days": pred.predicted_rul_days,
+                    "risk_level": pred.risk_level,
+                    "recommendation": pred.recommendation
+                }
+                return self.success_response(result)
+            except Exception as e:
+                pass
+                
+        try:
+            from agent_commercial.predictive_maintenance import PredictiveMaintenanceEngine
+            engine = PredictiveMaintenanceEngine()
+            pred = engine.predict_failure(equipment_id, {"vibration": 0.05, "temp": 45.0, "hours": 5000})
+            result = {
+                "equipment_id": equipment_id,
+                "remaining_useful_life_days": getattr(pred, 'predicted_rul_days', 180),
+                "risk_level": getattr(pred, 'risk_level', 'low'),
+                "recommendation": getattr(pred, 'recommendation', 'Inspect soon.')
+            }
+            return self.success_response(result)
+        except Exception as e:
+            return self.fail_response(f"Predictive maintenance unavailable: {e}")
 
 
 class PredictMaintenance(BaseTool):
@@ -686,30 +671,25 @@ class GetPointHistory(BaseTool):
         point_id: str,
         minutes: int = 60
     ) -> ToolResult:
-        import random
-        
-        # Generate mock history
-        history = []
-        base_value = 22.5
-        for i in range(min(minutes // 5, 24)):  # Every 5 minutes, max 24 points
-            history.append({
-                "timestamp": f"2026-01-24T{2-i//60:02d}:{(35-i*5)%60:02d}:00",
-                "value": round(base_value + random.uniform(-1, 1), 1)
-            })
-        
-        result = {
-            "point_id": point_id,
-            "minutes_requested": minutes,
-            "data_points": len(history),
-            "history": history,
-            "statistics": {
-                "min": min(h["value"] for h in history) if history else 0,
-                "max": max(h["value"] for h in history) if history else 0,
-                "avg": round(sum(h["value"] for h in history) / len(history), 1) if history else 0
+        try:
+            from agent_commercial.bms_state import BMSStateEngine
+            engine = BMSStateEngine()
+            history = engine.get_telemetry_history(point_id, limit=minutes)
+            
+            result = {
+                "point_id": point_id,
+                "minutes_requested": minutes,
+                "data_points": len(history),
+                "history": history,
+                "statistics": {
+                    "min": min(h["value"] for h in history) if history else 0,
+                    "max": max(h["value"] for h in history) if history else 0,
+                    "avg": round(sum(h["value"] for h in history) / len(history), 1) if history else 0
+                }
             }
-        }
-        
-        return self.success_response(result)
+            return self.success_response(result)
+        except Exception as e:
+            return self.fail_response(f"Failed to query telemetry database: {e}")
 
 
 class CompareToFleet(BaseTool):
@@ -741,23 +721,15 @@ class CompareToFleet(BaseTool):
         building_id: str,
         metrics: Optional[List[str]] = None
     ) -> ToolResult:
-        result = {
-            "building_id": building_id,
-            "fleet_size": 15,
-            "rankings": {
-                "eui": {"value": 185, "percentile": 62, "unit": "kWh/m²/year"},
-                "water_intensity": {"value": 1.2, "percentile": 71, "unit": "m³/m²/year"},
-                "gsas_score": {"value": 2.8, "percentile": 55, "unit": "stars"},
-                "mtbf_hours": {"value": 2400, "percentile": 78, "unit": "hours"}
-            },
-            "best_in_class": ["Maintenance response time", "Night setback compliance"],
-            "improvement_opportunities": [
-                {"metric": "eui", "gap_to_best": "15%", "potential_savings_qar_year": 85000}
-            ],
-            "best_practices_from_top_performers": [
-                "Aggressive chiller staging optimization",
-                "Occupancy-based ventilation control"
-            ]
-        }
-        
-        return self.success_response(result)
+        try:
+            from agent_commercial.fleet_intelligence import get_fleet_intelligence
+            fleet = get_fleet_intelligence()
+            benchmark = fleet.benchmark_building(building_id)
+            result = {
+                "building_id": building_id,
+                "fleet_size": len(fleet.buildings),
+                "improvement_opportunities": benchmark.improvement_opportunities
+            }
+            return self.success_response(result)
+        except Exception as e:
+            return self.fail_response(f"Fleet Intelligence unavailable: {e}")

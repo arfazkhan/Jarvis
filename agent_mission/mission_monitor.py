@@ -6,7 +6,7 @@ Continuously evaluates mission performance and triggers adaptations.
 
 import time
 from typing import Dict, Optional
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 from agent_mission.mission_store import MissionStore
 from agent_mission.mission_metrics import MissionMetrics
 from agent_mission.base.mission import Mission, MissionStatus

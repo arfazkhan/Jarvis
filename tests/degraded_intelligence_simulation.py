@@ -15,8 +15,8 @@ from unittest.mock import patch, MagicMock
 
 sys.path.append(os.getcwd())
 
-from agent_bms.bms_llm_agent import BMSLLMAgent, ChatResponse
-from agent.memory.orchestrator import MemoryOrchestrator
+from agent_commercial.bms_llm_agent import BMSLLMAgent, ChatResponse
+from arvis_core.memory.orchestrator import MemoryOrchestrator
 from agent_cognitive.meta_cognition import MetaCognition
 
 logging.basicConfig(level=logging.INFO)

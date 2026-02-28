@@ -8,7 +8,7 @@ import os
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from agent.agent_core.arbitration_manager import ArbitrationManager, Priority
+from agent_home.agent_core.arbitration_manager import ArbitrationManager, Priority
 
 class TestArbitrationIntensive(unittest.TestCase):
     def setUp(self):

@@ -2,7 +2,7 @@ import asyncio
 import logging
 import json
 from datetime import datetime
-from agent_bms.bms_llm_agent import BMSLLMAgent
+from agent_commercial.bms_llm_agent import BMSLLMAgent
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

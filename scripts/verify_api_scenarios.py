@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from fastapi.testclient import TestClient
 from api.main import app
-from agent.llm_agent.llm_agent import LLMAgent
+from agent_home.llm_agent.llm_agent import LLMAgent
 
 # Initialize Test Client
 # This triggers the lifespan event (startup)

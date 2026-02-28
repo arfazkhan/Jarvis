@@ -6,7 +6,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 load_dotenv()
 
-from agent_bms.bms_llm_agent import BMSLLMAgent
+from agent_commercial.bms_llm_agent import BMSLLMAgent
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("verify_phase6")

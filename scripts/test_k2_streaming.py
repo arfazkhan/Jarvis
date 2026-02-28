@@ -6,8 +6,8 @@ from pathlib import Path
 # Add root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from agent.llm_agent.llm_agent import LLMAgent
-from agent.event_bus.event_bus import EventBus
+from agent_home.llm_agent.llm_agent import LLMAgent
+from arvis_core.event_bus.event_bus import EventBus
 
 class MockStateEngine:
     def get(self, key, default=None): return default

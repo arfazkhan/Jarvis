@@ -28,7 +28,7 @@ print(f"K2THINK_API_KEY: {'âœ… Set' if os.environ.get('K2THINK_API_KEY') else 'â
 print(f"K2THINK_MODEL: {os.environ.get('K2THINK_MODEL', 'Not set')}")
 print("=" * 70)
 
-from agent_bms.tools_schema import BMSToolHandler
+from agent_commercial.tools_schema import BMSToolHandler
 
 
 # =============================================================================
@@ -506,7 +506,7 @@ async def run_llm_interpreter_battle_test() -> dict:
     print("TEST 6: LLM INTERPRETER BATTLE TEST (K2 Think)")
     print("=" * 70)
     
-    from agent_bms.ml.llm_interpreter import create_k2_interpreter
+    from agent_commercial.ml.llm_interpreter import create_k2_interpreter
     
     results = {"passed": 0, "failed": 0, "details": []}
     

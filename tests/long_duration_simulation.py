@@ -30,10 +30,10 @@ load_dotenv()
 # Add project root to path
 sys.path.append(os.getcwd())
 
-# Import Agent Components
+# Import agent_home Components
 from agent_advisory.goal_generator import GoalDiscoveryEngine
 from agent_cognitive.meta_cognition import MetaCognition
-from agent_bms.skillbook import BuildingSkillbook
+from agent_commercial.skillbook import BuildingSkillbook
 from agent_unified.llm import UnifiedLLM
 
 # Configuration
@@ -230,7 +230,7 @@ def main():
     with p1, p2, p3:
         # Initialize Agent Components with patched time
         # We need to construct them INSIDE the patch context so they pick up the mock
-        from agent.memory.orchestrator import MemoryOrchestrator
+        from arvis_core.memory.orchestrator import MemoryOrchestrator
         
         memory = MemoryOrchestrator(persist_dir=os.path.join(TEST_DIR, "memories"))
         brain = MetaCognition("stress_test_tower")

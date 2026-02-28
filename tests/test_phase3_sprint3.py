@@ -5,7 +5,7 @@ import time
 import os
 
 # Mock EventBus
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 from agent_preferences.preference_store import PreferenceStore
 from agent_preferences.preference_updater import PreferenceUpdater
 from agent_plan.adaptive_plan.adaptive_plan_engine import AdaptivePlanEngine

@@ -7,7 +7,7 @@ Executes ACTION steps by interacting with the DeviceController (MatterController
 from typing import Dict, Any
 from agent_mission.base.mission_step import MissionStep
 from agent_mission.base.mission_context import MissionContext
-from agent.controllers.matter_controller import MatterController
+from agent_home.controllers.matter_controller import MatterController
 
 class DeviceExecutor:
     def __init__(self, device_controller: MatterController):

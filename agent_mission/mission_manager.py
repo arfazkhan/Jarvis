@@ -8,7 +8,7 @@ Manages mission start/stop, state transitions, and persistence.
 import yaml
 from typing import Dict, Optional, List
 from pathlib import Path
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 from agent_mission.base.mission import Mission, MissionStatus
 from agent_mission.base.mission_context import MissionContext
 from agent_mission.mission_store import MissionStore

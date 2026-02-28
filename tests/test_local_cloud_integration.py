@@ -103,7 +103,7 @@ class IntegrationTester:
         # Load LocalAgent
         print("\n🔧 Loading LocalAgent (Qwen 2.5 3B)...")
         try:
-            from agent.llm_agent.local_agent import LocalAgent
+            from agent_home.llm_agent.local_agent import LocalAgent
             self.local_agent = LocalAgent(model_type="qwen")
             if self.local_agent.llm:
                 print("  ✅ LocalAgent loaded")

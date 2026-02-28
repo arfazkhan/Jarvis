@@ -1,6 +1,6 @@
 import unittest
 import time
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 from agent_plan.plan_graph import PlanGraph, PlanNode
 from agent_plan.plan_executor import PlanExecutor
 

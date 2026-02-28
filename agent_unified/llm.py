@@ -1,10 +1,14 @@
 from typing import List, Optional, Dict, Any, Union
 import json
 import os
+import logging
+
+logger = logging.getLogger("arvis.unified.llm")
+
 from pydantic import BaseModel, Field, PrivateAttr
 
 # Import legacy LLMAgent logic to reuse provider connections
-from agent.llm_agent.llm_agent import LLMAgent
+from agent_home.llm_agent.llm_agent import LLMAgent
 from agent_unified.schema import Message, ToolCall
 
 # Global singletons for hybrid architecture
@@ -301,8 +305,9 @@ class UnifiedLLM(BaseModel):
             
             content = message.content
             
-            # K2-Think parsing: extract <think>...<answer>
-            if agent.provider == "k2think" and content:
+            # Universal Parsing: extract <think>...<answer> if present
+            # valid for DeepSeek-R1, K2, or any model prompted to use these tags
+            if content:
                 import re
                 # Pattern to extract think and answer blocks
                 # The API returns <think>...</think>\n<answer>...</answer>
@@ -313,7 +318,17 @@ class UnifiedLLM(BaseModel):
                 
                 if think_match:
                     thought_process = think_match.group(1).strip()
-                    print(f"\n[K2-Think] 🧠 Thought Process:\n{thought_process}\n")
+                    print(f"\n[Thinking] 🧠 Thought Process:\n{thought_process}\n")
+                    # GLASS BOX: Stream Thought
+                    from agent_commercial.api.sse_broadcaster import SSEBroadcaster
+                    import asyncio
+                    try:
+                        # Broadcast immediately - await to ensure it sends
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                             loop.create_task(SSEBroadcaster().broadcast("think", {"content": thought_process}))
+                    except Exception as e:
+                        logger.warning(f"Failed to broadcast thought: {e}")
                     
                 if answer_match:
                     content = answer_match.group(1).strip()
@@ -336,12 +351,11 @@ class UnifiedLLM(BaseModel):
             # the failed_generation. We parse it and recover.
             if "tool_use_failed" in error_str and "failed_generation" in error_str:
                 import re, json, uuid
-                print(f"[LLM] ⚠️ Groq tool_use_failed — attempting recovery from failed_generation")
+                logger.debug(f"[LLM] Groq tool_use_failed raw: {error_str[:300]}")
                 
                 # Extract the failed_generation content
-                # Pattern: <function=tool_name {json_args}</function>
-                # Use DOTALL to handle newlines in JSON
-                pattern = r'<function=(\w+)\s*(\{.*?\})\s*</function>'
+                # Pattern: <function=tool_name[=, >, ]({json_args})</function>
+                pattern = r'<function=(\w+)[=,\s>}]*\(?((?:\{.*?\}|\[.*?\]|".*?"))\)?\s*</function>'
                 matches = re.findall(pattern, error_str, re.DOTALL)
                 
                 if matches:
@@ -349,26 +363,54 @@ class UnifiedLLM(BaseModel):
                     recovered_calls = []
                     for func_name, args_str in matches:
                         try:
-                            # Validate the JSON args
-                            json.loads(args_str)
+                            # If it's a quoted string, unquote it first
+                            if args_str.startswith('"') and args_str.endswith('"'):
+                                try:
+                                    args_str = json.loads(args_str)
+                                except:
+                                    pass
+
+                            if isinstance(args_str, str):
+                                json.loads(args_str)  # Validate
+                            else:
+                                args_str = json.dumps(args_str)
+
                             call_id = f"call_{uuid.uuid4().hex[:8]}"
                             recovered_calls.append(ToolCall(
                                 id=call_id,
                                 function=Function(name=func_name, arguments=args_str)
                             ))
-                            print(f"[LLM] ✅ Recovered tool call: {func_name}({args_str})")
                         except json.JSONDecodeError:
-                            print(f"[LLM] ❌ Could not parse args for {func_name}: {args_str}")
+                            logger.warning(f"[LLM] Could not parse args for {func_name}: {args_str}")
                     
                     if recovered_calls:
+                        names = ", ".join(c.function.name for c in recovered_calls)
+                        print(f"[LLM] ✅ Recovered {len(recovered_calls)} tool call(s): {names}")
                         return Message.assistant_message(
                             content="",
                             tool_calls=recovered_calls
                         )
                 
-                # If recovery failed, return a SYSTEM NOTE to the agent, not a crash.
-                # This allows the agent to try a different approach or admit text-only failure.
-                print(f"[LLM] ❌ Recovery failed, returning failure note to agent")
+                # ── Recovery failed → Retry WITHOUT tools (natural language fallback) ──
+                print(f"[LLM] ⚠️ Tool call recovery failed, retrying without tools...")
+                try:
+                    def _retry_no_tools():
+                        retry_kwargs = {
+                            "model": model,
+                            "messages": api_messages,
+                        }
+                        if max_tokens:
+                            retry_kwargs["max_tokens"] = max_tokens
+                        return agent.client.chat.completions.create(**retry_kwargs)
+                    
+                    retry_response = await asyncio.to_thread(_retry_no_tools)
+                    retry_content = retry_response.choices[0].message.content or ""
+                    print(f"[LLM] ✅ No-tools retry succeeded ({len(retry_content)} chars)")
+                    return Message.assistant_message(content=retry_content)
+                except Exception as retry_err:
+                    logger.warning(f"[LLM] No-tools retry also failed: {retry_err}")
+                
+                # Final fallback: return a system note so the agent doesn't crash
                 return Message.assistant_message(
                     content=(
                         "SYSTEM NOTE: The previous tool call failed and could not be parsed. "

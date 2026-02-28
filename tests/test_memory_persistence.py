@@ -11,8 +11,8 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, ".")
 
-from agent.llm_agent.local_agent import LocalAgent
-from agent.memory.preference_store import PreferenceStore
+from agent_home.llm_agent.local_agent import LocalAgent
+from arvis_core.memory.preference_store import PreferenceStore
 
 TEST_DIR = "./data/test_memories"
 TOOLS_SCHEMA = [

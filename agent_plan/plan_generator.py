@@ -62,7 +62,7 @@ PLANNING_TOOLS = [
     }
 ]
 
-from agent.llm_agent.prompt_planning import SYSTEM_PROMPT
+from agent_home.llm_agent.prompt_planning import SYSTEM_PROMPT
 
 class PlanGenerator:
     def __init__(self, scene_registry: SceneRegistry, scene_engine: SceneEngine):

@@ -3,7 +3,7 @@ import asyncio
 import tempfile
 import shutil
 from unittest.mock import MagicMock
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 from agent_mission.mission_executor import MissionExecutor
 from agent_mission.mission_store import MissionStore
 from agent_mission.mission_planner import MissionPlanner

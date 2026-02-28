@@ -25,11 +25,11 @@ sys.path.append(os.getcwd())
 init()
 
 # Imports specifically for patching
-import agent.memory.observation_store
-import agent.memory.preference_store
-import agent.memory.orchestrator
+import arvis_core.memory.observation_store
+import arvis_core.memory.preference_store
+import arvis_core.memory.orchestrator
 
-from agent.memory.orchestrator import MemoryOrchestrator
+from arvis_core.memory.orchestrator import MemoryOrchestrator
 # We define a simple mock simulator to avoid full LLM costs for this benchmark logic
 # unless we strictly need the LLM content. For benchmarking memory I/O, randomized text is sufficient 
 # and faster/cheaper. 

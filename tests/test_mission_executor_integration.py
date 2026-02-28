@@ -3,7 +3,7 @@ import asyncio
 import tempfile
 import shutil
 from unittest.mock import MagicMock
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 from agent_mission.mission_executor import MissionExecutor
 from agent_mission.mission_store import MissionStore
 from agent_mission.mission_planner import MissionPlanner
@@ -13,7 +13,7 @@ from agent_plan.action_executors import (
     CollectionExecutor, MonitoringExecutor
 )
 from agent_plan.scene_engine import SceneEngine
-from agent.controllers.matter_controller import MatterController
+from agent_home.controllers.matter_controller import MatterController
 from agent_mission.base.mission import Mission, MissionStatus
 from agent_plan.plan_graph import PlanGraph, PlanNode
 

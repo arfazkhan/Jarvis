@@ -17,9 +17,9 @@ import os
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from agent_bms.graph import BMSGraph
-from agent_bms.ml.causal_inference import CausalInferenceEngine
-from agent_bms.prompt_builder import get_ops_system_prompt
+from agent_commercial.graph import BMSGraph
+from agent_commercial.ml.causal_inference import CausalInferenceEngine
+from agent_commercial.prompt_builder import get_ops_system_prompt
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("test_e2e")

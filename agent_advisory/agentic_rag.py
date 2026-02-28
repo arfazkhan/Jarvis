@@ -279,7 +279,7 @@ class AgenticRAG(ARVISToolAgent):
         }
     
     def _extract_final_answer(self) -> Dict[str, Any]:
-        """Extract the final answer from agent memory"""
+        """Extract the final answer from arvis_core.memory"""
         # Look for provide_answer tool result in memory
         for msg in reversed(self.memory.messages):
             if msg.role == "tool" and msg.content:

@@ -1,6 +1,9 @@
 """Test BMS LLM Agent"""
 import asyncio
-from agent_bms.bms_llm_agent import BMSLLMAgent
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from agent_commercial.bms_llm_agent import BMSLLMAgent
 
 async def test():
     print("Initializing BMS LLM Agent...")

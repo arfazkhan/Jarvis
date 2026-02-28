@@ -8,7 +8,7 @@ from typing import Dict, Any
 from agent_mission.base.mission_step import MissionStep
 from agent_mission.base.mission_context import MissionContext
 from agent_plan.scene_engine import SceneEngine
-from agent.controllers.matter_controller import MatterController
+from agent_home.controllers.matter_controller import MatterController
 
 class SceneExecutor:
     def __init__(self, scene_engine: SceneEngine, device_controller: MatterController):

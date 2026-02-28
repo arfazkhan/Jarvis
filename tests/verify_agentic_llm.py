@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from agent_cognitive.meta_cognition import MetaCognition
-from agent_bms.skillbook import BuildingSkillbook
+from agent_commercial.skillbook import BuildingSkillbook
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -29,7 +29,7 @@ async def verify_llm_reflection():
         skillbook = BuildingSkillbook("verify_building", db_path=db_path)
         
         # Hack singleton to force our DB
-        from agent_bms.skillbook import _skillbooks
+        from agent_commercial.skillbook import _skillbooks
         _skillbooks["verify_building"] = skillbook
         
         meta = MetaCognition("verify_building")

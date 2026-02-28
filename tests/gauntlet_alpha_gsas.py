@@ -13,8 +13,8 @@ load_dotenv()
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agent_unified.llm import UnifiedLLM
-from agent_bms.gsas_reporter import GSASReporter, GSASStarRating
-from agent.memory.orchestrator import MemoryOrchestrator
+from agent_commercial.gsas_reporter import GSASReporter, GSASStarRating
+from arvis_core.memory.orchestrator import MemoryOrchestrator
 
 # Initialize Colorama
 init()

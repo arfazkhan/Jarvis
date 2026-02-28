@@ -251,11 +251,11 @@ class TestExecutor:
         self._init_agents()
     
     def _init_agents(self):
-        from agent.event_bus.event_bus import EventBus
-        from agent.llm_agent.local_agent import LocalAgent
-        from agent.llm_agent.llm_agent import LLMAgent
-        from agent.llm_agent.hybrid_orchestrator import HybridOrchestrator
-        from agent.llm_agent.tools_schema import TOOLS_SCHEMA
+        from arvis_core.event_bus.event_bus import EventBus
+        from agent_home.llm_agent.local_agent import LocalAgent
+        from agent_home.llm_agent.llm_agent import LLMAgent
+        from agent_home.llm_agent.hybrid_orchestrator import HybridOrchestrator
+        from agent_home.llm_agent.tools_schema import TOOLS_SCHEMA
         
         self.bus = EventBus()
         self.tools_schema = TOOLS_SCHEMA

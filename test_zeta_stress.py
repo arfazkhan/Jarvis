@@ -25,10 +25,10 @@ except:
     pass
 
 # Imports
-from agent_bms.main import OpsCopilot
-from agent_bms.bms_data_model import AlarmSeverity
-from agent_bms.alarm_engine import Alarm
-from agent_bms.event_correlator import Event, EventSource, EventCorrelator
+from agent_commercial.main import OpsCopilot
+from agent_commercial.bms_data_model import AlarmSeverity
+from agent_commercial.alarm_engine import Alarm
+from agent_commercial.event_correlator import Event, EventSource, EventCorrelator
 
 @dataclass
 class ScenarioResult:
@@ -103,7 +103,7 @@ class ZetaStressTester:
         
         # Force Cluster
         if not self.copilot.alarm_engine.get_clusters():
-            from agent_bms.alarm_engine import AlarmCluster
+            from agent_commercial.alarm_engine import AlarmCluster
             cluster = AlarmCluster(cluster_id="force_cluster", alarm_ids=["chiller_trip"], root_cause_equipment_id="CH-01")
             self.copilot.alarm_engine.clusters["force_cluster"] = cluster
             

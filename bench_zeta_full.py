@@ -28,9 +28,9 @@ async def run_full_benchmark():
     os.environ["TOOL_PROVIDER"] = "nvidia"
     os.environ["LLM_PROVIDER"] = "nvidia"
     
-    from agent_bms.main import OpsCopilot
-    from agent_bms.event_correlator import Event, EventSource
-    from agent_bms.alarm_engine import Alarm, AlarmSeverity
+    from agent_commercial.main import OpsCopilot
+    from agent_commercial.event_correlator import Event, EventSource
+    from agent_commercial.alarm_engine import Alarm, AlarmSeverity
     from datetime import datetime, timedelta
 
     # Prepare Data
@@ -81,7 +81,7 @@ async def run_full_benchmark():
 
         # Inject Data
         if not hasattr(copilot, 'event_correlator') or copilot.event_correlator is None:
-            from agent_bms.event_correlator import EventCorrelator
+            from agent_commercial.event_correlator import EventCorrelator
             copilot.event_correlator = EventCorrelator()
             
         copilot.event_correlator.add_event(sandstorm_event)

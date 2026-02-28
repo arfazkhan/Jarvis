@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch
 import time
 
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 from agent_sensors.sensor_registry import SensorRegistry
 from agent_sensors.sensor_ingestion import SensorIngestion
 from agent_sensors.state_estimator import StateEstimator

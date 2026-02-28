@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 from typing import Dict, Any
 
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 from agent_mission.mission_manager import MissionManager
 from agent_mission.mission_planner import MissionPlanner
 from agent_mission.mission_executor import MissionExecutor

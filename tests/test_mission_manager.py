@@ -2,7 +2,7 @@ import unittest
 import tempfile
 import shutil
 from pathlib import Path
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 from agent_mission.mission_manager import MissionManager
 from agent_mission.mission_store import MissionStore
 from agent_mission.base.mission import Mission, MissionStatus

@@ -28,9 +28,9 @@ async def run_benchmark():
     # UnifiedLLM._ask_nvidia reads os.getenv("NVIDIA_MODEL") on every call, 
     # so we just need to change the env var.
     
-    from agent_bms.main import OpsCopilot
-    from agent_bms.event_correlator import Event, EventSource
-    from agent_bms.alarm_engine import Alarm, AlarmSeverity
+    from agent_commercial.main import OpsCopilot
+    from agent_commercial.event_correlator import Event, EventSource
+    from agent_commercial.alarm_engine import Alarm, AlarmSeverity
     from datetime import datetime, timedelta
 
     # Setup Scenario Data (Same for all)
@@ -54,7 +54,7 @@ async def run_benchmark():
     print("→ Initializing ARVIS Core...")
     copilot = OpsCopilot(mode="api_only")
     if not hasattr(copilot, 'event_correlator') or copilot.event_correlator is None:
-        from agent_bms.event_correlator import EventCorrelator
+        from agent_commercial.event_correlator import EventCorrelator
         copilot.event_correlator = EventCorrelator()
         
     # Pre-inject data
@@ -62,7 +62,7 @@ async def run_benchmark():
     await copilot.alarm_engine.ingest_alarm(alarm)
     
     # Force cluster
-    from agent_bms.alarm_engine import AlarmCluster
+    from agent_commercial.alarm_engine import AlarmCluster
     cluster = AlarmCluster(cluster_id="bench_cluster", alarm_ids=["chiller_trip"], root_cause_equipment_id="CH-01")
     copilot.alarm_engine.clusters["bench_cluster"] = cluster
     

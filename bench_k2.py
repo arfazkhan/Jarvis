@@ -21,9 +21,9 @@ async def run_benchmark():
     
     results = []
 
-    from agent_bms.main import OpsCopilot
-    from agent_bms.event_correlator import Event, EventSource
-    from agent_bms.alarm_engine import Alarm, AlarmSeverity
+    from agent_commercial.main import OpsCopilot
+    from agent_commercial.event_correlator import Event, EventSource
+    from agent_commercial.alarm_engine import Alarm, AlarmSeverity
     from datetime import datetime, timedelta
 
     # Setup Scenario Data
@@ -49,7 +49,7 @@ async def run_benchmark():
     
     copilot = OpsCopilot(mode="api_only")
     if not hasattr(copilot, 'event_correlator') or copilot.event_correlator is None:
-        from agent_bms.event_correlator import EventCorrelator
+        from agent_commercial.event_correlator import EventCorrelator
         copilot.event_correlator = EventCorrelator()
         
     # Pre-inject data
@@ -57,7 +57,7 @@ async def run_benchmark():
     await copilot.alarm_engine.ingest_alarm(alarm)
     
     # Force cluster
-    from agent_bms.alarm_engine import AlarmCluster
+    from agent_commercial.alarm_engine import AlarmCluster
     cluster = AlarmCluster(cluster_id="bench_cluster", alarm_ids=["chiller_trip"], root_cause_equipment_id="CH-01")
     copilot.alarm_engine.clusters["bench_cluster"] = cluster
     

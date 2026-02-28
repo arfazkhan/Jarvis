@@ -7,8 +7,8 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from agent_conversation.dialogue_manager import DialogueManager, DialogueResult
-from agent.agent_conversation.conversation_bridge import ConversationBridge
-from agent.event_bus.event_bus import EventBus
+from agent_home.agent_conversation.conversation_bridge import ConversationBridge
+from arvis_core.event_bus.event_bus import EventBus
 
 class TestDialogueMissionUnification(unittest.TestCase):
     def setUp(self):

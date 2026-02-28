@@ -1,7 +1,7 @@
 import unittest
-from agent.event_bus.event_bus import EventBus
-from agent.state_engine.state_engine import StateEngine
-from agent.controllers.virtual_device import VirtualMatterDevice
+from arvis_core.event_bus.event_bus import EventBus
+from agent_home.state_engine.state_engine import StateEngine
+from agent_home.controllers.virtual_device import VirtualMatterDevice
 
 class TestCoreComponents(unittest.TestCase):
     def test_event_bus(self):

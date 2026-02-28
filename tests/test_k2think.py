@@ -26,14 +26,14 @@ class TestK2ThinkResponseParsing(unittest.TestCase):
     
     def setUp(self):
         """Import the LLMAgent class."""
-        from agent.llm_agent.llm_agent import LLMAgent
+        from agent_home.llm_agent.llm_agent import LLMAgent
         
         # Create a minimal mock agent to test parsing
         with patch.object(LLMAgent, '__init__', lambda x, *args, **kwargs: None):
             self.agent = LLMAgent(None, None, None)
             self.agent.provider = "k2think"
             # Import the parsing method
-            from agent.llm_agent.llm_agent import LLMAgent as RealAgent
+            from agent_home.llm_agent.llm_agent import LLMAgent as RealAgent
             self.agent._parse_k2think_response = RealAgent._parse_k2think_response.__get__(self.agent)
     
     def test_parse_simple_answer(self):
@@ -108,9 +108,9 @@ class TestK2ThinkLiveAPI(unittest.TestCase):
     
     def setUp(self):
         """Initialize real K2 Think agent."""
-        from agent.event_bus.event_bus import EventBus
-        from agent.state_engine.state_engine import StateEngine
-        from agent.llm_agent.llm_agent import LLMAgent
+        from arvis_core.event_bus.event_bus import EventBus
+        from agent_home.state_engine.state_engine import StateEngine
+        from agent_home.llm_agent.llm_agent import LLMAgent
         
         # Force K2 Think provider
         os.environ["LLM_PROVIDER"] = "k2think"
@@ -188,7 +188,7 @@ class TestK2ThinkLiveAPI(unittest.TestCase):
         """Test that K2 Think can generate tool calls."""
         print("\n🔧 Testing tool call generation...")
         
-        from agent.llm_agent.tools_schema import TOOLS_SCHEMA
+        from agent_home.llm_agent.tools_schema import TOOLS_SCHEMA
         
         system_prompt = """You are ARVIS, a smart home assistant. 
         When asked to control devices, use the appropriate tools."""
@@ -238,9 +238,9 @@ class TestK2ThinkProviderInit(unittest.TestCase):
         if not os.environ.get("K2THINK_API_KEY"):
             self.skipTest("K2THINK_API_KEY not set")
         
-        from agent.event_bus.event_bus import EventBus
-        from agent.state_engine.state_engine import StateEngine
-        from agent.llm_agent.llm_agent import LLMAgent
+        from arvis_core.event_bus.event_bus import EventBus
+        from agent_home.state_engine.state_engine import StateEngine
+        from agent_home.llm_agent.llm_agent import LLMAgent
         
         os.environ["LLM_PROVIDER"] = "k2think"
         
@@ -258,9 +258,9 @@ class TestK2ThinkProviderInit(unittest.TestCase):
         if not os.environ.get("K2THINK_API_KEY"):
             self.skipTest("K2THINK_API_KEY not set")
         
-        from agent.event_bus.event_bus import EventBus
-        from agent.state_engine.state_engine import StateEngine
-        from agent.llm_agent.llm_agent import LLMAgent
+        from arvis_core.event_bus.event_bus import EventBus
+        from agent_home.state_engine.state_engine import StateEngine
+        from agent_home.llm_agent.llm_agent import LLMAgent
         
         os.environ["LLM_PROVIDER"] = "k2"
         

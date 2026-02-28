@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 load_dotenv()
 
-from agent_bms.bms_llm_agent import BMSLLMAgent
+from agent_commercial.bms_llm_agent import BMSLLMAgent
 
 async def debug_tools():
     agent = BMSLLMAgent()

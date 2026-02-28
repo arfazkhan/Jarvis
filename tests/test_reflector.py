@@ -2,7 +2,7 @@
 import unittest
 import json
 from unittest.mock import MagicMock
-from agent.learning.reflector import Reflector
+from agent_home.learning.reflector import Reflector
 
 class TestReflector(unittest.TestCase):
     def setUp(self):

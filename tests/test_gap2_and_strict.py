@@ -12,7 +12,7 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from agent_unified.llm import UnifiedLLM
-from agent_bms.graph import BMSGraph
+from agent_commercial.graph import BMSGraph
 
 class TestGapImplementation(unittest.TestCase):
 

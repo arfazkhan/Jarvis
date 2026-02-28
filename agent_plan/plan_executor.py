@@ -12,7 +12,7 @@ import time
 import threading
 from typing import Dict, Any, List
 
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 from agent_plan.plan_graph import PlanGraph, PlanNode
 from agent_plan.safety_validator import SafetyValidator
 

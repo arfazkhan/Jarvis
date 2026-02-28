@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 from agent_sensors.sensor_models import HomeSituation, SleepState, HomePresence, EmotionalState
 from agent_personality.safety_policies import SafetyPolicies
 from agent_personality.prompt_personality import build_personality_prompt, build_full_system_prompt
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 from agent_personality.personality_manager import PersonalityManager
 
 class TestSafetyAndPrompt(unittest.TestCase):

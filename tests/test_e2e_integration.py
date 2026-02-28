@@ -4,11 +4,11 @@ import time
 from unittest.mock import MagicMock, patch
 from typing import Dict, Any
 
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 from agent_sensors.sensor_registry import SensorRegistry
 from agent_sensors.state_estimator import StateEstimator
 from agent_personality.personality_manager import PersonalityManager
-from agent.controllers.matter_controller import MatterController
+from agent_home.controllers.matter_controller import MatterController
 from agent_plan.plan_executor import PlanExecutor
 from agent_mission.mission_manager import MissionManager
 from agent_mission.mission_planner import MissionPlanner

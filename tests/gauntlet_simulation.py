@@ -31,7 +31,7 @@ sys.path.append(os.getcwd())
 
 from agent_unified.llm import UnifiedLLM
 from agent_cognitive.meta_cognition import MetaCognition
-from agent.memory.orchestrator import MemoryOrchestrator
+from arvis_core.memory.orchestrator import MemoryOrchestrator
 
 # Configuration
 TEST_DIR = "tests_data/gauntlet"
@@ -221,7 +221,7 @@ async def run_scenario():
             action_class = brain.determine_action_class(risk_level, is_lockout)
             
             # Build Professional Prompt
-            from agent_bms.prompt_builder import get_ops_prompt_builder, BMSContext
+            from agent_commercial.prompt_builder import get_ops_prompt_builder, BMSContext
             builder = get_ops_prompt_builder()
             
             ctx = BMSContext(

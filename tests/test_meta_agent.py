@@ -1,8 +1,8 @@
 import unittest
 from unittest.mock import MagicMock, patch
 import time
-from agent.agent_cognitive.meta_agent import MetaAgent
-from agent.event_bus.event_bus import EventBus
+from agent_home.agent_cognitive.meta_agent import MetaAgent
+from arvis_core.event_bus.event_bus import EventBus
 
 class TestMetaAgent(unittest.TestCase):
     def setUp(self):

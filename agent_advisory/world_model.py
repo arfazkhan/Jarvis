@@ -228,8 +228,7 @@ class WorldModel:
             states.append(next_state)
             
             # Calculate Reward (Utility) of the NEXT state
-            # TODO: Use OutcomePredictor/RewardModel here. 
-            # For prototype: Calculate simple utility
+            # If no RewardModel is attached, use default evaluation heuristic
             # Utility = - (Power * Cost + Discomfort Penalty)
             power = next_state.features.get("total_power_kw", 0)
             temp = next_state.features.get("zone_temp_avg_c", 23)

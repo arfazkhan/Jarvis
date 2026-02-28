@@ -84,8 +84,8 @@ MODES: Dict[ArvisMode, ModeConfig] = {
         mode=ArvisMode.COMMERCIAL,
         name="ARVIS Ops Copilot",
         description="AI-powered Building Management System advisor",
-        tools_module="agent_bms.tools_schema",
-        prompt_module="agent_bms.tools_schema",  # Prompts are in same file
+        tools_module="agent_commercial.tools_schema",
+        prompt_module="agent_commercial.tools_schema",  # Prompts are in same file
         cognitive_enabled=True,
         features=[
             "equipment_monitoring",  # Chillers, AHUs, VAVs
@@ -183,11 +183,11 @@ class ModeDispatcher:
             return self._tools_cache
         
         if self._mode == ArvisMode.RESIDENTIAL:
-            from agent.llm_agent.tools_schema import TOOLS_SCHEMA
+            from agent_home.llm_agent.tools_schema import TOOLS_SCHEMA
             self._tools_cache = TOOLS_SCHEMA
             
         elif self._mode == ArvisMode.COMMERCIAL:
-            from agent_bms.tools_schema import get_bms_tools
+            from agent_commercial.tools_schema import get_bms_tools
             self._tools_cache = get_bms_tools()
         
         return self._tools_cache or []
@@ -203,11 +203,11 @@ class ModeDispatcher:
             System prompt string
         """
         if self._mode == ArvisMode.RESIDENTIAL:
-            from agent.llm_agent.prompt import get_system_prompt
+            from agent_home.llm_agent.prompt import get_system_prompt
             return get_system_prompt()
             
         elif self._mode == ArvisMode.COMMERCIAL:
-            from agent_bms.tools_schema import OPS_COPILOT_SYSTEM_PROMPT, OPS_COPILOT_SYSTEM_PROMPT_AR
+            from agent_commercial.tools_schema import OPS_COPILOT_SYSTEM_PROMPT, OPS_COPILOT_SYSTEM_PROMPT_AR
             return OPS_COPILOT_SYSTEM_PROMPT_AR if language == "ar" else OPS_COPILOT_SYSTEM_PROMPT
         
         return ""
@@ -223,11 +223,11 @@ class ModeDispatcher:
             return self._tool_executor
         
         if self._mode == ArvisMode.RESIDENTIAL:
-            from agent.llm_agent.executor import ToolExecutor
+            from agent_home.llm_agent.executor import ToolExecutor
             self._tool_executor = ToolExecutor()
             
         elif self._mode == ArvisMode.COMMERCIAL:
-            from agent_bms.tools_schema import BMSToolHandlerSync
+            from agent_commercial.tools_schema import BMSToolHandlerSync
             self._tool_executor = BMSToolHandlerSync()
         
         return self._tool_executor

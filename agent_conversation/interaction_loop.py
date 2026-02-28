@@ -6,7 +6,7 @@ and the system outputs (TTS, Actions, Missions).
 """
 
 from typing import Dict, Any, Optional
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 from agent_conversation.dialogue_manager import DialogueManager, DialogueResult
 
 class InteractionLoop:

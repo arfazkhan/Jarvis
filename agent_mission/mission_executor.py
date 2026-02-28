@@ -13,7 +13,7 @@ from enum import Enum
 from typing import Dict, Optional, List, Any
 from dataclasses import dataclass, field, asdict
 
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 from agent_plan.plan_graph import PlanGraph
 from agent_mission.base.mission_step import MissionStep, StepType, StepStatus
 from agent_mission.mission_store import MissionStore

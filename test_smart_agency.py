@@ -26,17 +26,17 @@ class MockLLMProvider:
         return MockLLMResponse("Mock response")
 
 # Import components
-from agent_bms.alarm_engine import AlarmEngine, Alarm, AlarmCluster, ProcessedAlarm
-from agent_bms.alarm_engine import AlarmEngine, Alarm, AlarmCluster
-from agent_bms.bms_data_model import AlarmSeverity, AlarmState
+from agent_commercial.alarm_engine import AlarmEngine, Alarm, AlarmCluster, ProcessedAlarm
+from agent_commercial.alarm_engine import AlarmEngine, Alarm, AlarmCluster
+from agent_commercial.bms_data_model import AlarmSeverity, AlarmState
 
 class AlarmType:
     HIGH_TEMP = "High Temp"
     LOW_PRESSURE = "Low Pressure"
     COMM_FAILURE = "Comm Failure"
 from agent_advisory.economy import ToolEconomyPolicy
-from agent_bms.event_correlator import EventCorrelator, Event, EventSource
-from agent_bms.briefing_engine import BriefingGenerator, BriefingPeriod
+from agent_commercial.event_correlator import EventCorrelator, Event, EventSource
+from agent_commercial.briefing_engine import BriefingGenerator, BriefingPeriod
 from agent_advisory.feedback_loop import ActiveLearner, Recommendation, RecommendationStatus
 
 async def test_smart_alarms():

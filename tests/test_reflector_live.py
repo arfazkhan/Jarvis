@@ -10,10 +10,10 @@ from dotenv import load_dotenv
 # Load environment variables for real API keys
 load_dotenv()
 
-from agent.learning.reflector import Reflector
-from agent.llm_agent.llm_agent import LLMAgent
-from agent.event_bus.event_bus import EventBus
-from agent.state_engine.state_engine import StateEngine
+from agent_home.learning.reflector import Reflector
+from agent_home.llm_agent.llm_agent import LLMAgent
+from arvis_core.event_bus.event_bus import EventBus
+from agent_home.state_engine.state_engine import StateEngine
 
 class TestReflectorLive(unittest.TestCase):
     """

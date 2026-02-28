@@ -224,7 +224,7 @@ if __name__ == "__main__":
     import sys
     sys.path.insert(0, ".")
     
-    from agent.llm_agent.local_agent import LocalAgent
+    from agent_home.llm_agent.local_agent import LocalAgent
     
     print("\n🚀 Loading Qwen 2.5 3B for real-world testing...")
     agent = LocalAgent(model_type="qwen")

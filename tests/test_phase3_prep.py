@@ -5,7 +5,7 @@ import json
 from unittest.mock import MagicMock, patch
 import os
 
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 from agent_cognitive.cognitive_loop import CognitiveLoop
 from agent_cognitive.context_graph import ContextGraph
 from agent_conversation.dialogue_manager import DialogueManager

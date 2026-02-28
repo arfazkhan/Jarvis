@@ -22,7 +22,7 @@ from pathlib import Path
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from agent_bms.bacnet_adapter import BACnetAdapter, BACnetPoint, BACNET_AVAILABLE
+from agent_commercial.bacnet_adapter import BACnetAdapter, BACnetPoint, BACNET_AVAILABLE
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("yabe_test")
@@ -147,11 +147,11 @@ async def main():
         if success:
             print("\n🎉 YABE integration test PASSED!")
             print("\nYou can now run Ops Copilot in BACnet mode:")
-            print("   python -m agent_bms.main --mode bacnet --port 8000")
+            print("   python -m agent_commercial.main --mode bacnet --port 8000")
         else:
             print("\n⚠️ YABE integration test had issues")
             print("\nFor now, use simulator mode:")
-            print("   python -m agent_bms.main --mode simulator --port 8000")
+            print("   python -m agent_commercial.main --mode simulator --port 8000")
             
     except Exception as e:
         print(f"\n❌ Test failed with error: {e}")

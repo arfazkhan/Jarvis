@@ -16,23 +16,41 @@ from api.routers import (
     # We will import others as we create them
 )
 
-# Import Agent Components
+# Import agent_home Components
 # We import them here to initialize them in lifespan
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from agent.event_bus.event_bus import EventBus
-from agent.state_engine.state_engine import StateEngine
-from agent.controllers.matter_controller import MatterController
-from agent.automations.automation_engine import AutomationEngine
-from agent.tools.executor import ToolExecutor
-from agent.learning.learning_engine import LearningEngine
-from agent.llm_agent.llm_agent import LLMAgent
-from agent_unified.voice.coordinator import VoiceCoordinator
-from agent_conversation.dialogue_manager import DialogueManager
-from agent_mission.mission_manager import MissionManager
-from agent_unified.flows.planning import PlanningFlow
+# Determine Vertical Mode
+import os
+ARVIS_VERTICAL = os.getenv("ARVIS_VERTICAL", "RESIDENTIAL").upper()
+logger = logging.getLogger("arvis_api")
+logger.info(f"🌍 ARVIS MODE: {ARVIS_VERTICAL}")
+
+# Shared Core
+from arvis_core.event_bus.event_bus import EventBus
+
+# Conditional Imports
+if ARVIS_VERTICAL == "RESIDENTIAL":
+    from agent_home.state_engine.state_engine import StateEngine
+    from agent_home.controllers.matter_controller import MatterController
+    from agent_home.automations.automation_engine import AutomationEngine
+    from agent_home.tools.executor import ToolExecutor
+    from agent_home.learning.learning_engine import LearningEngine
+    from agent_home.llm_agent.llm_agent import LLMAgent
+    from agent_unified.voice.coordinator import VoiceCoordinator
+    # from agent_conversation.dialogue_manager import DialogueManager # Moved to Core?
+    # from agent_mission.mission_manager import MissionManager # Moved to Core?
+    from agent_unified.flows.planning import PlanningFlow
+
+elif ARVIS_VERTICAL == "COMMERCIAL":
+    from agent_commercial.bms_llm_agent import BMSLLMAgent
+    from agent_unified.engines.real_bms import RealBMS # Used as adapter
+    from agent_commercial.api.routes_omega import router as omega_router
+    from agent_commercial.api.sim_service import SimServiceMaster
+    # Commercial explicitly does NOT load Matter, AutomationEngine, etc.
+
 
 # Logging
 logging.basicConfig(level=logging.INFO)
@@ -41,59 +59,84 @@ logger = logging.getLogger("arvis_api")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize ARVIS System on Startup."""
-    logger.info("🚀 ARVIS Production API Starting...")
+    logger.info(f"🚀 ARVIS Production API Starting in {ARVIS_VERTICAL} Mode...")
     
-    # 1. Core Infrastructure
+    # 1. Core Infrastructure (Always Needed)
     global_state.event_bus = EventBus()
-    global_state.state_engine = StateEngine(global_state.event_bus)
-    global_state.matter_controller = MatterController(use_virtual=True)
-    
-    # 2. Automation
-    global_state.automation_engine = AutomationEngine(
-        global_state.event_bus,
-        global_state.matter_controller,
-        global_state.state_engine,
-        persist_path="data/routines.json"
-    )
+    global_state.mode = ARVIS_VERTICAL
 
-    # 3. Learning & Execution
-    global_state.learning_engine = LearningEngine(
-        global_state.event_bus,
-        global_state.state_engine,
-        global_state.automation_engine,
-        tool_executor=None
-    )
-    
-    global_state.tool_executor = ToolExecutor(
-        global_state.matter_controller,
-        global_state.state_engine,
-        global_state.automation_engine,
-        global_state.event_bus,
-        learning_engine=global_state.learning_engine
-    )
-    global_state.learning_engine.tool_executor = global_state.tool_executor # Circular fix
+    if ARVIS_VERTICAL == "RESIDENTIAL":
+        logger.info("🏠 Initializing RESIDENTIAL Stack...")
+        # Residential Stack
+        global_state.state_engine = StateEngine(global_state.event_bus)
+        global_state.matter_controller = MatterController(use_virtual=True)
+        
+        global_state.automation_engine = AutomationEngine(
+            global_state.event_bus,
+            global_state.matter_controller,
+            global_state.state_engine,
+            persist_path="data/routines.json"
+        )
 
-    # 4. Cognitive Layers
-    global_state.llm_agent = LLMAgent(
-        global_state.event_bus,
-        global_state.state_engine,
-        global_state.automation_engine,
-        learning_engine=global_state.learning_engine,
-        subscribe_to_voice=False # API handles voice
-    )
-    global_state.learning_engine.set_llm_client(global_state.llm_agent)
-    
-    global_state.mission_manager = MissionManager(global_state.event_bus)
-    global_state.dialogue_manager = DialogueManager(mission_manager=global_state.mission_manager)
-    global_state.planning_flow = PlanningFlow() # Unified Flow
-    
-    # 5. Voice
-    try:
-        global_state.voice_coordinator = VoiceCoordinator()
-        await global_state.voice_coordinator.start()
-        logger.info("✅ Voice Coordinator Active")
-    except Exception as e:
-         logger.warning(f"⚠️ Voice Init Failed: {e}")
+        global_state.learning_engine = LearningEngine(
+            global_state.event_bus,
+            global_state.state_engine,
+            global_state.automation_engine,
+            tool_executor=None
+        )
+        
+        global_state.tool_executor = ToolExecutor(
+            global_state.matter_controller,
+            global_state.state_engine,
+            global_state.automation_engine,
+            global_state.event_bus,
+            learning_engine=global_state.learning_engine
+        )
+        global_state.learning_engine.tool_executor = global_state.tool_executor
+
+        global_state.llm_agent = LLMAgent(
+            global_state.event_bus,
+            global_state.state_engine,
+            global_state.automation_engine,
+            learning_engine=global_state.learning_engine,
+            subscribe_to_voice=False 
+        )
+        global_state.learning_engine.set_llm_client(global_state.llm_agent)
+        
+        # global_state.mission_manager = MissionManager(global_state.event_bus)
+        # global_state.dialogue_manager = DialogueManager(mission_manager=global_state.mission_manager)
+        global_state.planning_flow = PlanningFlow()
+
+        # Voice
+        try:
+            global_state.voice_coordinator = VoiceCoordinator()
+            await global_state.voice_coordinator.start()
+            logger.info("✅ Residential Voice Coordinator Active")
+        except Exception as e:
+                logger.warning(f"⚠️ Voice Init Failed: {e}")
+
+    elif ARVIS_VERTICAL == "COMMERCIAL":
+        logger.info("🏢 Initializing COMMERCIAL Stack...")
+        # Commercial Stack
+        
+        # Initialize BMS Adapter
+        global_state.real_bms = RealBMS(config={"bacnet": {"device_id": 9999}})
+        # await global_state.real_bms.connect() # Optional auto-connect
+        
+        # Initialize Commercial Agent
+        global_state.bms_agent = BMSLLMAgent(
+            # Pass verified engines if needed, or let it init defaults
+        )
+        # Map to llm_agent generic slot for API compatibility if needed
+        # global_state.llm_agent = global_state.bms_agent 
+        # (Only if BMSLLMAgent interface matches LLMAgent exactly, otherwise keep separate)
+
+        logger.info("✅ Commercial BMS Agent Active")
+
+        # Initialize background simulation service
+        global_state.sim_service = SimServiceMaster()
+        app.state.sim_service = global_state.sim_service
+        logger.info("✅ Omega Simulation Service Active")
 
     logger.info("✅ System Fully Initialized.")
     yield
@@ -101,6 +144,8 @@ async def lifespan(app: FastAPI):
     logger.info("🛑 Shutting Down...")
     if global_state.voice_coordinator:
         await global_state.voice_coordinator.stop()
+    if global_state.real_bms:
+        await global_state.real_bms.disconnect()
 
 app = FastAPI(
     title="ARVIS Production API",
@@ -118,29 +163,32 @@ app.add_middleware(
 )
 
 # Register Routers
-app.include_router(agent.router, prefix="/api/v1/agent", tags=["Agent"])
-app.include_router(bms_core.router, prefix="/api/v1/bms", tags=["BMS Core"])
+# Register Routers
+if ARVIS_VERTICAL == "RESIDENTIAL":
+    app.include_router(agent.router, prefix="/api/v1/agent", tags=["Agent"])
+    app.include_router(automations.router, prefix="/api/v1/automations", tags=["Automations"])
+    app.include_router(voice.router, prefix="/api/v1/voice", tags=["Voice"])
+    app.include_router(learning.router, prefix="/api/v1/learning", tags=["Learning"])
+    app.include_router(llm.router, prefix="/api/v1/llm", tags=["Cognitive"]) # Residential LLM
+    app.include_router(mission.router, prefix="/api/v1/mission", tags=["Mission"])
+    app.include_router(personality.router, prefix="/api/v1/personality", tags=["Personality"])
+    app.include_router(conversation.router, prefix="/api/v1/conversation", tags=["Conversation"])
+    app.include_router(planning.router, prefix="/api/v1/planning", tags=["Planning"])
+
+elif ARVIS_VERTICAL == "COMMERCIAL":
+    app.include_router(bms_core.router, prefix="/api/v1/bms", tags=["BMS Core"])
+    app.include_router(bms_energy.router, prefix="/api/v1/bms/energy", tags=["Energy"])
+    app.include_router(maintenance.router, prefix="/api/v1/maintenance", tags=["Maintenance"])
+    app.include_router(advisory.router, prefix="/api/v1/advisory", tags=["Advisory"])
+    app.include_router(knowledge.router, prefix="/api/v1/knowledge", tags=["Knowledge"])
+    app.include_router(sensors.router, prefix="/api/v1/sensors", tags=["Sensors"])
+    app.include_router(omega_router)
+
+# Shared / Admin
 app.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin"])
-# Batch 2
-app.include_router(mission.router, prefix="/api/v1/mission", tags=["Mission"])
-app.include_router(advisory.router, prefix="/api/v1/advisory", tags=["Advisory"])
-app.include_router(knowledge.router, prefix="/api/v1/knowledge", tags=["Knowledge"])
-# Batch 3
-app.include_router(bms_energy.router, prefix="/api/v1/bms/energy", tags=["Energy"])
-app.include_router(maintenance.router, prefix="/api/v1/maintenance", tags=["Maintenance"])
-app.include_router(personality.router, prefix="/api/v1/personality", tags=["Personality"])
-app.include_router(sensors.router, prefix="/api/v1/sensors", tags=["Sensors"])
-# Batch 4
-app.include_router(automations.router, prefix="/api/v1/automations", tags=["Automations"])
-app.include_router(llm.router, prefix="/api/v1/llm", tags=["Cognitive"])
-app.include_router(firmware.router, prefix="/api/v1/firmware", tags=["Firmware"])
-# Batch 5
-app.include_router(core.router, prefix="/api/v1/core", tags=["Core"])
-app.include_router(conversation.router, prefix="/api/v1/conversation", tags=["Conversation"])
-app.include_router(planning.router, prefix="/api/v1/planning", tags=["Planning"])
 app.include_router(infrastructure.router, prefix="/api/v1/infrastructure", tags=["Infrastructure"])
-app.include_router(voice.router, prefix="/api/v1/voice", tags=["Voice"])
-app.include_router(learning.router, prefix="/api/v1/learning", tags=["Learning"])
+app.include_router(firmware.router, prefix="/api/v1/firmware", tags=["Firmware"])
+app.include_router(core.router, prefix="/api/v1/core", tags=["Core"])
 
 @app.get("/")
 async def root():
@@ -150,3 +198,9 @@ async def root():
         "version": "1.0.0", 
         "mode": "PRODUCTION"
     }
+
+
+@app.get("/health")
+async def health():
+    """Docker health check endpoint - lightweight ping for container orchestration."""
+    return {"status": "healthy"}

@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from agent_bms.bms_llm_agent import BMSLLMAgent
+from agent_commercial.bms_llm_agent import BMSLLMAgent
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("arvis.test.graph_rag")

@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 sys.path.insert(0, ".")
 
-from agent.memory.preference_store import PreferenceStore
+from arvis_core.memory.preference_store import PreferenceStore
 
 def test_chroma():
     print("-" * 50)

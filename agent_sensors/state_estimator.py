@@ -7,7 +7,7 @@ Orchestrates Virtual Sensors.
 
 import time
 from typing import Dict, Any
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 from agent_sensors.sensor_models import SensorEvent, HomeSituation, HomePresence, RoomOccupancy, SleepState, EmotionalState
 from agent_sensors.virtual_sensors.occupancy_sensor import OccupancySensor
 from agent_sensors.virtual_sensors.presence_sensor import PresenceSensor

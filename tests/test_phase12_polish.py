@@ -1,8 +1,8 @@
 import unittest
 from unittest.mock import MagicMock
-from agent.event_bus.event_bus import EventBus
-from agent.state_engine.state_engine import StateEngine
-from agent.automations.automation_engine import AutomationEngine
+from arvis_core.event_bus.event_bus import EventBus
+from agent_home.state_engine.state_engine import StateEngine
+from agent_home.automations.automation_engine import AutomationEngine
 
 class TestPhase12Polish(unittest.TestCase):
     def setUp(self):

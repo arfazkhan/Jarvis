@@ -1,4 +1,4 @@
-from agent_bms.prompt_builder import get_ops_prompt_builder, LAYER_TRUST_BOUNDARIES
+from agent_commercial.prompt_builder import get_ops_prompt_builder, LAYER_TRUST_BOUNDARIES
 
 builder = get_ops_prompt_builder()
 

@@ -3,8 +3,8 @@ import asyncio
 from typing import Optional
 from agent_unified.agents.manus import ARVISManus
 # Import from existing agent package
-from agent.voice.realtime_voice import RealtimeVoice
-from agent.voice.pipeline import VoicePipeline
+from agent_home.voice.realtime_voice import RealtimeVoice
+from agent_home.voice.pipeline import VoicePipeline
 
 logger = logging.getLogger(__name__)
 

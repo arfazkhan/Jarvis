@@ -29,11 +29,11 @@ class TrustCalibrator:
     def __init__(self, recommendation_tracker: Any):
         self.tracker = tracker = recommendation_tracker
     
-    def calculate_trust_metrics(self, window_days: int = 30) -> Dict[str, Any]:
+    async def calculate_trust_metrics(self, window_days: int = 30) -> Dict[str, Any]:
         """
-        Analyze how well recommendations performed in the given window.
+        Analyze how well recommendations performed in the given window. (Async)
         """
-        recs = self.tracker.get_recent_recommendations(window_days=window_days)
+        recs = await self.tracker.get_recent_recommendations(window_days=window_days)
         if not recs:
             return {"status": "insufficient_data"}
             

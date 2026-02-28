@@ -5,8 +5,8 @@ from datetime import datetime
 from dotenv import load_dotenv
 load_dotenv()
 
-from agent_bms.bms_llm_agent import BMSLLMAgent
-from agent_bms.database import get_database
+from agent_commercial.bms_llm_agent import BMSLLMAgent
+from agent_commercial.database import get_database
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("verify_agent_explainer")

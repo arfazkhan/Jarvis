@@ -69,20 +69,20 @@ logger.info(f"Test CLI started. Logs saved to: {LOG_FILE}")
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from agent.event_bus.event_bus import EventBus
-from agent.state_engine.state_engine import StateEngine
-from agent.controllers.matter_controller import MatterController
-from agent.automations.automation_engine import AutomationEngine
-from agent.tools.executor import ToolExecutor
-from agent.learning.learning_engine import LearningEngine
-from agent.llm_agent.llm_agent import LLMAgent
-from agent.voice.transcriber import VoiceTranscriber
-from agent.voice.recorder import AudioRecorder
-from agent.voice.wake_word import WakeWordEngine
-from agent.voice.semantic_vad import SemanticVAD
-from agent.voice.speaker import Speaker
-from agent.voice.pipeline import VoicePipeline
-from agent.voice.realtime_voice import RealtimeVoice
+from arvis_core.event_bus.event_bus import EventBus
+from agent_home.state_engine.state_engine import StateEngine
+from agent_home.controllers.matter_controller import MatterController
+from agent_home.automations.automation_engine import AutomationEngine
+from agent_home.tools.executor import ToolExecutor
+from agent_home.learning.learning_engine import LearningEngine
+from agent_home.llm_agent.llm_agent import LLMAgent
+from agent_home.voice.transcriber import VoiceTranscriber
+from agent_home.voice.recorder import AudioRecorder
+from agent_home.voice.wake_word import WakeWordEngine
+from agent_home.voice.semantic_vad import SemanticVAD
+from agent_home.voice.speaker import Speaker
+from agent_home.voice.pipeline import VoicePipeline
+from agent_home.voice.realtime_voice import RealtimeVoice
 
 # ANSI colors for pretty output
 class Colors:
@@ -193,8 +193,8 @@ class TestCLI:
         # Check sys.argv to see if we are running a specific command that needs LocalAgent
         is_chat_mode = len(sys.argv) > 1 and "/chat" in sys.argv[1:]
         
-        from agent.llm_agent.local_agent import LocalAgent
-        from agent.llm_agent.hybrid_orchestrator import HybridOrchestrator
+        from agent_home.llm_agent.local_agent import LocalAgent
+        from agent_home.llm_agent.hybrid_orchestrator import HybridOrchestrator
         
         if is_chat_mode:
             print(f"{Colors.YELLOW}⚠️  Chat Mode: Skipping LocalAgent (Qwen) to save VRAM for TTS{Colors.RESET}")

@@ -19,6 +19,7 @@ class ToolCollection:
         tool = self.get_tool(name)
         if not tool:
             return ToolResult(error=f"Tool not found: {name}")
+            
         return await tool.execute(**kwargs)
     
     def to_params(self) -> List[Dict]:

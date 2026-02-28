@@ -25,7 +25,7 @@ from typing import Dict, Any, List, Optional
 
 from config.settings import get_config
 from config.mode_dispatcher import ModeDispatcher, ArvisMode
-from agent.event_bus.event_bus import EventBus
+from arvis_core.event_bus.event_bus import EventBus
 from agent_cognitive.memory_manager import MemoryManager
 from agent_cognitive.context_graph import ContextGraph
 from agent_cognitive.prediction_engine import PredictionEngine
@@ -84,11 +84,11 @@ class CognitiveLoop:
             return
         
         try:
-            from agent_bms.bms_state_engine import BMSStateEngine
-            from agent_bms.alarm_engine import AlarmEngine
-            from agent_bms.energy_analyzer import EnergyAnalyzer
-            from agent_bms.predictive_maintenance import PredictiveMaintenanceEngine
-            from agent_bms.fleet_intelligence import FleetIntelligence
+            from agent_commercial.bms_state_engine import BMSStateEngine
+            from agent_commercial.alarm_engine import AlarmEngine
+            from agent_commercial.energy_analyzer import EnergyAnalyzer
+            from agent_commercial.predictive_maintenance import PredictiveMaintenanceEngine
+            from agent_commercial.fleet_intelligence import FleetIntelligence
             
             self._bms_state = BMSStateEngine()
             self._alarm_engine = AlarmEngine()
@@ -467,7 +467,7 @@ class CognitiveLoop:
         Inject BMS engines from external source.
         
         Useful when BMS engines are already initialized elsewhere
-        (e.g., in agent_bms.main).
+        (e.g., in agent_commercial.main).
         """
         if bms_state:
             self._bms_state = bms_state

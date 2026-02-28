@@ -1,29 +1,202 @@
-version: '3'
+# ═══════════════════════════════════════════════════════════════════════════════
+# ARVIS Ops Copilot - Docker Compose Configuration
+# ═══════════════════════════════════════════════════════════════════════════════
+# Usage:
+#   Development: docker-compose up -d
+#   Production:  docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# ═══════════════════════════════════════════════════════════════════════════════
+
+version: '3.8'
+
 services:
-  homeassistant:
-    container_name: homeassistant
-    image: "ghcr.io/home-assistant/home-assistant:stable"
-    volumes:
-      - d:/homeassistant:/config
-      - /etc/localtime:/etc/localtime:ro
+  # ════════════════════════════════════════════════════════════════════════════
+  # ARVIS Ops Copilot API
+  # ════════════════════════════════════════════════════════════════════════════
+  arvis-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: arvis-ops-copilot
+    restart: unless-stopped
     ports:
-      - "8123:8123"
+      - "8000:8000"
+      - "9090:9090"
     environment:
-      - TZ=Asia/Kolkata
-    restart: unless-stopped
-    privileged: true
-
-  matter-server:
-    container_name: matter-server
-    image: "ghcr.io/home-assistant-libs/python-matter-server:stable"
-    tmpfs:
-      - /run
+      - ENV=${ENV:-production}
+      - DEBUG=${DEBUG:-false}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - DATABASE_URL=postgresql://arvis:${POSTGRES_PASSWORD:-arvis123}@postgres:5432/arvis
+      - REDIS_URL=redis://redis:6379/0
+      - WEB_UI_SECRET=${WEB_UI_SECRET}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
-      - matter-data:/data
-    ports:
-      - "5580:5580"
-      - "5540:5540/udp"
-    restart: unless-stopped
+      - arvis-data:/app/data
+      - arvis-logs:/app/logs
+      - arvis-chroma:/app/data/chroma
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - arvis-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
 
+  # ════════════════════════════════════════════════════════════════════════════
+  # PostgreSQL Database
+  # ════════════════════════════════════════════════════════════════════════════
+  postgres:
+    image: postgres:15-alpine
+    container_name: arvis-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=arvis
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-arvis123}
+      - POSTGRES_DB=arvis
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arvis -d arvis"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - arvis-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # Redis Cache
+  # ════════════════════════════════════════════════════════════════════════════
+  redis:
+    image: redis:7-alpine
+    container_name: arvis-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - arvis-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # Nginx Reverse Proxy (Production)
+  # ════════════════════════════════════════════════════════════════════════════
+  nginx:
+    image: nginx:alpine
+    container_name: arvis-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - arvis-api
+    networks:
+      - arvis-network
+    profiles:
+      - production
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # Prometheus Metrics
+  # ════════════════════════════════════════════════════════════════════════════
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: arvis-prometheus
+    restart: unless-stopped
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    networks:
+      - arvis-network
+    profiles:
+      - monitoring
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # Grafana Dashboard
+  # ════════════════════════════════════════════════════════════════════════════
+  grafana:
+    image: grafana/grafana:latest
+    container_name: arvis-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    depends_on:
+      - prometheus
+    networks:
+      - arvis-network
+    profiles:
+      - monitoring
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Networks
+# ═══════════════════════════════════════════════════════════════════════════════
+networks:
+  arvis-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Volumes
+# ═══════════════════════════════════════════════════════════════════════════════
 volumes:
-  matter-data:
+  arvis-data:
+    driver: local
+  arvis-logs:
+    driver: local
+  arvis-chroma:
+    driver: local
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local

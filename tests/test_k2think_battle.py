@@ -457,9 +457,9 @@ class TestK2ThinkBattle(unittest.TestCase):
         # Force K2 Think provider
         os.environ["LLM_PROVIDER"] = "k2think"
         
-        from agent.event_bus.event_bus import EventBus
-        from agent.state_engine.state_engine import StateEngine
-        from agent.llm_agent.llm_agent import LLMAgent
+        from arvis_core.event_bus.event_bus import EventBus
+        from agent_home.state_engine.state_engine import StateEngine
+        from agent_home.llm_agent.llm_agent import LLMAgent
         
         cls.event_bus = EventBus()
         cls.state_engine = StateEngine(cls.event_bus)
@@ -492,7 +492,7 @@ class TestK2ThinkBattle(unittest.TestCase):
     
     def _run_scenario(self, scenario: dict, domain: str) -> dict:
         """Run a single scenario and return results."""
-        from agent.llm_agent.tools_schema import TOOLS_SCHEMA
+        from agent_home.llm_agent.tools_schema import TOOLS_SCHEMA
         
         result = {
             "name": scenario["name"],
@@ -735,7 +735,7 @@ Prioritize: 1) Life Safety 2) Property Protection 3) Occupant Comfort 4) Energy 
             "movie mode",
         ]
         
-        from agent.llm_agent.tools_schema import TOOLS_SCHEMA
+        from agent_home.llm_agent.tools_schema import TOOLS_SCHEMA
         
         latencies = []
         for cmd in commands:
@@ -770,7 +770,7 @@ Prioritize: 1) Life Safety 2) Property Protection 3) Occupant Comfort 4) Energy 
         them I'll be down in 10 minutes.
         """
         
-        from agent.llm_agent.tools_schema import TOOLS_SCHEMA
+        from agent_home.llm_agent.tools_schema import TOOLS_SCHEMA
         
         start = time.time()
         tool_calls = self.llm_agent.generate_tool_calls(

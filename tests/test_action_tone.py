@@ -5,7 +5,7 @@ import os
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from agent.agent_feedback.action_tone_adapter import ActionToneAdapter
+from agent_home.agent_feedback.action_tone_adapter import ActionToneAdapter
 
 class TestActionToneAdapter(unittest.TestCase):
     def setUp(self):

@@ -20,7 +20,7 @@ class ToolEconomyPolicy:
         self.db = AdvisoryDatabase(db_path)
         self.min_utility_threshold = 0.6 # High quality requirement
         
-    def record_utility(self, query: str, site_type: str, tool_calls: List[Dict], tool_results: List[Any]):
+    async def record_utility(self, query: str, site_type: str, tool_calls: List[Dict], tool_results: List[Any]):
         """
         Record the utility of a tool chain, with a heavy penalty for length.
         """
@@ -45,7 +45,7 @@ class ToolEconomyPolicy:
         utility = raw_utility * economy_multiplier
         
         try:
-            self.db.execute(
+            await self.db.execute(
                 "INSERT INTO economy_trajectories (id, timestamp, query, site_type, tool_chain, utility_score, data_density) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (str(uuid.uuid4()), time.time(), query, site_type, json.dumps([t['tool'] for t in tool_calls]), utility, data_points)
             )
@@ -53,7 +53,7 @@ class ToolEconomyPolicy:
         except Exception as e:
             logger.error(f"[EconomyPolicy] Failed to record utility: {e}")
 
-    def get_minimal_sufficient_set(self, query: str, context: Optional[Dict] = None, urgency: str = "normal") -> Set[str]:
+    async def get_minimal_sufficient_set(self, query: str, context: Optional[Dict] = None, urgency: str = "normal") -> Set[str]:
         """
         Predicts minimal sufficient set using context-filtered k-NN.
         Adapts to urgency:
@@ -75,9 +75,9 @@ class ToolEconomyPolicy:
         
         try:
             if site_type:
-                similar = self.db.fetch_all("SELECT query, tool_chain, utility_score FROM economy_trajectories WHERE site_type = ?", (site_type,))
+                similar = await self.db.fetch_all("SELECT query, tool_chain, utility_score FROM economy_trajectories WHERE site_type = ?", (site_type,))
             else:
-                similar = self.db.fetch_all("SELECT query, tool_chain, utility_score FROM economy_trajectories")
+                similar = await self.db.fetch_all("SELECT query, tool_chain, utility_score FROM economy_trajectories")
         except Exception:
             similar = []
             
@@ -107,13 +107,19 @@ class ToolEconomyPolicy:
             if urgency in ("high", "critical"):
                  # Expand candidates for high urgency
                  candidates.update(self._get_safety_candidates())
+            
+            # Always allow think for transparency
+            candidates.add("think")
             return candidates
             
         logger.info(f"[EconomyPolicy] Inferred surgical set ({site_type}, urgency={urgency}) Utility: {best_utility:.2f}: {best_tools}")
+        
+        # Always inject 'think' if transparency is requested
+        best_tools.add("think")
         return best_tools
 
     def _get_category_candidates(self, query: str) -> List[str]:
-        """Strictly 1-2 essential tools fallbacks."""
+        """Strictly 1-2 essential tools fallbacks + Mandatory Tags."""
         candidates = []
         
         # GSAS: Just status and priorities
@@ -126,8 +132,28 @@ class ToolEconomyPolicy:
             
         # Energy: Just analysis
         if any(w in query for w in ["energy", "bill", "kwh", "cost"]): 
-            candidates.append("analyze_energy")
+            candidates.extend(["analyze_energy", "forecast_energy", "check_cost_impact"])
             
+        # Ghost Rooms
+        if "ghost" in query or "occupancy" in query:
+            candidates.extend(["find_ghost_spaces", "list_equipment", "get_equipment_status"])
+
+        # SOVEREIGN COGNITION (Tier 3)
+        if any(w in query for w in ["skill", "memory", "quirk", "learned", "past", "history", "skillbook"]):
+            candidates.extend(["query_skillbook", "add_to_skillbook"])
+        
+        if any(w in query for w in ["fleet", "benchmark", "other tower", "similar building"]):
+            candidates.extend(["compare_to_fleet"])
+            
+        if any(w in query for w in ["simulate", "impact", "what if", "scenario"]):
+            candidates.extend(["simulate_change"])
+            
+        if any(w in query for w in ["life", "rul", "remaining", "wear"]):
+            candidates.extend(["predict_remaining_life"])
+
+        # ALWAYS allow think tool for agentic transparency
+        candidates.append("think")
+
         return list(set(candidates))
 
     def _get_safety_candidates(self) -> List[str]:

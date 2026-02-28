@@ -31,9 +31,9 @@ async def run_benchmark():
     with open(output_log, "w", encoding="utf-8") as f:
         f.write("BENCHMARK OUTPUT LOG\n====================\n")
 
-    from agent_bms.main import OpsCopilot
-    from agent_bms.event_correlator import Event, EventSource
-    from agent_bms.alarm_engine import Alarm, AlarmSeverity, AlarmCluster
+    from agent_commercial.main import OpsCopilot
+    from agent_commercial.event_correlator import Event, EventSource
+    from agent_commercial.alarm_engine import Alarm, AlarmSeverity, AlarmCluster
     from datetime import datetime, timedelta
     
     # Setup Data

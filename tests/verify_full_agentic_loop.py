@@ -18,7 +18,7 @@ load_dotenv()
 # Components to test
 from agent_advisory.goal_generator import GoalDiscoveryEngine, GoalGenerator, ProactiveGoal
 from agent_cognitive.meta_cognition import MetaCognition
-from agent_bms.skillbook import BuildingSkillbook
+from agent_commercial.skillbook import BuildingSkillbook
 # from agent_advisory.qatar.llm_simulator import LLMEnhancedSimulator # Move to inside to avoid init issues
 
 # Setup Logger
@@ -47,7 +47,7 @@ async def verify_agentic_loop():
     try:
         # Initialize Persistent Memory (Skillbook)
         skillbook = BuildingSkillbook("qatar_tower_1", db_path=db_path)
-        from agent_bms.skillbook import _skillbooks
+        from agent_commercial.skillbook import _skillbooks
         _skillbooks["qatar_tower_1"] = skillbook
         
         # Initialize Brain (MetaCognition)
@@ -113,7 +113,7 @@ async def verify_agentic_loop():
         print("   [Memory Check] Seeding 'Chiller Start-Stop' preference...")
         
         # Initialize orchestration to access the same memory store (since it's persistent/singleton-like via dir)
-        from agent.memory.orchestrator import MemoryOrchestrator
+        from arvis_core.memory.orchestrator import MemoryOrchestrator
         memory_dir = os.path.join(test_dir, "data", "memories")
         memory = MemoryOrchestrator(persist_dir=memory_dir)
         
