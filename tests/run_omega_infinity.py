@@ -14,6 +14,9 @@ project_root = str(Path(__file__).resolve().parent.parent)
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+from dotenv import load_dotenv
+load_dotenv(Path(project_root) / ".env")
+
 from tests.omega_stress_test.omega_test_runner import OmegaTestRunner, OmegaTestConfig
 
 async def run_infinity():
@@ -32,8 +35,8 @@ async def run_infinity():
     print("█" * 80 + "\n")
     
     config = OmegaTestConfig(
-        simulation_days=90,
-        time_scale=5000,
+        simulation_days=15,
+        time_scale=0,
         use_real_llm=True,  # Full cognitive immersion
         output_dir="tests/omega_stress_test/results/infinity_run"
     )

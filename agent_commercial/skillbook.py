@@ -183,21 +183,26 @@ class BuildingSkillbook:
         
         logger.info(f"BuildingSkillbook initialized for {building_id}")
     
-    async def _get_async_connection(self) -> aiosqlite.Connection:
+    from contextlib import asynccontextmanager
+    
+    @asynccontextmanager
+    async def get_db(self):
         """Get or create asynchronous database connection with WAL mode enabled"""
         async with self._lock:
-            if self._async_conn is None:
-                self._async_conn = await aiosqlite.connect(self.db_path)
-                self._async_conn.row_factory = aiosqlite.Row
+            conn = await aiosqlite.connect(self.db_path)
+            conn.row_factory = aiosqlite.Row
+            
+            # Enable WAL mode for high concurrency
+            try:
+                await conn.execute("PRAGMA journal_mode=WAL")
+                await conn.execute("PRAGMA synchronous=NORMAL")
+            except Exception as e:
+                logger.warning(f"Failed to enable WAL mode in Skillbook: {e}")
                 
-                # Enable WAL mode for high concurrency
-                try:
-                    await self._async_conn.execute("PRAGMA journal_mode=WAL")
-                    await self._async_conn.execute("PRAGMA synchronous=NORMAL")
-                except Exception as e:
-                    logger.warning(f"Failed to enable WAL mode in Skillbook: {e}")
-                    
-            return self._async_conn
+            try:
+                yield conn
+            finally:
+                await conn.close()
     
     async def ensure_initialized(self) -> None:
         """Initialize database tables for skillbook (Async)."""
@@ -208,104 +213,104 @@ class BuildingSkillbook:
     
     async def _init_database(self) -> None:
         """Initialize database tables for skillbook (Async)."""
-        conn = await self._get_async_connection()
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS skills (
-                skill_id TEXT PRIMARY KEY,
-                building_id TEXT NOT NULL,
-                skill_type TEXT NOT NULL,
-                title TEXT NOT NULL,
-                description TEXT NOT NULL,
-                confidence REAL DEFAULT 0.5,
-                verified_count INTEGER DEFAULT 0,
-                failed_count INTEGER DEFAULT 0,
-                status TEXT DEFAULT 'unverified',
-                equipment_id TEXT,
-                zone_id TEXT,
-                contractor_id TEXT,
-                evidence TEXT,
-                context_signature TEXT,
-                confidence_history TEXT,
-                tags TEXT,
-                created_at TEXT,
-                updated_at TEXT,
-                created_by TEXT DEFAULT 'system'
-            )
-        """)
-        
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_skills_building 
-            ON skills(building_id)
-        """)
-        
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_skills_equipment 
-            ON skills(equipment_id)
-        """)
-        
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_skills_type 
-            ON skills(skill_type)
-        """)
-
-        # Meta-Cognition: Decisions Table
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS decisions (
-                decision_id TEXT PRIMARY KEY,
-                building_id TEXT NOT NULL,
-                timestamp TEXT NOT NULL,
-                context TEXT,
-                chosen_action TEXT,
-                alternatives TEXT,
-                confidence REAL,
-                reasoning TEXT,
-                outcome TEXT,
-                outcome_quality TEXT,
-                event_id TEXT
-            )
-        """)
-        
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_decisions_time 
-            ON decisions(timestamp)
-        """)
-
-        # Tool Observability: Usage Table
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS tool_usage (
-                usage_id TEXT PRIMARY KEY,
-                building_id TEXT NOT NULL,
-                timestamp TEXT NOT NULL,
-                tool_name TEXT NOT NULL,
-                args TEXT,
-                success INTEGER,
-                error TEXT,
-                duration_ms REAL,
-                relevant_skill_id TEXT,
-                FOREIGN KEY (relevant_skill_id) REFERENCES skills(skill_id)
-            )
-        """)
-
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_tool_usage_name
-            ON tool_usage(tool_name)
-        """)
-        
-        await conn.commit()
+        async with self.get_db() as conn:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS skills (
+                    skill_id TEXT PRIMARY KEY,
+                    building_id TEXT NOT NULL,
+                    skill_type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    confidence REAL DEFAULT 0.5,
+                    verified_count INTEGER DEFAULT 0,
+                    failed_count INTEGER DEFAULT 0,
+                    status TEXT DEFAULT 'unverified',
+                    equipment_id TEXT,
+                    zone_id TEXT,
+                    contractor_id TEXT,
+                    evidence TEXT,
+                    context_signature TEXT,
+                    confidence_history TEXT,
+                    tags TEXT,
+                    created_at TEXT,
+                    updated_at TEXT,
+                    created_by TEXT DEFAULT 'system'
+                )
+            """)
+            
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_skills_building 
+                ON skills(building_id)
+            """)
+            
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_skills_equipment 
+                ON skills(equipment_id)
+            """)
+            
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_skills_type 
+                ON skills(skill_type)
+            """)
+    
+            # Meta-Cognition: Decisions Table
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS decisions (
+                    decision_id TEXT PRIMARY KEY,
+                    building_id TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    context TEXT,
+                    chosen_action TEXT,
+                    alternatives TEXT,
+                    confidence REAL,
+                    reasoning TEXT,
+                    outcome TEXT,
+                    outcome_quality TEXT,
+                    event_id TEXT
+                )
+            """)
+            
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_decisions_time 
+                ON decisions(timestamp)
+            """)
+    
+            # Tool Observability: Usage Table
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS tool_usage (
+                    usage_id TEXT PRIMARY KEY,
+                    building_id TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    tool_name TEXT NOT NULL,
+                    args TEXT,
+                    success INTEGER,
+                    error TEXT,
+                    duration_ms REAL,
+                    relevant_skill_id TEXT,
+                    FOREIGN KEY (relevant_skill_id) REFERENCES skills(skill_id)
+                )
+            """)
+    
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_tool_usage_name
+                ON tool_usage(tool_name)
+            """)
+            
+            await conn.commit()
 
     async def _load_skills_to_matcher(self) -> None:
         """Load all skills from database into the semantic matcher (Async)."""
         try:
-            conn = await self._get_async_connection()
-            async with conn.execute(
-                "SELECT skill_id, title, description FROM skills WHERE building_id = ?",
-                (self.building_id,)
-            ) as cursor:
-                rows = await cursor.fetchall()
-                for row in rows:
-                    text = f"{row['title']} {row['description']}"
-                    self.matcher.add_skill(row['skill_id'], text)
-            logger.info(f"Loaded {len(rows)} skills into semantic matcher.")
+            async with self.get_db() as conn:
+                async with conn.execute(
+                    "SELECT skill_id, title, description FROM skills WHERE building_id = ?",
+                    (self.building_id,)
+                ) as cursor:
+                    rows = await cursor.fetchall()
+                    for row in rows:
+                        text = f"{row['title']} {row['description']}"
+                        self.matcher.add_skill(row['skill_id'], text)
+                logger.info(f"Loaded {len(rows)} skills into semantic matcher.")
         except Exception as e:
             logger.error(f"Error loading skills to matcher: {e}")
     
@@ -386,36 +391,36 @@ class BuildingSkillbook:
     
     async def _save_skill(self, skill: Skill) -> None:
         """Save skill to database (Async)."""
-        conn = await self._get_async_connection()
-        await conn.execute("""
-            INSERT OR REPLACE INTO skills 
-            (skill_id, building_id, skill_type, title, description,
-             confidence, verified_count, failed_count, status,
-             equipment_id, zone_id, contractor_id, evidence, context_signature, 
-             confidence_history, tags, created_at, updated_at, created_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            skill.skill_id,
-            skill.building_id,
-            skill.skill_type.value,
-            skill.title,
-            skill.description,
-            skill.confidence,
-            skill.verified_count,
-            skill.failed_count,
-            skill.status.value,
-            skill.equipment_id,
-            skill.zone_id,
-            skill.contractor_id,
-            json.dumps(skill.evidence),
-            json.dumps(skill.context_signature),
-            json.dumps(skill.confidence_history),
-            json.dumps(skill.tags),
-            skill.created_at.isoformat(),
-            skill.updated_at.isoformat(),
-            skill.created_by,
-        ))
-        await conn.commit()
+        async with self.get_db() as conn:
+            await conn.execute("""
+                INSERT OR REPLACE INTO skills 
+                (skill_id, building_id, skill_type, title, description,
+                 confidence, verified_count, failed_count, status,
+                 equipment_id, zone_id, contractor_id, evidence, context_signature, 
+                 confidence_history, tags, created_at, updated_at, created_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                skill.skill_id,
+                skill.building_id,
+                skill.skill_type.value,
+                skill.title,
+                skill.description,
+                skill.confidence,
+                skill.verified_count,
+                skill.failed_count,
+                skill.status.value,
+                skill.equipment_id,
+                skill.zone_id,
+                skill.contractor_id,
+                json.dumps(skill.evidence),
+                json.dumps(skill.context_signature),
+                json.dumps(skill.confidence_history),
+                json.dumps(skill.tags),
+                skill.created_at.isoformat(),
+                skill.updated_at.isoformat(),
+                skill.created_by,
+            ))
+            await conn.commit()
             
         # Update semantic matcher
         if self.matcher.is_available:
@@ -423,8 +428,6 @@ class BuildingSkillbook:
     
     async def _find_similar_skills(self, skill: Skill) -> List[Skill]:
         """Find existing skills that are similar (Async)."""
-        conn = await self._get_async_connection()
-        
         query = """
             SELECT * FROM skills 
             WHERE building_id = ? 
@@ -437,18 +440,19 @@ class BuildingSkillbook:
             query += " AND equipment_id = ?"
             params.append(skill.equipment_id)
         
-        async with conn.execute(query, params) as cursor:
-            rows = await cursor.fetchall()
-            
-            similar = []
-            for row in rows:
-                existing = self._row_to_skill(row)
-                # Check title similarity (simple)
-                if skill.title.lower() in existing.title.lower() or \
-                   existing.title.lower() in skill.title.lower():
-                    similar.append(existing)
-            
-            return similar
+        async with self.get_db() as conn:
+            async with conn.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                
+                similar = []
+                for row in rows:
+                    existing = self._row_to_skill(row)
+                    # Check title similarity (simple)
+                    if skill.title.lower() in existing.title.lower() or \
+                       existing.title.lower() in skill.title.lower():
+                        similar.append(existing)
+                
+                return similar
     
     async def _merge_skill_evidence(self, existing: Skill, new: Skill) -> None:
         """Merge evidence from new skill into existing (Async)."""
@@ -548,13 +552,13 @@ class BuildingSkillbook:
     
     async def get_skill(self, skill_id: str) -> Optional[Skill]:
         """Get a specific skill by ID (Async)."""
-        conn = await self._get_async_connection()
-        async with conn.execute(
-            "SELECT * FROM skills WHERE skill_id = ?",
-            (skill_id,)
-        ) as cursor:
-            row = await cursor.fetchone()
-            return self._row_to_skill(row) if row else None
+        async with self.get_db() as conn:
+            async with conn.execute(
+                "SELECT * FROM skills WHERE skill_id = ?",
+                (skill_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return self._row_to_skill(row) if row else None
     
     async def get_relevant_skills(self, 
                            context: Dict[str, Any],
@@ -594,8 +598,6 @@ class BuildingSkillbook:
             semantic_ids = [s[0] for s in similar]
             
         # 1.2: Database Query (SQL Filter)
-        conn = await self._get_async_connection()
-        
         query = """
             SELECT * FROM skills 
             WHERE building_id = ?
@@ -622,9 +624,10 @@ class BuildingSkillbook:
             query += " AND skill_type = ?"
             params.append(context["skill_type"])
         
-        async with conn.execute(query, params) as cursor:
-            rows = await cursor.fetchall()
-            skills = [self._row_to_skill(row) for row in rows]
+        async with self.get_db() as conn:
+            async with conn.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                skills = [self._row_to_skill(row) for row in rows]
 
         # --- LAYER 2: Temporal Shaping ---
         current_time = datetime.now()
@@ -712,15 +715,15 @@ class BuildingSkillbook:
     
     async def get_optimization_history(self) -> List[Skill]:
         """Get all optimization attempts and their outcomes (Async)."""
-        conn = await self._get_async_connection()
-        async with conn.execute("""
-            SELECT * FROM skills 
-            WHERE building_id = ?
-            AND skill_type = 'optimization'
-            ORDER BY created_at DESC
-        """, (self.building_id,)) as cursor:
-            rows = await cursor.fetchall()
-            return [self._row_to_skill(row) for row in rows]
+        async with self.get_db() as conn:
+            async with conn.execute("""
+                SELECT * FROM skills 
+                WHERE building_id = ?
+                AND skill_type = 'optimization'
+                ORDER BY created_at DESC
+            """, (self.building_id,)) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_skill(row) for row in rows]
     
     async def get_contractor_notes(self, contractor_id: str) -> List[Skill]:
         """Get all notes about a specific contractor (Async)."""
@@ -731,37 +734,35 @@ class BuildingSkillbook:
     
     async def get_contractor_verification_rate(self, contractor_id: str) -> Dict[str, Any]:
         """Get verification statistics for a contractor (Async)."""
-        conn = await self._get_async_connection()
-        async with conn.execute("""
-            SELECT 
-                COUNT(*) as total,
-                SUM(CASE WHEN json_extract(evidence, '$.verified') = 1 THEN 1 ELSE 0 END) as verified,
-                SUM(CASE WHEN json_extract(evidence, '$.verified') = 0 THEN 1 ELSE 0 END) as unverified
-            FROM skills 
-            WHERE building_id = ?
-            AND contractor_id = ?
-            AND skill_type = 'contractor_note'
-        """, (self.building_id, contractor_id)) as cursor:
-            
-            row = await cursor.fetchone()
-            total = row[0] or 0
-            verified = row[1] or 0
-            
-            return {
-                "contractor_id": contractor_id,
-                "total_work_orders": total,
-                "verified": verified,
-                "unverified": total - verified,
-                "verification_rate": verified / total if total > 0 else 0,
-            }
+        async with self.get_db() as conn:
+            async with conn.execute("""
+                SELECT 
+                    COUNT(*) as total,
+                    SUM(CASE WHEN json_extract(evidence, '$.verified') = 1 THEN 1 ELSE 0 END) as verified,
+                    SUM(CASE WHEN json_extract(evidence, '$.verified') = 0 THEN 1 ELSE 0 END) as unverified
+                FROM skills 
+                WHERE building_id = ?
+                AND contractor_id = ?
+                AND skill_type = 'contractor_note'
+            """, (self.building_id, contractor_id)) as cursor:
+                
+                row = await cursor.fetchone()
+                total = row[0] or 0
+                verified = row[1] or 0
+                
+                return {
+                    "contractor_id": contractor_id,
+                    "total_work_orders": total,
+                    "verified": verified,
+                    "unverified": total - verified,
+                    "verification_rate": verified / total if total > 0 else 0,
+                }
     
     async def get_failure_history(self, 
                            equipment_id: Optional[str] = None,
                            days: int = 365) -> List[Skill]:
         """Get failure history for the building or specific equipment (Async)."""
         cutoff = (datetime.now() - timedelta(days=days)).isoformat()
-        
-        conn = await self._get_async_connection()
         
         query = """
             SELECT * FROM skills 
@@ -777,9 +778,10 @@ class BuildingSkillbook:
         
         query += " ORDER BY created_at DESC"
         
-        async with conn.execute(query, params) as cursor:
-            rows = await cursor.fetchall()
-            return [self._row_to_skill(row) for row in rows]
+        async with self.get_db() as conn:
+            async with conn.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_skill(row) for row in rows]
 
     async def consolidate_skills(self) -> Dict[str, Any]:
         """
@@ -788,13 +790,13 @@ class BuildingSkillbook:
         """
         logger.info(f"Starting skill consolidation for {self.building_id}")
         
-        conn = await self._get_async_connection()
-        async with conn.execute(
-            "SELECT * FROM skills WHERE building_id = ? AND status != 'deprecated'",
-            (self.building_id,)
-        ) as cursor:
-            rows = await cursor.fetchall()
-            all_skills = [self._row_to_skill(row) for row in rows]
+        async with self.get_db() as conn:
+            async with conn.execute(
+                "SELECT * FROM skills WHERE building_id = ? AND status != 'deprecated'",
+                (self.building_id,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                all_skills = [self._row_to_skill(row) for row in rows]
             
         merged_count = 0
         original_count = len(all_skills)
@@ -855,33 +857,33 @@ class BuildingSkillbook:
     
     async def get_summary(self) -> Dict[str, Any]:
         """Get summary of skillbook contents (Async)."""
-        conn = await self._get_async_connection()
-        async with conn.execute("""
-            SELECT 
-                skill_type,
-                COUNT(*) as count,
-                AVG(confidence) as avg_confidence
-            FROM skills 
-            WHERE building_id = ?
-            AND status != 'deprecated'
-            GROUP BY skill_type
-        """, (self.building_id,)) as cursor:
-            
-            by_type = {}
-            total = 0
-            rows = await cursor.fetchall()
-            for row in rows:
-                by_type[row[0]] = {
-                    "count": row[1],
-                    "avg_confidence": round(row[2], 2),
+        async with self.get_db() as conn:
+            async with conn.execute("""
+                SELECT 
+                    skill_type,
+                    COUNT(*) as count,
+                    AVG(confidence) as avg_confidence
+                FROM skills 
+                WHERE building_id = ?
+                AND status != 'deprecated'
+                GROUP BY skill_type
+            """, (self.building_id,)) as cursor:
+                
+                by_type = {}
+                total = 0
+                rows = await cursor.fetchall()
+                for row in rows:
+                    by_type[row[0]] = {
+                        "count": row[1],
+                        "avg_confidence": round(row[2], 2),
+                    }
+                    total += row[1]
+                
+                return {
+                    "building_id": self.building_id,
+                    "total_skills": total,
+                    "by_type": by_type,
                 }
-                total += row[1]
-            
-            return {
-                "building_id": self.building_id,
-                "total_skills": total,
-                "by_type": by_type,
-            }
     
     async def log_decision(self,
                      decision_id: str,
@@ -892,70 +894,70 @@ class BuildingSkillbook:
                      reasoning: str,
                      event_id: Optional[str] = None) -> None:
         """Log a cognitive decision for later reflection (Async)."""
-        conn = await self._get_async_connection()
-        await conn.execute("""
-            INSERT INTO decisions 
-            (decision_id, building_id, timestamp, context, chosen_action,
-             alternatives, confidence, reasoning, event_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            decision_id,
-            self.building_id,
-            datetime.now().isoformat(),
-            json.dumps(context),
-            chosen_action,
-            json.dumps(alternatives),
-            confidence,
-            reasoning,
-            event_id
-        ))
-        await conn.commit()
+        async with self.get_db() as conn:
+            await conn.execute("""
+                INSERT INTO decisions 
+                (decision_id, building_id, timestamp, context, chosen_action,
+                 alternatives, confidence, reasoning, event_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                decision_id,
+                self.building_id,
+                datetime.now().isoformat(),
+                json.dumps(context),
+                chosen_action,
+                json.dumps(alternatives),
+                confidence,
+                reasoning,
+                event_id
+            ))
+            await conn.commit()
             
     async def update_decision_outcome(self, decision_id: str, outcome: str, quality: str) -> bool:
         """Update a decision with its observed outcome (Async)."""
-        conn = await self._get_async_connection()
-        async with conn.execute("""
-            UPDATE decisions 
-            SET outcome = ?, outcome_quality = ?
-            WHERE decision_id = ?
-        """, (outcome, quality, decision_id)) as cursor:
-            await conn.commit()
-            return cursor.rowcount > 0
+        async with self.get_db() as conn:
+            async with conn.execute("""
+                UPDATE decisions 
+                SET outcome = ?, outcome_quality = ?
+                WHERE decision_id = ?
+            """, (outcome, quality, decision_id)) as cursor:
+                await conn.commit()
+                return cursor.rowcount > 0
 
     async def get_recent_decisions(self, limit: int = 100) -> List[Dict[str, Any]]:
         """Get recent decisions for reflection (Async)."""
-        conn = await self._get_async_connection()
-        async with conn.execute("""
-            SELECT * FROM decisions 
-            WHERE building_id = ?
-            ORDER BY timestamp DESC
-            LIMIT ?
-        """, (self.building_id, limit)) as cursor:
-            
-            results = []
-            rows = await cursor.fetchall()
-            for row in rows:
-                # Safe JSON parsing
-                try:
-                    context = json.loads(row["context"]) if row["context"] else {}
-                    alternatives = json.loads(row["alternatives"]) if row["alternatives"] else []
-                except json.JSONDecodeError:
-                    context = {}
-                    alternatives = []
-                    
-                results.append({
-                    "decision_id": row["decision_id"],
-                    "timestamp": row["timestamp"],
-                    "context": context,
-                    "chosen_action": row["chosen_action"],
-                    "alternatives": alternatives,
-                    "confidence": row["confidence"],
-                    "reasoning": row["reasoning"],
-                    "outcome": row["outcome"],
-                    "outcome_quality": row["outcome_quality"],
-                    "event_id": row["event_id"]
-                })
-            return results
+        async with self.get_db() as conn:
+            async with conn.execute("""
+                SELECT * FROM decisions 
+                WHERE building_id = ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+            """, (self.building_id, limit)) as cursor:
+                
+                results = []
+                rows = await cursor.fetchall()
+                for row in rows:
+                    # Safe JSON parsing
+                    try:
+                        context = json.loads(row["context"]) if row["context"] else {}
+                        alternatives = json.loads(row["alternatives"]) if row["alternatives"] else []
+                    except json.JSONDecodeError:
+                        context = {}
+                        alternatives = []
+                        
+                    results.append({
+                        "decision_id": row["decision_id"],
+                        "timestamp": row["timestamp"],
+                        "context": context,
+                        "chosen_action": row["chosen_action"],
+                        "alternatives": alternatives,
+                        "confidence": row["confidence"],
+                        "reasoning": row["reasoning"],
+                        "outcome": row["outcome"],
+                        "outcome_quality": row["outcome_quality"],
+                        "event_id": row["event_id"]
+                    })
+                return results
 
     async def log_tool_usage(self,
                        tool_name: str,
@@ -966,30 +968,28 @@ class BuildingSkillbook:
                        relevant_skill_id: Optional[str] = None) -> str:
         """Log tool usage for observability and institutional memory (Async)."""
         usage_id = f"tool_{self.building_id}_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
-        conn = await self._get_async_connection()
-        await conn.execute("""
-            INSERT INTO tool_usage 
-            (usage_id, building_id, timestamp, tool_name, args, 
-             success, error, duration_ms, relevant_skill_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            usage_id,
-            self.building_id,
-            datetime.now().isoformat(),
-            tool_name,
-            json.dumps(args),
-            1 if success else 0,
-            error,
-            duration_ms,
-            relevant_skill_id
-        ))
-        await conn.commit()
+        async with self.get_db() as conn:
+            await conn.execute("""
+                INSERT INTO tool_usage 
+                (usage_id, building_id, timestamp, tool_name, args, 
+                 success, error, duration_ms, relevant_skill_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                usage_id,
+                self.building_id,
+                datetime.now().isoformat(),
+                tool_name,
+                json.dumps(args),
+                1 if success else 0,
+                error,
+                duration_ms,
+                relevant_skill_id
+            ))
+            await conn.commit()
         return usage_id
 
     async def get_tool_metrics(self, tool_name: Optional[str] = None) -> Dict[str, Any]:
         """Retrieve success metrics for tools (Async)."""
-        conn = await self._get_async_connection()
-        
         query = "SELECT tool_name, COUNT(*) as total, SUM(success) as successful, AVG(duration_ms) as avg_duration FROM tool_usage WHERE building_id = ?"
         params = [self.building_id]
         if tool_name:
@@ -997,15 +997,16 @@ class BuildingSkillbook:
             params.append(tool_name)
         query += " GROUP BY tool_name"
         
-        async with conn.execute(query, params) as cursor:
-            rows = await cursor.fetchall()
-            metrics = {row["tool_name"]: {
-                "total": row["total"],
-                "success_rate": row["successful"] / row["total"] if row["total"] > 0 else 0,
-                "avg_duration_ms": round(row["avg_duration"], 2)
-            } for row in rows}
-            
-            return metrics
+        async with self.get_db() as conn:
+            async with conn.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                metrics = {row["tool_name"]: {
+                    "total": row["total"],
+                    "success_rate": row["successful"] / row["total"] if row["total"] > 0 else 0,
+                    "avg_duration_ms": round(row["avg_duration"], 2)
+                } for row in rows}
+                
+                return metrics
 
 
 # =============================================================================

@@ -1,7 +1,7 @@
 {
     "metadata": {
-        "generated_at": "2026-02-26T03:18:25.671803",
-        "total_days": 90,
+        "generated_at": "2026-03-02T02:01:19.385683",
+        "total_days": 15,
         "phases_completed": 5
     },
     "overall_status": "fail",
@@ -21,17 +21,17 @@
         "confident_without_evidence": false
     },
     "trust_metrics": {
-        "total_recommendations": 32,
-        "accepted_recommendations": 32,
-        "rejected_recommendations": 0,
+        "total_recommendations": 46,
+        "accepted_recommendations": 34,
+        "rejected_recommendations": 12,
         "ignored_recommendations": 0,
-        "adoption_rate": 1.0,
+        "adoption_rate": 0.739,
         "accuracy_when_followed": 0.0,
-        "overall_trust_score": 0.4,
+        "overall_trust_score": 0.296,
         "mean_calibration_error": 0.0,
         "overconfidence_events": 0,
         "underconfidence_events": 0,
-        "trust_trend": "stable",
+        "trust_trend": "increasing",
         "daily_trust_scores": {
             "1": 0.5,
             "2": 0.5,
@@ -40,89 +40,14 @@
             "5": 0.5,
             "6": 0.5,
             "7": 0.5,
-            "8": 0.5,
-            "9": 0.5,
-            "10": 0.5,
-            "11": 0.5,
-            "12": 0.5,
-            "13": 0.54,
-            "14": 0.58,
-            "15": 0.58,
-            "16": 0.58,
-            "17": 0.58,
-            "18": 0.58,
-            "19": 0.58,
-            "20": 0.58,
-            "21": 0.58,
-            "22": 0.58,
-            "23": 0.58,
-            "24": 0.62,
-            "25": 0.62,
-            "26": 0.62,
-            "27": 0.62,
-            "28": 0.62,
-            "29": 0.62,
-            "30": 0.62,
-            "31": 0.62,
-            "32": 0.62,
-            "33": 0.62,
-            "34": 0.64,
-            "35": 0.64,
-            "36": 0.64,
-            "37": 0.64,
-            "38": 0.64,
-            "39": 0.64,
-            "40": 0.64,
-            "41": 0.64,
-            "42": 0.68,
-            "43": 0.68,
-            "44": 0.68,
-            "45": 0.68,
-            "46": 0.68,
-            "47": 0.68,
-            "48": 0.68,
-            "49": 0.68,
-            "50": 0.68,
-            "51": 0.74,
-            "52": 0.74,
-            "53": 0.74,
-            "54": 0.8,
-            "55": 0.8,
-            "56": 0.92,
-            "57": 0.92,
-            "58": 0.92,
-            "59": 0.92,
-            "60": 0.92,
-            "61": 0.92,
-            "62": 0.92,
-            "63": 0.92,
-            "64": 0.96,
-            "65": 0.96,
-            "66": 0.96,
-            "67": 0.96,
-            "68": 0.96,
-            "69": 0.96,
-            "70": 0.96,
-            "71": 0.96,
-            "72": 0.96,
-            "73": 0.96,
-            "74": 1.0,
-            "75": 1.0,
-            "76": 1.0,
-            "77": 1.0,
-            "78": 1.0,
-            "79": 1.0,
-            "80": 1.0,
-            "81": 1.0,
-            "82": 1.0,
-            "83": 1.0,
-            "84": 1.0,
-            "85": 1.0,
-            "86": 1.0,
-            "87": 1.0,
-            "88": 1.0,
-            "89": 1.0,
-            "90": 1.0
+            "8": 0.97,
+            "9": 0.96,
+            "10": 1.0,
+            "11": 0.82,
+            "12": 1.0,
+            "13": 1.0,
+            "14": 1.0,
+            "15": 0.9
         }
     },
     "validation_metrics": {
@@ -133,8 +58,8 @@
         "noise_triggered_alert_rate": 0.0,
         "incident_recall_accuracy": 0.0,
         "evidence_backed_confidence_ratio": 1.0,
-        "silent_briefing_rate": 0.867,
-        "max_silence_streak": 12,
+        "silent_briefing_rate": 0.467,
+        "max_silence_streak": 7,
         "skill_downgrades_count": 0,
         "memory_humility_rate": 0.0,
         "pass_criteria": {
@@ -152,8 +77,8 @@
             "escalates_everything": false,
             "confident_without_evidence": false
         },
-        "tests_passed": 25,
-        "tests_failed": 8,
+        "tests_passed": 19,
+        "tests_failed": 14,
         "tests_pending": 10
     },
     "phase_summaries": {
@@ -172,50 +97,50 @@
         "1": {
             "phase": 1,
             "tests_total": 9,
-            "tests_passed": 8,
-            "tests_failed": 1,
+            "tests_passed": 7,
+            "tests_failed": 2,
             "tests_pending": 0,
             "days_in_phase": 7,
-            "trust_start": 0.5,
-            "trust_end": 0.5800000000000001,
-            "total_advisories": 4,
-            "silent_briefing_days": 5
+            "trust_start": 0.97,
+            "trust_end": 1.0,
+            "total_advisories": 40,
+            "silent_briefing_days": 0
         },
         "2": {
             "phase": 2,
             "tests_total": 9,
-            "tests_passed": 7,
-            "tests_failed": 2,
+            "tests_passed": 4,
+            "tests_failed": 5,
             "tests_pending": 0,
-            "days_in_phase": 16,
-            "trust_start": 0.5800000000000001,
-            "trust_end": 0.6200000000000001,
-            "total_advisories": 2,
-            "silent_briefing_days": 15
+            "days_in_phase": 1,
+            "trust_start": 0.9,
+            "trust_end": 0.9,
+            "total_advisories": 6,
+            "silent_briefing_days": 0
         },
         "3": {
             "phase": 3,
             "tests_total": 9,
-            "tests_passed": 3,
-            "tests_failed": 2,
+            "tests_passed": 2,
+            "tests_failed": 3,
             "tests_pending": 4,
-            "days_in_phase": 30,
-            "trust_start": 0.6200000000000001,
-            "trust_end": 0.9200000000000004,
-            "total_advisories": 15,
-            "silent_briefing_days": 25
+            "days_in_phase": 0,
+            "trust_start": null,
+            "trust_end": null,
+            "total_advisories": 0,
+            "silent_briefing_days": 0
         },
         "4": {
             "phase": 4,
             "tests_total": 10,
-            "tests_passed": 1,
-            "tests_failed": 3,
+            "tests_passed": 0,
+            "tests_failed": 4,
             "tests_pending": 6,
-            "days_in_phase": 30,
-            "trust_start": 0.9200000000000004,
-            "trust_end": 1.0,
-            "total_advisories": 11,
-            "silent_briefing_days": 26
+            "days_in_phase": 0,
+            "trust_start": null,
+            "trust_end": null,
+            "total_advisories": 0,
+            "silent_briefing_days": 0
         }
     },
     "test_results": {
@@ -228,7 +153,7 @@
             "evidence": {
                 "advisory_count": 0
             },
-            "timestamp": "2026-02-26T01:33:31.817186"
+            "timestamp": "2026-03-02T01:35:07.707565"
         },
         "P0-002": {
             "test_id": "P0-002",
@@ -239,7 +164,7 @@
             "evidence": {
                 "noise_alert_count": 0
             },
-            "timestamp": "2026-02-26T01:33:31.817186"
+            "timestamp": "2026-03-02T01:35:07.707565"
         },
         "P0-003": {
             "test_id": "P0-003",
@@ -250,7 +175,7 @@
             "evidence": {
                 "days_observed": 7
             },
-            "timestamp": "2026-02-26T01:33:31.817186"
+            "timestamp": "2026-03-02T01:35:07.707565"
         },
         "P0-004": {
             "test_id": "P0-004",
@@ -261,7 +186,7 @@
             "evidence": {
                 "false_fault_alerts": 0
             },
-            "timestamp": "2026-02-26T01:33:31.817186"
+            "timestamp": "2026-03-02T01:35:07.707565"
         },
         "P0-005": {
             "test_id": "P0-005",
@@ -272,7 +197,7 @@
             "evidence": {
                 "memory_system": true
             },
-            "timestamp": "2026-02-26T01:33:31.817821"
+            "timestamp": "2026-03-02T01:35:07.707565"
         },
         "P0-006": {
             "test_id": "P0-006",
@@ -283,63 +208,63 @@
             "evidence": {
                 "locked": true
             },
-            "timestamp": "2026-02-26T01:33:31.817821"
+            "timestamp": "2026-03-02T01:35:07.707565"
         },
         "P1-001": {
             "test_id": "P1-001",
             "name": "First Morning Briefing",
             "phase": 1,
             "status": "pass",
-            "message": "First briefing generated with 4 observations",
+            "message": "First briefing generated with 40 observations",
             "evidence": {
-                "briefing_count": 4,
-                "low_confidence": true
+                "briefing_count": 40,
+                "low_confidence": false
             },
-            "timestamp": "2026-02-26T01:39:51.959303"
+            "timestamp": "2026-03-02T01:57:47.137590"
         },
         "P1-002": {
             "test_id": "P1-002",
             "name": "Slow Drift Detection",
             "phase": 1,
-            "status": "pass",
-            "message": "Drift advisories: 1 (need >= 1)",
+            "status": "fail",
+            "message": "Drift advisories: 0 (need >= 1)",
             "evidence": {
-                "drift_count": 1
+                "drift_count": 0
             },
-            "timestamp": "2026-02-26T01:39:51.959303"
+            "timestamp": "2026-03-02T01:57:47.137590"
         },
         "P1-003": {
             "test_id": "P1-003",
             "name": "Cross-Validation Before Alarm",
             "phase": 1,
-            "status": "pass",
-            "message": "Cross-validation: multi-evidence=yes",
+            "status": "fail",
+            "message": "Cross-validation: multi-evidence=no",
             "evidence": {
-                "has_multi_evidence": true
+                "has_multi_evidence": false
             },
-            "timestamp": "2026-02-26T01:39:51.959303"
+            "timestamp": "2026-03-02T01:57:47.137590"
         },
         "P1-004": {
             "test_id": "P1-004",
             "name": "Observation-Level Marking",
             "phase": 1,
-            "status": "fail",
-            "message": "Observation-level marking: False",
+            "status": "pass",
+            "message": "Observation-level marking: True",
             "evidence": {
-                "observation_marked": false
+                "observation_marked": true
             },
-            "timestamp": "2026-02-26T01:39:51.959303"
+            "timestamp": "2026-03-02T01:57:47.137590"
         },
         "P1-005": {
             "test_id": "P1-005",
             "name": "Trust Calibration on Ignore",
             "phase": 1,
             "status": "pass",
-            "message": "Trust calibrated to 0.58",
+            "message": "Trust calibrated to 1.00",
             "evidence": {
-                "trust_level": 0.5800000000000001
+                "trust_level": 1.0
             },
-            "timestamp": "2026-02-26T01:39:51.959303"
+            "timestamp": "2026-03-02T01:57:47.138590"
         },
         "P1-006": {
             "test_id": "P1-006",
@@ -350,7 +275,7 @@
             "evidence": {
                 "has_evidence": true
             },
-            "timestamp": "2026-02-26T01:39:51.960318"
+            "timestamp": "2026-03-02T01:57:47.138590"
         },
         "P1-007": {
             "test_id": "P1-007",
@@ -362,7 +287,7 @@
                 "detected": true,
                 "drops_injected": 1
             },
-            "timestamp": "2026-02-26T01:39:51.960318"
+            "timestamp": "2026-03-02T01:57:47.138590"
         },
         "P1-008": {
             "test_id": "P1-008",
@@ -374,18 +299,18 @@
                 "detected": true,
                 "stale_injected": 1
             },
-            "timestamp": "2026-02-26T01:39:51.960318"
+            "timestamp": "2026-03-02T01:57:47.138590"
         },
         "P1-009": {
             "test_id": "P1-009",
             "name": "Conflicting Sources",
             "phase": 1,
             "status": "pass",
-            "message": "Conflicting source handling: verified",
+            "message": "Conflicting source handling: not tested",
             "evidence": {
-                "multi_sensor": true
+                "multi_sensor": false
             },
-            "timestamp": "2026-02-26T01:39:51.960318"
+            "timestamp": "2026-03-02T01:57:47.138590"
         },
         "P2-001": {
             "test_id": "P2-001",
@@ -395,20 +320,20 @@
             "message": "ML Grounding: Verified (XGBoost/IF evidence detected)",
             "evidence": {
                 "ml_grounded": true,
-                "advisory_count": 2
+                "advisory_count": 6
             },
-            "timestamp": "2026-02-26T01:59:37.570777"
+            "timestamp": "2026-03-02T02:01:19.380817"
         },
         "P2-002": {
             "test_id": "P2-002",
             "name": "Outcome Verification",
             "phase": 2,
             "status": "pass",
-            "message": "Operator Realism: 2 meaningful K2-driven decisions",
+            "message": "Operator Realism: 3 meaningful K2-driven decisions",
             "evidence": {
-                "feedback_count": 2
+                "feedback_count": 3
             },
-            "timestamp": "2026-02-26T01:59:37.570777"
+            "timestamp": "2026-03-02T02:01:19.380817"
         },
         "P2-003": {
             "test_id": "P2-003",
@@ -419,7 +344,7 @@
             "evidence": {
                 "has_prediction": false
             },
-            "timestamp": "2026-02-26T01:59:37.572327"
+            "timestamp": "2026-03-02T02:01:19.380817"
         },
         "P2-004": {
             "test_id": "P2-004",
@@ -430,51 +355,51 @@
             "evidence": {
                 "skillbook_integrated": true
             },
-            "timestamp": "2026-02-26T01:59:37.572327"
+            "timestamp": "2026-03-02T02:01:19.381762"
         },
         "P2-005": {
             "test_id": "P2-005",
             "name": "Pre-occurrence Prediction",
             "phase": 2,
-            "status": "pass",
+            "status": "fail",
             "message": "Economic Quantification: Advisories include kWh/QAR impact",
             "evidence": {
-                "quantified": true
+                "quantified": false
             },
-            "timestamp": "2026-02-26T01:59:37.572327"
+            "timestamp": "2026-03-02T02:01:19.381762"
         },
         "P2-006": {
             "test_id": "P2-006",
             "name": "Operator Rejection Learning",
             "phase": 2,
             "status": "pass",
-            "message": "Trust Calibration: Trust drifted by 0.12",
+            "message": "Trust Calibration: Trust drifted by 0.40",
             "evidence": {
-                "trust_drift": 0.1200000000000001
+                "trust_drift": 0.4
             },
-            "timestamp": "2026-02-26T01:59:37.573350"
+            "timestamp": "2026-03-02T02:01:19.381762"
         },
         "P2-007": {
             "test_id": "P2-007",
             "name": "Terminal Advisory Severity",
             "phase": 2,
-            "status": "pass",
-            "message": "Evidence Chains: Multi-point attribution detected",
+            "status": "fail",
+            "message": "Evidence Chains: Single-point only",
             "evidence": {
-                "has_multi_point_evidence": true
+                "has_multi_point_evidence": false
             },
-            "timestamp": "2026-02-26T01:59:37.573350"
+            "timestamp": "2026-03-02T02:01:19.381762"
         },
         "P2-008": {
             "test_id": "P2-008",
             "name": "False Success Detection",
             "phase": 2,
-            "status": "pass",
-            "message": "Cognitive Depth: Counterfactual analysis detected",
+            "status": "fail",
+            "message": "Cognitive Depth: Counterfactual analysis missing",
             "evidence": {
-                "counterfactual_active": true
+                "counterfactual_active": false
             },
-            "timestamp": "2026-02-26T01:59:37.573880"
+            "timestamp": "2026-03-02T02:01:19.381762"
         },
         "P2-009": {
             "test_id": "P2-009",
@@ -485,18 +410,18 @@
             "evidence": {
                 "fleet_intel_detected": false
             },
-            "timestamp": "2026-02-26T01:59:37.573880"
+            "timestamp": "2026-03-02T02:01:19.382752"
         },
         "P3-001": {
             "test_id": "P3-001",
             "name": "Alarm Fatigue Resistance",
             "phase": 3,
             "status": "pass",
-            "message": "Alarm Fatigue: Rate is 0.5/day (Target < 15)",
+            "message": "Alarm Fatigue: Rate is 0.0/day (Target < 15)",
             "evidence": {
-                "advisory_rate": 0.5
+                "advisory_rate": 0.0
             },
-            "timestamp": "2026-02-26T02:37:47.189447"
+            "timestamp": "2026-03-02T02:01:19.384026"
         },
         "P3-002": {
             "test_id": "P3-002",
@@ -507,18 +432,18 @@
             "evidence": {
                 "high_conf_count": 0
             },
-            "timestamp": "2026-02-26T02:37:47.189447"
+            "timestamp": "2026-03-02T02:01:19.384026"
         },
         "P3-003": {
             "test_id": "P3-003",
             "name": "Uncertainty Feedback Request",
             "phase": 3,
-            "status": "pass",
-            "message": "Cognitive Humility: Feedback requests detected",
+            "status": "fail",
+            "message": "Cognitive Humility: Feedback requests MISSING",
             "evidence": {
-                "feedback_req_count": 5
+                "feedback_req_count": 0
             },
-            "timestamp": "2026-02-26T02:37:47.189447"
+            "timestamp": "2026-03-02T02:01:19.384026"
         },
         "P3-004": {
             "test_id": "P3-004",
@@ -527,7 +452,7 @@
             "status": "pending",
             "message": "Test not yet executed",
             "evidence": {},
-            "timestamp": "2026-02-26T01:31:13.035173"
+            "timestamp": "2026-03-02T01:34:49.747419"
         },
         "P3-005": {
             "test_id": "P3-005",
@@ -536,7 +461,7 @@
             "status": "pending",
             "message": "Test not yet executed",
             "evidence": {},
-            "timestamp": "2026-02-26T01:31:13.035173"
+            "timestamp": "2026-03-02T01:34:49.747419"
         },
         "P3-006": {
             "test_id": "P3-006",
@@ -545,7 +470,7 @@
             "status": "pending",
             "message": "Test not yet executed",
             "evidence": {},
-            "timestamp": "2026-02-26T01:31:13.035173"
+            "timestamp": "2026-03-02T01:34:49.747419"
         },
         "P3-007": {
             "test_id": "P3-007",
@@ -554,7 +479,7 @@
             "status": "pending",
             "message": "Test not yet executed",
             "evidence": {},
-            "timestamp": "2026-02-26T01:31:13.035173"
+            "timestamp": "2026-03-02T01:34:49.747419"
         },
         "P3-008": {
             "test_id": "P3-008",
@@ -565,7 +490,7 @@
             "evidence": {
                 "tradeoff_analyzed": false
             },
-            "timestamp": "2026-02-26T02:37:47.189447"
+            "timestamp": "2026-03-02T02:01:19.384026"
         },
         "P3-009": {
             "test_id": "P3-009",
@@ -576,7 +501,7 @@
             "evidence": {
                 "vip_detected": false
             },
-            "timestamp": "2026-02-26T02:37:47.189447"
+            "timestamp": "2026-03-02T02:01:19.384026"
         },
         "P4-001": {
             "test_id": "P4-001",
@@ -587,18 +512,18 @@
             "evidence": {
                 "recall_active": false
             },
-            "timestamp": "2026-02-26T03:18:25.665540"
+            "timestamp": "2026-03-02T02:01:19.384026"
         },
         "P4-002": {
             "test_id": "P4-002",
             "name": "Zone Transfer Learning",
             "phase": 4,
-            "status": "pass",
-            "message": "Transfer Learning: Cross-zone patterns detected",
+            "status": "fail",
+            "message": "Transfer Learning: Cross-zone patterns MISSING",
             "evidence": {
-                "transfer_active": true
+                "transfer_active": false
             },
-            "timestamp": "2026-02-26T03:18:25.665540"
+            "timestamp": "2026-03-02T02:01:19.384026"
         },
         "P4-003": {
             "test_id": "P4-003",
@@ -607,7 +532,7 @@
             "status": "pending",
             "message": "Test not yet executed",
             "evidence": {},
-            "timestamp": "2026-02-26T01:31:13.035173"
+            "timestamp": "2026-03-02T01:34:49.747419"
         },
         "P4-004": {
             "test_id": "P4-004",
@@ -616,7 +541,7 @@
             "status": "pending",
             "message": "Test not yet executed",
             "evidence": {},
-            "timestamp": "2026-02-26T01:31:13.035173"
+            "timestamp": "2026-03-02T01:34:49.747419"
         },
         "P4-005": {
             "test_id": "P4-005",
@@ -627,7 +552,7 @@
             "evidence": {
                 "early_warning_active": false
             },
-            "timestamp": "2026-02-26T03:18:25.665540"
+            "timestamp": "2026-03-02T02:01:19.384026"
         },
         "P4-006": {
             "test_id": "P4-006",
@@ -636,7 +561,7 @@
             "status": "pending",
             "message": "Test not yet executed",
             "evidence": {},
-            "timestamp": "2026-02-26T01:31:13.035173"
+            "timestamp": "2026-03-02T01:34:49.747419"
         },
         "P4-007": {
             "test_id": "P4-007",
@@ -645,7 +570,7 @@
             "status": "pending",
             "message": "Test not yet executed",
             "evidence": {},
-            "timestamp": "2026-02-26T01:31:13.035173"
+            "timestamp": "2026-03-02T01:34:49.747419"
         },
         "R-001": {
             "test_id": "R-001",
@@ -656,7 +581,7 @@
             "evidence": {
                 "downgrade_detected": false
             },
-            "timestamp": "2026-02-26T03:18:25.666578"
+            "timestamp": "2026-03-02T02:01:19.384026"
         },
         "R-002": {
             "test_id": "R-002",
@@ -665,7 +590,7 @@
             "status": "pending",
             "message": "Test not yet executed",
             "evidence": {},
-            "timestamp": "2026-02-26T01:31:13.035173"
+            "timestamp": "2026-03-02T01:34:49.747419"
         },
         "R-003": {
             "test_id": "R-003",
@@ -674,98 +599,98 @@
             "status": "pending",
             "message": "Test not yet executed",
             "evidence": {},
-            "timestamp": "2026-02-26T01:31:13.035173"
+            "timestamp": "2026-03-02T01:34:49.747419"
         }
     },
     "daily_summary": [
         {
-            "day_number": 84,
-            "phase": 4,
-            "date": "2024-08-23T00:00:00",
+            "day_number": 9,
+            "phase": 1,
+            "date": "2024-06-09T00:00:00",
+            "outdoor_temp": 42.1,
+            "humidity": 39.266329409370435,
+            "occupancy_ratio": 1.0,
+            "trust_score": 0.96,
+            "advisory_count": 5,
+            "silent_briefing": false,
+            "alarms_count": 0,
+            "operator_actions_count": 0
+        },
+        {
+            "day_number": 10,
+            "phase": 1,
+            "date": "2024-06-10T00:00:00",
             "outdoor_temp": 42.9,
-            "humidity": 20,
+            "humidity": 47.109731871812,
+            "occupancy_ratio": 1.0,
+            "trust_score": 1.0,
+            "advisory_count": 6,
+            "silent_briefing": false,
+            "alarms_count": 0,
+            "operator_actions_count": 0
+        },
+        {
+            "day_number": 11,
+            "phase": 1,
+            "date": "2024-06-11T00:00:00",
+            "outdoor_temp": 41.0,
+            "humidity": 48.310812534498424,
+            "occupancy_ratio": 1.0,
+            "trust_score": 0.8200000000000001,
+            "advisory_count": 6,
+            "silent_briefing": false,
+            "alarms_count": 0,
+            "operator_actions_count": 0
+        },
+        {
+            "day_number": 12,
+            "phase": 1,
+            "date": "2024-06-12T00:00:00",
+            "outdoor_temp": 40.6,
+            "humidity": 48.851821503224656,
+            "occupancy_ratio": 1.0,
+            "trust_score": 1.0,
+            "advisory_count": 6,
+            "silent_briefing": false,
+            "alarms_count": 0,
+            "operator_actions_count": 0
+        },
+        {
+            "day_number": 13,
+            "phase": 1,
+            "date": "2024-06-13T00:00:00",
+            "outdoor_temp": 41.6,
+            "humidity": 45.45573749866062,
+            "occupancy_ratio": 1.0,
+            "trust_score": 1.0,
+            "advisory_count": 6,
+            "silent_briefing": false,
+            "alarms_count": 0,
+            "operator_actions_count": 0
+        },
+        {
+            "day_number": 14,
+            "phase": 1,
+            "date": "2024-06-14T00:00:00",
+            "outdoor_temp": 40.7,
+            "humidity": 37.444930909328825,
             "occupancy_ratio": 0.05,
             "trust_score": 1.0,
-            "advisory_count": 0,
-            "silent_briefing": true,
+            "advisory_count": 6,
+            "silent_briefing": false,
             "alarms_count": 0,
             "operator_actions_count": 0
         },
         {
-            "day_number": 85,
-            "phase": 4,
-            "date": "2024-08-24T00:00:00",
-            "outdoor_temp": 41.9,
-            "humidity": 20,
+            "day_number": 15,
+            "phase": 2,
+            "date": "2024-06-15T00:00:00",
+            "outdoor_temp": 42.6,
+            "humidity": 36.4829578130158,
             "occupancy_ratio": 0.05,
-            "trust_score": 1.0,
-            "advisory_count": 0,
-            "silent_briefing": true,
-            "alarms_count": 0,
-            "operator_actions_count": 0
-        },
-        {
-            "day_number": 86,
-            "phase": 4,
-            "date": "2024-08-25T00:00:00",
-            "outdoor_temp": 42.8,
-            "humidity": 21.047706050494533,
-            "occupancy_ratio": 1.0,
-            "trust_score": 1.0,
-            "advisory_count": 0,
-            "silent_briefing": true,
-            "alarms_count": 0,
-            "operator_actions_count": 0
-        },
-        {
-            "day_number": 87,
-            "phase": 4,
-            "date": "2024-08-26T00:00:00",
-            "outdoor_temp": 42.8,
-            "humidity": 20.89375026658691,
-            "occupancy_ratio": 1.0,
-            "trust_score": 1.0,
-            "advisory_count": 0,
-            "silent_briefing": true,
-            "alarms_count": 0,
-            "operator_actions_count": 0
-        },
-        {
-            "day_number": 88,
-            "phase": 4,
-            "date": "2024-08-27T00:00:00",
-            "outdoor_temp": 42.3,
-            "humidity": 25.424299310012408,
-            "occupancy_ratio": 1.0,
-            "trust_score": 1.0,
-            "advisory_count": 0,
-            "silent_briefing": true,
-            "alarms_count": 0,
-            "operator_actions_count": 0
-        },
-        {
-            "day_number": 89,
-            "phase": 4,
-            "date": "2024-08-28T00:00:00",
-            "outdoor_temp": 41.5,
-            "humidity": 25.275870229750325,
-            "occupancy_ratio": 1.0,
-            "trust_score": 1.0,
-            "advisory_count": 0,
-            "silent_briefing": true,
-            "alarms_count": 0,
-            "operator_actions_count": 0
-        },
-        {
-            "day_number": 90,
-            "phase": 4,
-            "date": "2024-08-29T00:00:00",
-            "outdoor_temp": 43.4,
-            "humidity": 21.746044293315833,
-            "occupancy_ratio": 1.0,
-            "trust_score": 1.0,
-            "advisory_count": 0,
-            "silent_briefing": true,
+            "trust_score": 0.9,
+            "advisory_count": 6,
+            "silent_briefing": false,
             "alarms_count": 0,
             "operator_actions_count": 0
         }
@@ -773,19 +698,19 @@
     "critical_events": [],
     "simulation_summary": {
         "total_days": 90,
-        "total_advisories": 32,
+        "total_advisories": 46,
         "phases_completed": 5,
-        "operator_final_trust": 1.0,
-        "operator_acceptance_rate": 1.0,
-        "tests_passed": 25,
-        "tests_failed": 8,
-        "final_trust": 1.0
+        "operator_final_trust": 0.9,
+        "operator_acceptance_rate": 0.7391304347826086,
+        "tests_passed": 19,
+        "tests_failed": 14,
+        "final_trust": 0.9
     },
     "llm_statistics": {
-        "total_calls": 498,
+        "total_calls": 46,
         "errors": 0,
-        "total_time_seconds": 4445.55,
-        "avg_time_per_call": 8.93,
+        "total_time_seconds": 1300.95,
+        "avg_time_per_call": 28.28,
         "real_llm_used": true
     },
     "test_summary": {

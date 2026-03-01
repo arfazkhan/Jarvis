@@ -567,33 +567,13 @@ Respond with ONLY this JSON (no other text). Use your actual reasoning:
 }}"""
 
         try:
-            response = await self.llm.ask(
+            decision = await self.llm.ask_json(
                 [{"role": "user", "content": prompt}],
                 system_msgs=[{"role": "system", "content": 
                     "You are simulating a real building operator. Respond ONLY with valid JSON. "
                     "Be realistic — a real FM evaluates evidence fairly."}],
             )
             
-            content = response.content or "{}"
-            # Strip K2 think tags
-            content = re.sub(r'</?think>', '', content, flags=re.DOTALL)
-            content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
-            content = content.strip()
-            
-            # Robust JSON extraction: loop to find the largest valid JSON block
-            if "{" in content:
-                start_idx = content.find("{")
-                end_idx = content.rfind("}")
-                while end_idx > start_idx:
-                    try:
-                        potential_json = content[start_idx:end_idx+1]
-                        _json.loads(potential_json)
-                        content = potential_json
-                        break
-                    except (_json.JSONDecodeError, ValueError):
-                        end_idx = content.rfind("}", 0, end_idx)
-            
-            decision = _json.loads(content)
             
             accepted = bool(decision.get("accepted", False))
             reason = decision.get("reason", "no reason given")

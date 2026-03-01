@@ -240,14 +240,21 @@ class BMSLLMAgent:
         
         logger.info(f"Prompt layers available: {len(self.prompt_builder.LAYERS)}")
         
-        # Phase 1: Start advisory scheduler for daily metrics
-        from agent_commercial.advisory_scheduler import start_advisory_scheduler
-        self.advisory_scheduler = start_advisory_scheduler(
-            tracker=self.tracker,
-            calibrator=self.calibrator,
-            preference_learner=self.preference_learner
-        )
+        # Phase 1: Advisory scheduler handled externally or via Swarm now
+        self.advisory_scheduler = None
         self.economy_policy = ToolEconomyPolicy()
+        
+        # --- PHASE 1 RUFLOW INTEGRATION: Swarm Initialization ---
+        try:
+            from arvis_core.swarm.queen import QueenCoordinator
+            from agent_commercial.swarm_nodes import get_all_swarm_nodes
+            self.queen = QueenCoordinator()
+            for node in get_all_swarm_nodes(self.tools):
+                self.queen.register_node(node)
+            logger.info("ARVIS Phase 1 Swarm (Queen Coordinator & Nodes) initialized within BMSLLMAgent.")
+        except Exception as e:
+            logger.error(f"Failed to initialize Swarm: {e}")
+            self.queen = None
         
         # Agentic Economy & Closure persistence
         self.last_advisory_state = {}  # {query: {metrics: value}}
@@ -720,8 +727,8 @@ class BMSLLMAgent:
 
     async def chat(self, query: str, context: Dict[str, Any] = None) -> ChatResponse:
         """
-        Process a natural language query about BMS using a ReAct Loop.
-        (Reason -> Act -> Observe -> Repeat)
+        Process a natural language query about BMS using the ARVIS Swarm.
+        Replaces the monolithic ReAct loop with a decentralized, BFT-debated Swarm response based on Ruflow architecture.
         """
         language = self._detect_language(query)
         context = context or {}
@@ -734,256 +741,52 @@ class BMSLLMAgent:
             except ImportError:
                 self.meta_cognition = None
 
-        # Track conversation steps for the loop
-        # We accumulate "Thought", "Action", "Observation"
-        intermediate_steps = [] 
-        max_turns = 4  # Increased for more iterative depth
-        
-        # GLASS BOX: Initial Setup
-        from agent_commercial.api.sse_broadcaster import SSEBroadcaster
-        import asyncio
-        broadcaster = SSEBroadcaster()
-        agentic_step = 0
-        
-        # 0. Agentic Economy: Memory Gate Check
-        stable_signal = self._check_memory_gate(query)
-        if stable_signal:
-            # Short-circuit investigation
-            todo_list = [{"id": "stable", "task": "Verify system stability", "status": "completed"}]
-            asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": todo_list}))
-            asyncio.create_task(broadcaster.broadcast("progress", {"content": stable_signal}))
-            asyncio.create_task(broadcaster.broadcast("summary", {"content": "BMS conditions are stable. Previous optimizations remain effective."}))
+        if hasattr(self, 'queen') and self.queen:
+            logger.info("Routing query to ARVIS Swarm (Phase 1 Advisory)...")
             
-            # Generate a quick response from the gate
-            text = f"{stable_signal}\n\nI have verified that the current energy and alarm profiles match the last successful optimization. No further intervention is required at this time."
-            return ChatResponse(text=text, tool_calls=[], tool_results=[], confidence=1.0, language=language, sources=["Memory Gate"])
-
-        # 0. Dynamic Thought & Task List (Glass Box)
-        todo_list = self._extract_dynamic_tasks(query)
-        last_broadcast_todo = None
-        
-        asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": todo_list}))
-        last_broadcast_todo = json.dumps(todo_list)
-        
-        # We also broadcast the first thinking event as an immediate signal
-        asyncio.create_task(broadcaster.broadcast("progress", {"content": f"Initializing agentic matrix for objective: {query}"}))
-
-        try:
-            for turn in range(max_turns):
-                # Deduplicated broadcast
-                current_todo_str = json.dumps(todo_list)
-                if current_todo_str != last_broadcast_todo:
-                    asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": todo_list}))
-                    last_broadcast_todo = current_todo_str
-                
-                # 1. Update System Prompt with progressive context
-                system_prompt = await self._get_system_prompt(query, language)
-                if context:
-                    system_prompt += f"\n\nGlobal Context:\n{json.dumps(context)}"
-                
-                # Append intermediate steps history to prompt logic (or user message)
-                # We'll append it to the messages being sent
-                
-                current_tools = await self._generate_tool_calls(
-                    query=query, 
-                    language=language, 
-                    history=intermediate_steps,
-                    context=context
-                )
-                
-                # --- VERIFICATION LAYER (History Aware) ---
-                # Even if the LLM is silent, we check if we need to force tools based on Truth Serum
-                current_tools = await self._verify_tool_adequacy(query, current_tools, context, history=intermediate_steps)
-
-                # If no tools called AND verification didn't add any, then we are ready for final answer
-                if not current_tools:
-                    break
-                
-                # GLASS BOX: Stream Plan
-                from agent_commercial.api.sse_broadcaster import SSEBroadcaster
-                import asyncio
-                try:
-                    plan_desc = [tc["tool"] for tc in current_tools]
-                    # Also extract reasoning if 'think' tool is among them
-                    reasoning_snippet = None
-                    for tc in current_tools:
-                        if tc["tool"] == "think":
-                            reasoning_snippet = tc["args"].get("reasoning")
-                    
-                    asyncio.create_task(SSEBroadcaster().broadcast("plan", {
-                        "step": turn + 1,
-                        "planned_tools": plan_desc,
-                        "reasoning": reasoning_snippet or "Analyzing system state based on available data."
-                    }))
-                except (AttributeError, RuntimeError) as e:
-                    logger.debug(f"SSE plan broadcast skipped: {e}")
-
-                # 2. EXECUTE TOOLS (Action)
-                tool_results = []
-                current_time = time.time()
-                
-                for tc in current_tools:
-                    # 1. Economy Cache Lookup
-                    cache_key = f"{tc['tool']}:{json.dumps(tc['args'], sort_keys=True)}"
-                    cached_val = self.result_cache.get(cache_key)
-                    if cached_val:
-                        val, ts = cached_val
-                        if current_time - ts < self.cache_ttl:
-                            tool_results.append({
-                                "tool": tc["tool"], 
-                                "args": tc["args"], 
-                                "result": val,
-                                "source": "cache"
-                            })
-                            continue
-
-                    # 2. Local History Deduplication (Anti-Loop)
-                    is_duplicate = False
-                    for h_tool, h_args, h_time in reversed(self.tool_history):
-                        if h_tool == tc["tool"] and h_args == tc["args"] and (current_time - h_time) < 2.0:
-                            logger.info(f"[AntiLoop] Skipping duplicate tool call: {tc['tool']} with {tc['args']}")
-                            is_duplicate = True
-                            break
-                    
-                    if is_duplicate:
-                        tool_results.append({
-                            "tool": tc["tool"], 
-                            "args": tc["args"],
-                            "result": {"status": "skipped", "message": "Result already available in history. Do not repeat redundant calls."}
-                        })
-                        continue
-
-                    # Record execution
-                    self.tool_history.append((tc["tool"], tc["args"], current_time))
-                    agentic_step += 1
-                    
-                    # GLASS BOX: Stream Tool Use (Input)
-                    try:
-                        # Ensure 'think' tool has reasoning from the internal monologue if missing
-                        tool_args = tc["args"]
-                        if tc["tool"] == "think" and not tool_args.get("reasoning"):
-                             tool_args["reasoning"] = f"[PLAN] Synthesizing investigative step {agentic_step}"
-
-                        asyncio.create_task(SSEBroadcaster().broadcast("tool_use", {
-                            "step": agentic_step,
-                            "tool": tc["tool"],
-                            "args": tool_args,
-                            "status": "running"
-                        }))
-                    except (AttributeError, RuntimeError) as e:
-                        logger.debug(f"SSE tool_start broadcast skipped: {e}")
-                    
-                    result = await self.tool_handler.execute(tc["tool"], tc["args"])
-                    tool_results.append({"tool": tc["tool"], "args": tc["args"], "result": result})
-                    
-                    # Update Economy Cache
-                    cache_key = f"{tc['tool']}:{json.dumps(tc['args'], sort_keys=True)}"
-                    self.result_cache[cache_key] = (result, time.time())
-                    
-                    # GLASS BOX: Stream Tool Result (Output)
-                    try:
-                        asyncio.create_task(broadcaster.broadcast("tool_result", {
-                            "step": agentic_step,
-                            "tool": tc["tool"],
-                            "result": str(result)[:800] + "..." if len(str(result)) > 800 else str(result)
-                        }))
-                    except (AttributeError, RuntimeError) as e:
-                        logger.debug(f"SSE tool_result broadcast skipped: {e}")
-                # GLASS BOX: Execution-Aware Task Updates
-                self._update_task_status(todo_list, current_tools, tool_results)
-                
-                # Dynamic Turn Synthesis (Content-Aware)
-                turn_summary = await self._generate_turn_summary(tool_results, language)
-                asyncio.create_task(broadcaster.broadcast("progress", {"content": turn_summary}))
-                
-                # 3. OBSERVE & REFLECT
-                # Add to history for next turn
-                step_record = {
-                    "turn": turn + 1,
-                    "actions": current_tools,
-                    "observations": tool_results
-                }
-                intermediate_steps.append(step_record)
-                
-                # Meta-Cognition: Log the decision
-                if self.meta_cognition:
-                    for tc in current_tools:
-                        self.meta_cognition.record_decision(
-                            context={"query": query, "turn": turn},
-                            chosen_action=tc["tool"],
-                            alternatives=[], # Could populate from economy candidates
-                            confidence=getattr(response, 'confidence', 0.85), # dynamically extract from LLM
-                            reasoning=f"Agentic Step {turn+1}",
-                            event_id=None
-                        )
-                
-                # Economy: Record utility
-                if hasattr(self, 'economy_policy'):
-                    site_type = context.get('site_type', "Standard")
-                    self.economy_policy.record_utility(query, site_type, current_tools, [r['result'] for r in tool_results])
-
-            # 4. FINAL SYNTHESIS
-            # Mark all tasks as completed in the Glass Box
-            if 'todo_list' in locals():
-                for t in todo_list: t["status"] = "completed"
-                asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": todo_list}))
+            # Broadcast to UI that Queen is thinking
+            from agent_commercial.api.sse_broadcaster import SSEBroadcaster
+            import asyncio
+            broadcaster = SSEBroadcaster()
+            asyncio.create_task(broadcaster.broadcast("progress", {"content": "The ARVIS Queen is routing your query to specialized Swarm Nodes..."}))
+            asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": [{"id": "swarm", "task": "Multi-Agent Debate & Consensus", "status": "in_progress"}]}))
             
-            # Generate final text response using all accumulated history
-            if intermediate_steps:
-                text = await self._summarize_tool_results(query, intermediate_steps, language)
-            else:
-                text = await self._generate_text_response(query, language)
-
-            # Dynamic Final Synthesis (Narrative Integrity)
-            final_summary = await self._generate_final_summary(query, text)
-            asyncio.create_task(broadcaster.broadcast("summary", {"content": final_summary}))
-
-            # Record advisory state for the Memory Gate
-            self._record_advisory_state(query)
-
-            # Log Final Recommendation
+            # DELEGATE TO SWARM
+            final_advice = await self.queen.execute_swarm(query, context)
+            
+            # VALIDATE TRUTH SCORE
             try:
-                self.tracker.log_recommendation(
-                    context={"query": query, "steps": intermediate_steps},
-                    recommended_action={"action": text[:50] + "...", "raw_text": text},
-                    confidence=getattr(response, 'confidence', 0.85) if 'response' in locals() else 0.85,
-                    reasoning="Agentic ReAct Loop",
-                    building_id=getattr(self.bms_state, 'building_id', 'West Bay Tower')
-                )
-                
-                # GLASS BOX: Stream Learning Event
-                try:
-                    asyncio.create_task(SSEBroadcaster().broadcast("learning", {
-                        "type": "recommendation_logged",
-                        "content": text[:100] + "..."
-                    }))
-                except (AttributeError, RuntimeError) as e:
-                    logger.debug(f"SSE learning broadcast skipped: {e}")
-                
-            except Exception as le:
-                logger.error(f"Failed to log decision: {str(le)}")
-
-            # Flatten tool calls and results for API response structure
-            final_tool_calls = []
-            final_tool_results = []
-            for step in intermediate_steps:
-                for action in step["actions"]:
-                    final_tool_calls.append(action)
-                for obs in step["observations"]:
-                    final_tool_results.append(obs)
-
+                from arvis_core.swarm.validator import TruthValidator
+                validator = TruthValidator()
+                validation_result = await validator.validate(final_advice, context)
+                if validation_result.get("score", 0.0) < 0.95:
+                    logger.warning(f"Truth Score failed ({validation_result.get('score')}). Halting advice.")
+                    final_advice = "The swarm generated an advisory, but it failed the internal Truth-Score validation against the current BMS telemetry. I have withheld the action."
+            except Exception as e:
+                logger.error(f"Validator failure: {e}")
+            
+            asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": [{"id": "swarm", "task": "Consensus Verified", "status": "completed"}]}))
+            
             return ChatResponse(
-                text=text,
-                tool_calls=final_tool_calls,
-                tool_results=final_tool_results,
-                confidence=0.9,
+                text=final_advice,
+                tool_calls=[],
+                tool_results=[],
+                confidence=0.95,
                 language=language,
-                sources=["UnifiedLLM", "Agentic Loop"],
+                sources=["ARVIS Queen Consensus", "Swarm Truth-Validator"]
             )
-
-        except Exception as e:
-            logger.error(f"Agentic Path failed, triggering Edge Safeties: {e}")
-            return await self.run_edge_safeties(query, language)
+            
+        else:
+            # Fallback (Safety mechanism if swarm fails to load)
+            logger.warning("Swarm not available. Falling back to simple response.")
+            return ChatResponse(
+                text="The multi-agent swarm is currently offline. Please check system logs for initialization errors.",
+                tool_calls=[],
+                tool_results=[],
+                confidence=0.0,
+                language=language,
+                sources=[]
+            )
 
     async def run_edge_safeties(self, query: str, language: str) -> ChatResponse:
         """

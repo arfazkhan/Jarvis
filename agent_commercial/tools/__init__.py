@@ -27,7 +27,6 @@ def get_bms_tools():
     from agent_commercial.tools.definitions import BMS_TOOLS
     return BMS_TOOLS
 
-BMS_TOOLS = property(lambda self: get_bms_tools())
 
 # Expose tool categories at module level (loaded on first access)
 _tools_loaded = False

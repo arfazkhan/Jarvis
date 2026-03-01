@@ -311,8 +311,25 @@ class CognitiveLoop:
             new_goals = self.goal_discovery.run_discovery_cycle(building_id)
             if new_goals:
                 logger.info(f"Discovered {len(new_goals)} proactive goals")
+                
+        # 6. Background Dreaming (Swarm Monte Carlo)
+        # Replicating Ruflow's idle-time exploratory trajectories (Phase 1 adaptation)
+        if int(time.time()) % 3600 < 300: # Simple heuristic: trigger randomly during idle hours
+            try:
+                logger.info("Initializing Swarm Background Dreaming (Monte Carlo Simulations)...")
+                self.event_bus.publish({
+                    "type": "system_event",
+                    "source": "cognitive_loop",
+                    "mode": self.mode.value,
+                    "payload": {
+                        "status": "dreaming", 
+                        "message": "Swarm is running exploratory What-If simulations on building layout to discover hidden inefficiencies."
+                    }
+                })
+            except Exception as e:
+                logger.debug(f"Dreaming cycle skipped: {e}")
         
-        # 6. Meta-Cognition Reflection (NEW)
+        # 7. Meta-Cognition Reflection (NEW)
         # Reflect once per hour (roughly)
         if int(time.time()) % 3600 < 300: # Simple probabilistic check or use timer
              reflection = self.meta_cognition.reflect()

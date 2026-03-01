@@ -35,6 +35,7 @@ class DecisionRecord:
     outcome: Optional[str] = None
     outcome_quality: Optional[str] = None  # "excellent", "good", "poor"
     event_id: Optional[str] = None
+    trajectory: Optional[Dict[str, Any]] = None # Full Ruflow SONA trajectory: { "pre_state": {}, "action": {}, "post_state": {} }
 
 class MetaCognition:
     """
@@ -81,6 +82,31 @@ class MetaCognition:
     def get_active_calibration_rules(self) -> Dict[str, Any]:
         return self.calibration_rules
         
+    def update_ewc_weights(self, rule_name: str, new_weight: float, importance: float = 1.0):
+        """
+        Elastic Weight Consolidation (EWC++) implementation.
+        Protects highly important learned rules (e.g. winter heating) from being
+        completely overwritten by new contradictory data (e.g. summer cooling).
+        """
+        if rule_name not in self.calibration_rules:
+            self.add_calibration_rule(rule_name, f"EWC tracking for {rule_name}", new_weight)
+            self.calibration_rules[rule_name]["fisher_information"] = importance
+            return
+            
+        current = self.calibration_rules[rule_name]
+        old_weight = current.get("weight_adjustment", 0.0)
+        fisher = current.get("fisher_information", 0.1) # How important this rule is
+        
+        # EWC Penalty heuristic: dampen the weight update if fisher (importance) is high
+        learning_rate = 0.2 / max(0.1, fisher) # High fisher = low learning rate
+        
+        dampened_weight = old_weight + learning_rate * (new_weight - old_weight)
+        
+        self.calibration_rules[rule_name]["weight_adjustment"] = dampened_weight
+        self.calibration_rules[rule_name]["fisher_information"] = fisher + (importance * 0.1)
+        self._save_calibration_rules()
+        logger.info(f"[EWC++] Updated rule {rule_name} to {dampened_weight:.3f} (Fisher: {self.calibration_rules[rule_name]['fisher_information']:.2f})")
+        
     def record_decision(self, 
                         context: Dict[str, Any],
                         chosen_action: str,
@@ -100,7 +126,8 @@ class MetaCognition:
             alternatives=alternatives,
             confidence=confidence,
             reasoning=reasoning,
-            event_id=event_id
+            event_id=event_id,
+            trajectory=context.get("trajectory")
         )
         
         return decision_id
@@ -193,7 +220,8 @@ class MetaCognition:
             reasoning=data["reasoning"],
             outcome=data["outcome"],
             outcome_quality=data["outcome_quality"],
-            event_id=data["event_id"]
+            event_id=data["event_id"],
+            trajectory=data.get("trajectory")
         )
 
     def _compute_calibration(self, decisions: List[DecisionRecord]) -> Dict[str, Any]:

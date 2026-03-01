@@ -7,6 +7,7 @@ Uses a NetworkX graph to allow flexible querying of context.
 
 import json
 import time
+import math
 import networkx as nx
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -127,6 +128,44 @@ class ContextGraph:
                 item["id"] = node
                 results.append(item)
         return results
+
+    def compute_hyperbolic_distance(self, u_coord: List[float], v_coord: List[float]) -> float:
+        """
+        Computes the Poincaré ball hyperbolic distance between two coordinates.
+        This provides Ruflow's native understanding of hierarchical BMS topology.
+        Formula: arcosh(1 + 2 * ||u - v||^2 / ((1 - ||u||^2)(1 - ||v||^2)))
+        """
+        def norm_sq(coord):
+            return sum(x*x for x in coord)
+            
+        def dist_sq(c1, c2):
+            return sum((x-y)**2 for x, y in zip(c1, c2))
+            
+        n_u = norm_sq(u_coord)
+        n_v = norm_sq(v_coord)
+        d_sq = dist_sq(u_coord, v_coord)
+        
+        # Prevent division by zero or log of negative
+        if n_u >= 1.0 or n_v >= 1.0:
+            return float('inf')
+            
+        delta = 2 * d_sq / ((1 - n_u) * (1 - n_v))
+        return math.acosh(1 + delta)
+
+    def calculate_topology_distance(self, node_a: str, node_b: str) -> float:
+        """
+        Calculates the topological distance between two nodes in the BMS hierarchy
+        using simulated Hyperbolic Embeddings.
+        """
+        if not self.graph.has_node(node_a) or not self.graph.has_node(node_b):
+            return float('inf')
+            
+        # For Phase 1, we approximate hyperbolic tree distance via shortest path
+        # weighted by hierarchy depth (Root -> Building -> Floor -> Zone -> Equip -> Sensor)
+        try:
+            return nx.shortest_path_length(self.graph, node_a, node_b)
+        except nx.NetworkXNoPath:
+            return float('inf')
 
     def _save_graph(self):
         """Persist graph to disk"""

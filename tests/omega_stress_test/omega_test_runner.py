@@ -388,6 +388,8 @@ class OmegaTestRunner:
             from agent_commercial.learning.learning_engine import BMSLearningEngine
             self.learning_engine = BMSLearningEngine(interval_minutes=30)
             
+
+            
             # ═══════════════════════════════════════════════════════════
             # CLEAN SLATE: Clear previous run's patterns (Requirement)
             # ═══════════════════════════════════════════════════════════
@@ -425,6 +427,16 @@ class OmegaTestRunner:
             self.fleet_intel = FleetIntelligence(
                 building_ids=[self.config.building_id]
             )
+            
+            # Initialize BMSLLMAgent (which manages the Swarm)
+            from agent_commercial.bms_llm_agent import BMSLLMAgent
+            self.bms_agent = BMSLLMAgent(
+                bms_state=self.bms_state,
+                alarm_engine=self.alarm_engine,
+                energy_analyzer=self.energy_analyzer,
+                predictive_engine=self.predictive_engine,
+            )
+            logger.info("BMSLLMAgent (Swarm Coordinator) initialized")
             
             logger.info("ML components initialized — training with synthetic data...")
             
@@ -1413,92 +1425,38 @@ Analyze the ORIENT analytics and SENSOR READINGS above. You MUST prioritize the 
             
             # Extract system message from messages list and pass separately
             messages = self._build_cognitive_prompt(day, hour_data, context)
-            system_msgs = [m for m in messages if m.get("role") == "system"]
-            user_msgs = [m for m in messages if m.get("role") != "system"]
             
-            # ═══════════════════════════════════════════════════════════
-            # FULL REQUEST LOGGING
-            # ═══════════════════════════════════════════════════════════
-            with open(self.reasoning_log_path, "a", encoding="utf-8") as f:
-                f.write("\n" + "█"*80 + "\n")
-                f.write(f"Ω∞ [COGNITIVE OODA] DAY {day} HOUR {hour} - FULL REQUEST\n")
-                f.write("-" * 80 + "\n")
-                if system_msgs:
-                    f.write(f"SYSTEM: {system_msgs[0].get('content')}\n")
-                f.write(f"USER: {user_msgs[0].get('content')}\n")
-                f.write("█"*80 + "\n")
-
-            # Use ask() instead of ask_json() to handle K2's </think> tags manually
-            raw_response = await self.llm_client.ask(
-                user_msgs,
-                system_msgs=system_msgs if system_msgs else None,
+            # Instead of manually parsing tags and calling UnifiedLLM directly, 
+            # delegate to the newly integrated Swarm architecture.
+            chat_response = await self.bms_agent.chat(
+                query="Analyze current conditions.",
+                context=context
             )
             
             self.llm_calls += 1
             self.total_llm_time += time.time() - start_time
             
-            # Parse JSON from K2's response, stripping thinking tags
-            raw_content = raw_response.content or "{}"
+            # Extract text from ChatResponse object
+            raw_response = chat_response.text if hasattr(chat_response, 'text') else str(chat_response)
             
-            # ═══════════════════════════════════════════════════════════
-            # FULL RESPONSE LOGGING
-            # ═══════════════════════════════════════════════════════════
-            with open(self.reasoning_log_path, "a", encoding="utf-8") as f:
-                f.write(f"Ω∞ [COGNITIVE OODA] DAY {day} HOUR {hour} - FULL RESPONSE (RAW)\n")
-                f.write("-" * 80 + "\n")
-                f.write(f"{raw_content}\n")
-                f.write("█"*80 + "\n\n")
-
-            content = raw_content
+            # Wrap the response in an advisory to preserve the Omega UI format
+            if raw_response:
+                msg = raw_response[:200] + "..." if len(raw_response) > 200 else raw_response
+                advisories.append({
+                    "id": f"LLM-{day}-{hour}-{self.llm_calls}",
+                    "day": day,
+                    "type": "observation",
+                    "severity": "observation",
+                    "message": msg,
+                    "analysis": raw_response,
+                    "confidence": chat_response.confidence if hasattr(chat_response, 'confidence') else 0.85,
+                    "evidence": [{"source": "Swarm Consensus Protocol"}],
+                    "recommended_action": {"type": "investigate"}
+                })
             
-            # Strip K2-Think tags: </think>, <think>...</think>, etc.
-            import re
-            content = re.sub(r'</?think>', '', content, flags=re.DOTALL)
-            content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
-            
-            # Strip markdown fences
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
-            
-            # Try to extract JSON object from response
-            content = content.strip()
-            
-            # Robust JSON extraction: loop to find the largest valid JSON block
-            if "{" in content:
-                start_idx = content.find("{")
-                end_idx = content.rfind("}")
-                while end_idx > start_idx:
-                    try:
-                        potential_json = content[start_idx:end_idx+1]
-                        json.loads(potential_json)
-                        content = potential_json
-                        break
-                    except (json.JSONDecodeError, ValueError):
-                        end_idx = content.rfind("}", 0, end_idx)
-            
-            try:
-                response = json.loads(content)
-            except (json.JSONDecodeError, ValueError):
-                logger.debug(f"LLM returned non-JSON (day {day} hour {hour}): {content[:100]}")
-                response = {"analysis": content, "advisories": []}
-            
-            if not isinstance(response, dict):
-                response = {"analysis": str(response), "advisories": []}
-            
-            for adv in response.get("advisories", []):
-                adv["day"] = day
-                adv["id"] = adv.get("id", f"LLM-{day}-{hour}-{self.llm_calls}")
-                if adv["id"] == "auto":
-                    adv["id"] = f"LLM-{day}-{hour}-{self.llm_calls}"
-                
-                # Removed artificial confidence cap for Phase 1 to allow briefings
-                advisories.append(adv)
-            
-            # Brief summary logging to console (keeping it light there)
+            # Brief summary logging to console
             if advisories:
-                logger.debug(f"LLM generated {len(advisories)} advisories for Day {day} Hour {hour}")
+                logger.debug(f"Swarm generated {len(advisories)} advisories for Day {day} Hour {hour}")
             
             # Record skills from LLM insights
             if hasattr(self, 'skillbook') and self.skillbook and advisories:

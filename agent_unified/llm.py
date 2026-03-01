@@ -11,9 +11,43 @@ from pydantic import BaseModel, Field, PrivateAttr
 from agent_home.llm_agent.llm_agent import LLMAgent
 from agent_unified.schema import Message, ToolCall
 
+import re
+
 # Global singletons for hybrid architecture
 _REASONING_AGENT = None  # K2 Think
 _TOOL_AGENT = None       # Groq
+
+def _extract_k2_answer(content: str) -> str:
+    """
+    Centralized K2 Think output parser.
+    K2 Think wraps output in <think>...</think> and <answer>...</answer> tags.
+    This extracts the <answer> content if present, otherwise strips <think> tags.
+    Must be called on ALL raw LLM responses before returning to callers.
+    """
+    if not content:
+        return content
+    
+    # 1. Extract <answer> block if present (preferred)
+    answer_match = re.search(r'<answer>(.*?)</answer>', content, re.DOTALL)
+    if answer_match:
+        return answer_match.group(1).strip()
+    
+    # 2. Strip <think> blocks (model reasoned but didn't use <answer> tags)
+    think_match = re.search(r'<think>(.*?)</think>', content, re.DOTALL)
+    if think_match:
+        cleaned = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
+        cleaned = re.sub(r'</?think>', '', cleaned)  # unclosed tags
+        cleaned = cleaned.strip()
+        if cleaned:
+            return cleaned
+        # If ONLY think tags and nothing else, return the raw content
+        # (better than empty string - let the caller handle it)
+        return content
+    
+    # 3. Strip orphaned tags just in case
+    content = re.sub(r'</?think>', '', content)
+    content = re.sub(r'</?answer>', '', content)
+    return content.strip()
 
 class DummyBus:
     def subscribe(self, *args, **kwargs): pass
@@ -152,6 +186,7 @@ class UnifiedLLM(BaseModel):
         """
         Ask LLM and enforce JSON output with Self-Repair Loop.
         """
+        import re
         attempts = 0
         last_error = None
         current_messages = list(messages)
@@ -161,19 +196,49 @@ class UnifiedLLM(BaseModel):
                 response = await self.ask(current_messages, system_msgs=system_msgs)
                 content = response.content or "{}"
                 
+                # Safety net: strip any residual <think>/<answer> tags
+                # (Primary stripping happens in _extract_k2_answer at adapter level)
+                content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
+                content = re.sub(r'</?think>', '', content)
+                content = re.sub(r'</?answer>', '', content)
+                
                 # 1. Clean Markdown
                 if "```json" in content:
                     content = content.split("```json")[1].split("```")[0].strip()
                 elif "```" in content:
                     content = content.split("```")[1].split("```")[0].strip()
                 
-                # 2. Parse
+                # 2. Robust Extraction
+                content = content.strip()
+                
+                if not content:
+                    raise json.JSONDecodeError("Empty content after tag stripping", "", 0)
+                
+                first_brace = content.find('{')
+                first_bracket = content.find('[')
+                
+                is_obj = first_brace != -1 and (first_bracket == -1 or first_brace < first_bracket)
+                is_arr = first_bracket != -1 and (first_brace == -1 or first_bracket < first_brace)
+                
+                start_idx = first_brace if is_obj else (first_bracket if is_arr else -1)
+                end_char = '}' if is_obj else ']'
+                
+                if start_idx != -1:
+                    # Try finding the valid end by parsing substrings from back to front
+                    for end_idx in range(len(content), start_idx, -1):
+                        if content[end_idx-1] == end_char:
+                            try:
+                                return json.loads(content[start_idx:end_idx])
+                            except json.JSONDecodeError:
+                                continue
+                                
+                # 3. Fallback Parse (in case it's a naked string/number or fails extraction)
                 return json.loads(content)
                 
             except json.JSONDecodeError as e:
                 attempts += 1
                 last_error = e
-                print(f"[UnifiedLLM] ⚠️ JSON Parse Error (Attempt {attempts}/{retries+1}): {e}")
+                print(f"[UnifiedLLM] ⚠️ JSON Parse Error (Attempt {attempts}/{retries+1}): {e} | Content Snippet: {content[:100]!r}")
                 
                 if attempts <= retries:
                     # 3. SELF-REPAIR: Ask LLM to fix it
@@ -274,14 +339,30 @@ class UnifiedLLM(BaseModel):
             model = override_model
              
         # Call API (async wrapper for sync client)
-        # Call API (async wrapper for sync client)
         def _call():
             kwargs = {
                 "model": model,
                 "messages": api_messages,
             }
             if tools:
-                kwargs["tools"] = tools
+                import copy
+                clean_tools = []
+                for t in tools:
+                    t_clean = copy.deepcopy(t)
+                    # Strict OpenAI schema formatting and parsing
+                    if "name" in t_clean and "function" not in t_clean:
+                        fn = {"name": t_clean.pop("name")}
+                        if "description" in t_clean: fn["description"] = t_clean.pop("description")
+                        if "parameters" in t_clean: fn["parameters"] = t_clean.pop("parameters")
+                        clean_tools.append({"type": "function", "function": fn})
+                    elif "function" in t_clean:
+                        for bad_key in ["response_schema", "requires_confirmation"]:
+                            if bad_key in t_clean.get("function", {}):
+                                del t_clean["function"][bad_key]
+                            if bad_key in t_clean:
+                                del t_clean[bad_key]
+                        clean_tools.append(t_clean)
+                kwargs["tools"] = clean_tools
                 kwargs["tool_choice"] = tool_choice
             
             if max_tokens:
@@ -289,13 +370,32 @@ class UnifiedLLM(BaseModel):
                 
             return agent.client.chat.completions.create(**kwargs)
         
+        # Exponential backoff for API limits (500 "Server is busy")
+        import time 
+        import asyncio
+        max_limit_retries = 5
+        base_delay = 5.0
+        
         try:
-            response = await asyncio.to_thread(_call)
+            for attempt in range(max_limit_retries):
+                try:
+                    response = await asyncio.to_thread(_call)
+                    break
+                except Exception as e:
+                    error_str = str(e)
+                    if "500" in error_str or "Server is busy" in error_str or "rate_limit" in error_str.lower() or "429" in error_str:
+                        if attempt < max_limit_retries - 1:
+                            delay = base_delay * (2 ** attempt)
+                            logger.warning(f"[LLM] API overloaded/rate-limited. Retrying in {delay}s... (Attempt {attempt+1}/{max_limit_retries})")
+                            await asyncio.sleep(delay)
+                            continue
+                    raise e # Re-raise if retries exhausted or different error
+
             choice = response.choices[0]
             message = choice.message
             
             tool_calls = []
-            if message.tool_calls:
+            if getattr(message, "tool_calls", None):
                 from agent_unified.schema import ToolCall, Function
                 for tc in message.tool_calls:
                     tool_calls.append(ToolCall(
@@ -305,39 +405,24 @@ class UnifiedLLM(BaseModel):
             
             content = message.content
             
-            # Universal Parsing: extract <think>...<answer> if present
-            # valid for DeepSeek-R1, K2, or any model prompted to use these tags
+            # Universal Parsing: extract <think>...<answer> using centralized parser
             if content:
                 import re
-                # Pattern to extract think and answer blocks
-                # The API returns <think>...</think>\n<answer>...</answer>
-                # We want to log the thought but return the answer
-                
+                # Log thought process for Glass Box UI before stripping
                 think_match = re.search(r"<think>(.*?)</think>", content, re.DOTALL)
-                answer_match = re.search(r"<answer>(.*?)</answer>", content, re.DOTALL)
-                
                 if think_match:
                     thought_process = think_match.group(1).strip()
-                    print(f"\n[Thinking] 🧠 Thought Process:\n{thought_process}\n")
-                    # GLASS BOX: Stream Thought
-                    from agent_commercial.api.sse_broadcaster import SSEBroadcaster
-                    import asyncio
                     try:
-                        # Broadcast immediately - await to ensure it sends
+                        from agent_commercial.api.sse_broadcaster import SSEBroadcaster
+                        import asyncio
                         loop = asyncio.get_event_loop()
                         if loop.is_running():
                              loop.create_task(SSEBroadcaster().broadcast("think", {"content": thought_process}))
                     except Exception as e:
                         logger.warning(f"Failed to broadcast thought: {e}")
-                    
-                if answer_match:
-                    content = answer_match.group(1).strip()
-                else:
-                    # Fallback: if no answer tag, retry extracting valid text or return all
-                    # Sometimes models output just text if they fail to follow format
-                    # But if <think> exists, strip it from content
-                    if think_match:
-                        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+                
+                # Extract clean answer content
+                content = _extract_k2_answer(content)
             
             return Message.assistant_message(content=content, tool_calls=tool_calls if tool_calls else None)
             
@@ -513,6 +598,10 @@ class UnifiedLLM(BaseModel):
                 message_data = data["choices"][0]["message"]
                 content = message_data.get("content")
                 tool_calls_data = message_data.get("tool_calls")
+                
+                # Apply K2/reasoning model tag stripping
+                if content:
+                    content = _extract_k2_answer(content)
                 
                 msg = Message(role="assistant", content=content)
                 if tool_calls_data:
