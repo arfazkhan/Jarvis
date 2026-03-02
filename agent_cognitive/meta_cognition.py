@@ -115,20 +115,38 @@ class MetaCognition:
                         reasoning: str,
                         event_id: Optional[str] = None) -> str:
         """
-        Log a decision for later reflection. returns the decision_id.
+        Log a decision for later reflection. Returns the decision_id.
+        Calls the async skillbook.log_decision in a safe, synchronous wrapper.
         """
+        import asyncio
         decision_id = str(uuid.uuid4())
+        trajectory = context.get("trajectory")
         
-        self.skillbook.log_decision(
-            decision_id=decision_id,
-            context=context,
-            chosen_action=chosen_action,
-            alternatives=alternatives,
-            confidence=confidence,
-            reasoning=reasoning,
-            event_id=event_id,
-            trajectory=context.get("trajectory")
-        )
+        async def _record():
+            await self.skillbook.ensure_initialized()
+            await self.skillbook.log_decision(
+                decision_id=decision_id,
+                context=context,
+                chosen_action=chosen_action,
+                alternatives=alternatives,
+                confidence=confidence,
+                reasoning=reasoning,
+                event_id=event_id,
+                trajectory=trajectory
+            )
+
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # We're already inside an async context — create a task instead
+                loop.create_task(_record())
+            else:
+                loop.run_until_complete(_record())
+        except RuntimeError:
+            # Fallback: create a fresh loop
+            asyncio.run(_record())
+        except Exception as e:
+            logger.error(f"[MetaCognition] Failed to record decision: {e}")
         
         return decision_id
         
@@ -137,7 +155,24 @@ class MetaCognition:
         Log the outcome of a decision (closure).
         Quality should be: "excellent", "good", "neutral", "poor", "bad"
         """
-        return self.skillbook.update_decision_outcome(decision_id, outcome, quality)
+        import asyncio
+        
+        async def _update():
+            await self.skillbook.ensure_initialized()
+            return await self.skillbook.update_decision_outcome(decision_id, outcome, quality)
+        
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(_update())
+                return True
+            else:
+                return loop.run_until_complete(_update())
+        except RuntimeError:
+            return asyncio.run(_update())
+        except Exception as e:
+            logger.error(f"[MetaCognition] Failed to record outcome: {e}")
+            return False
         
     def reflect(self, lookback_days: int = 7) -> Dict[str, Any]:
         """
