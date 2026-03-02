@@ -123,27 +123,89 @@ class QueenCoordinator(BaseModel):
         proposals = {}
         aggregated_context = {}
         
-        for i, node in enumerate(active_nodes):
-            try:
-                result_map = await node.process(query, context)
-                proposals[node.name] = result_map["response"].content
-                
-                # Extract any tool calls/observations from this node's history to feed the validator
-                for msg in result_map["history"]:
-                    if msg.get("role") == "tool":
-                        key = f"{node.name}_{msg.get('name')}"
-                        aggregated_context[key] = msg.get("content")
-                        
-            except Exception as e:
-                logger.error(f"[Queen] Node {node.name} failed: {e}")
-                proposals[node.name] = f"Node Failed: {str(e)}"
-            
-            # Rate-limit: wait between node calls (skip delay after last node)
-            if i < len(active_nodes) - 1:
-                await asyncio.sleep(INTER_NODE_DELAY)
+        # Determine if query requires action (config changes, setpoints, physical commands) vs informational synthesis
+        intent_prompt = (
+            "You are a routing supervisor. Read the user's query about a building management system.\n"
+            "If the user is asking to change a setting, fix a problem, reduce power, or perform any physical optimization, output: {\"is_actionable\": true}\n"
+            "If the user is just asking for status, history, explanations, or data, output: {\"is_actionable\": false}\n"
+            "Return ONLY the JSON dictionary."
+        )
         
-        # 3. Simulated Debate (Consensus)
-        final_advice = await self._synthesize_consensus(query, proposals, context)
+        try:
+            intent_result = await self.llm.ask_json(
+                messages=[{"role": "user", "content": query}],
+                system_msgs=[{"role": "system", "content": intent_prompt}]
+            )
+            is_actionable = bool(intent_result.get("is_actionable", False))
+        except Exception:
+            # Fallback to safe read-only synthesis if classification fails
+            is_actionable = False
+        
+        if is_actionable and len(active_nodes) > 1:
+            from arvis_core.swarm.consensus import ConsensusEngine, VotingRound
+            engine = ConsensusEngine()
+            proposer = active_nodes[0]
+            quorum = active_nodes[1:]
+            
+            logger.info(f"[Queen] Actionable query detected. Triggering BFT workflow with Proposer: {proposer.name}")
+            
+            # 1. Get the concrete proposal from the Lead Agent
+            proposer_prompt = f"The user requested an operational change: '{query}'. Formulate a concrete, step-by-step proposal to execute this efficiently."
+            proposer_result = await proposer.process(proposer_prompt, context)
+            
+            proposal_text = proposer_result["response"].content
+            proposals[proposer.name] = proposal_text
+            
+            for msg in proposer_result["history"]:
+                if msg.get("role") == "tool":
+                    aggregated_context[f"{proposer.name}_{msg.get('name')}"] = msg.get("content")
+                    
+            round_obj = VotingRound(
+                proposal=proposal_text,
+                proposer_name=proposer.name,
+                context=context or {}
+            )
+            
+            # 2. Run the Debate on the Quorum
+            debate_result = await engine.run_debate(round_obj, quorum)
+            
+            # 3. Aggregate Quorum tool context
+            for v_data in debate_result["votes"]:
+                proposals[v_data["agent_name"]] = f"VOTE: {v_data['vote']} - Reasoning: {v_data['reasoning']}"
+                for tool_name, tool_val in v_data.get("tool_observations", {}).items():
+                    aggregated_context[f"{v_data['agent_name']}_{tool_name}"] = tool_val
+                    
+            if debate_result["status"] == "REJECTED":
+                final_advice = f"The {proposer.name} proposed an optimization, but it was VETOED during the safety peer-review by the swarm.\n\n### Proposal:\n{proposal_text}\n\n### Swarm Debate:\n"
+                for v in debate_result["votes"]:
+                    final_advice += f"- **{v['agent_name']} [{v['vote']}]**: {v['reasoning']}\n"
+                final_advice += "\nAction aborted to preserve operational safety."
+            else:
+                final_advice = await self._synthesize_consensus(query, proposals, context)
+            
+        else:
+            # Standard Synthesis for informational queries
+            for i, node in enumerate(active_nodes):
+                try:
+                    result_map = await node.process(query, context)
+                    proposals[node.name] = result_map["response"].content
+                    
+                    # Extract any tool calls/observations from this node's history to feed the validator
+                    for msg in result_map["history"]:
+                        if msg.get("role") == "tool":
+                            key = f"{node.name}_{msg.get('name')}"
+                            aggregated_context[key] = msg.get("content")
+                            
+                except Exception as e:
+                    logger.error(f"[Queen] Node {node.name} failed: {e}")
+                    proposals[node.name] = f"Node Failed: {str(e)}"
+                
+                # Rate-limit: wait between node calls (skip delay after last node)
+                if i < len(active_nodes) - 1:
+                    await asyncio.sleep(INTER_NODE_DELAY)
+            
+            # 3. Simulated Debate (Consensus)
+            final_advice = await self._synthesize_consensus(query, proposals, context)
         
         return {
             "advice": final_advice,
