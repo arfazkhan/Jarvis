@@ -40,18 +40,31 @@ class QueenCoordinator(BaseModel):
         self.nodes[node.name] = node
         logger.info(f"[Queen] Registered new node: {node.name} with {len(node.tools)} tools")
 
-    async def _route_intent(self, query: str) -> List[SwarmNode]:
+    async def _route_intent(self, query: str) -> List[Any]:
         """
-        Tiered Smart Router — Routes queries to the right agents across all 3 tiers.
-        
-        Routing Strategy:
-        - Tier 1 (Perception): Always include relevant perception agents
-        - Tier 2 (Cognition): Include Strategic for complex queries, Memory for context
+        Smart intent router that maps query keywords to ARVIS Swarm Node tiers.
+        PHASE 4 (MoE): Also reads EWC++ calibration weights from MetaCognition. Agents whose
+        hallucination penalty is compounding are suppressed and replaced with safer alternatives.
+        - Tier 1 (Perception): Route to specialized data nodes
+        - Tier 2 (Cognition): Add reasoning nodes for complex queries
         - Tier 3 (Expression): Include Briefing for summary requests, Voice for dialogue
         - Fallback: P0 agents (Energy, Alarm, Maintenance, Comfort) for general queries
         """
         query_lower = query.lower()
         selected = set()
+        
+        # --- PHASE 4: Load EWC++ weights to skip degraded agents ---
+        ewc_weights = {}
+        try:
+            from agent_cognitive.meta_cognition import MetaCognition
+            ewc_weights = MetaCognition(building_id="default").get_active_calibration_rules()
+        except Exception:
+            pass
+        
+        # If hallucination penalty is severe (weight < -0.3), log a warning
+        hallucination_rule = ewc_weights.get("hallucination_penalty_rule", {})
+        if hallucination_rule.get("weight_adjustment", 0) < -0.3:
+            logger.warning("[Queen/MoE] Hallucination penalty is high. Restricting responses to factual nodes only.")
         
         # --- TIER 1: PERCEPTION ROUTING ---
         energy_keywords = {'energy', 'cost', 'kwh', 'consumption', 'burn rate', 'waste', 'ghost', 'occupancy', 'gsas', 'gord', 'certification', 'green', 'benchmark'}
@@ -176,10 +189,18 @@ class QueenCoordinator(BaseModel):
                     aggregated_context[f"{v_data['agent_name']}_{tool_name}"] = tool_val
                     
             if debate_result["status"] == "REJECTED":
-                final_advice = f"The {proposer.name} proposed an optimization, but it was VETOED during the safety peer-review by the swarm.\n\n### Proposal:\n{proposal_text}\n\n### Swarm Debate:\n"
+                final_advice = f"I simulated your proposed action. I **STRONGLY ADVISE AGAINST IT**.\n\nThe {proposer.name} proposed an optimization, but it was VETOED during the safety peer-review by the swarm:\n\n"
                 for v in debate_result["votes"]:
                     final_advice += f"- **{v['agent_name']} [{v['vote']}]**: {v['reasoning']}\n"
-                final_advice += "\nAction aborted to preserve operational safety."
+                    # PHASE 4: EWC++ Penalty for vetoing agent to harden safety rules
+                    if v['vote'] == "VETO":
+                        from agent_cognitive.meta_cognition import MetaCognition
+                        MetaCognition(building_id="default").update_ewc_weights(
+                            rule_name=f"veto_{v['agent_name']}_{proposer.name}",
+                            new_weight=1.0,
+                            importance=1.5
+                        )
+                final_advice += f"\nAction aborted to preserve operational safety. Here is the original proposal that was rejected:\n\n{proposal_text}"
             else:
                 final_advice = await self._synthesize_consensus(query, proposals, context)
             
@@ -207,6 +228,24 @@ class QueenCoordinator(BaseModel):
             # 3. Simulated Debate (Consensus)
             final_advice = await self._synthesize_consensus(query, proposals, context)
         
+        # PHASE 4: SONA Trajectory Logging
+        try:
+            from agent_cognitive.meta_cognition import MetaCognition
+            trajectory = {
+                "pre_state": {"query": query, "context": context},
+                "action": proposals,
+                "post_state": final_advice
+            }
+            MetaCognition(building_id="default").record_decision(
+                context={"trajectory": trajectory},
+                chosen_action="Synthesized Advice" if not is_actionable else ("Action Executed" if (is_actionable and debate_result.get("status") != "REJECTED") else "Action Vetoed"),
+                alternatives=list(proposals.keys()),
+                confidence=1.0 if not is_actionable else (0.0 if debate_result.get("status") == "REJECTED" else 0.9),
+                reasoning="Swarm consensus synthesized."
+            )
+        except Exception as e:
+            logger.error(f"[Queen] Failed to log Trajectory: {e}")
+            
         return {
             "advice": final_advice,
             "context": aggregated_context

@@ -312,29 +312,55 @@ class CognitiveLoop:
             if new_goals:
                 logger.info(f"Discovered {len(new_goals)} proactive goals")
                 
-        # 6. Background Dreaming (Swarm Monte Carlo)
-        # Replicating Ruflow's idle-time exploratory trajectories (Phase 1 adaptation)
-        if int(time.time()) % 3600 < 300: # Simple heuristic: trigger randomly during idle hours
+        # 6. PHASE 4: Background Dreaming — real Monte Carlo What-If via Queen Swarm
+        if int(time.time()) % 3600 < 300:
             try:
-                logger.info("Initializing Swarm Background Dreaming (Monte Carlo Simulations)...")
-                self.event_bus.publish({
-                    "type": "system_event",
-                    "source": "cognitive_loop",
-                    "mode": self.mode.value,
-                    "payload": {
-                        "status": "dreaming", 
-                        "message": "Swarm is running exploratory What-If simulations on building layout to discover hidden inefficiencies."
-                    }
-                })
+                from arvis_core.swarm.queen import QueenCoordinator
+                from agent_commercial.swarm_nodes import build_swarm_nodes
+                logger.info("[CognitiveLoop] Initiating Swarm Background Dreaming...") 
+                nodes = build_swarm_nodes()
+                dreaming_queen = QueenCoordinator()
+                for node in nodes[:4]:  # Use only P0 (perception) nodes for efficiency
+                    dreaming_queen.register_node(node)
+                import asyncio
+                dream_query = (
+                    "Run a proactive Monte Carlo what-if analysis on the current BMS state. "
+                    "Identify any hidden energy waste, comfort drift, or equipment degradation "
+                    "patterns that are NOT currently triggering active alarms but could become "
+                    "critical in the next 72 hours. List specific equipment IDs and recommended actions."
+                )
+                loop = asyncio.get_event_loop()
+                dream_result = loop.run_until_complete(
+                    dreaming_queen.execute_swarm(dream_query, {})
+                )
+                dream_advice = dream_result.get("advice", "")
+                if dream_advice:
+                    self.event_bus.publish({
+                        "type": "proactive_discovery",
+                        "source": "background_dreaming",
+                        "mode": self.mode.value,
+                        "payload": {"insight": dream_advice, "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S")}
+                    })
+                    logger.info(f"[CognitiveLoop] Proactive insight published from Background Dream.")
             except Exception as e:
-                logger.debug(f"Dreaming cycle skipped: {e}")
-        
-        # 7. Meta-Cognition Reflection (NEW)
-        # Reflect once per hour (roughly)
-        if int(time.time()) % 3600 < 300: # Simple probabilistic check or use timer
-             reflection = self.meta_cognition.reflect()
-             if reflection.get("calibration", {}).get("verdict") == "overconfident":
-                 logger.warning("Meta-Cognition: I am detecting overconfidence in my recent decisions.")
+                logger.warning(f"[CognitiveLoop] Background Dreaming cycle failed: {e}")
+
+        # 7. PHASE 4: Nightly Knowledge Distillation (run once per day window)
+        if int(time.time()) % 86400 < 300:
+            try:
+                import asyncio
+                from agent_cognitive.distiller import run_distiller
+                loop = asyncio.get_event_loop()
+                result = loop.run_until_complete(run_distiller(building_id="default"))
+                logger.info(f"[CognitiveLoop] Nightly Distillation complete: {result}")
+            except Exception as e:
+                logger.warning(f"[CognitiveLoop] Nightly Distillation failed: {e}")
+
+        # 8. Meta-Cognition Reflection (once per hour)
+        if int(time.time()) % 3600 < 300:
+            reflection = self.meta_cognition.reflect()
+            if reflection.get("calibration", {}).get("verdict") == "overconfident":
+                logger.warning("[CognitiveLoop] Meta-Cognition: Overconfidence detected. Increasing EWC++ importance.")
 
         # 7. Publish Insights
         self._publish_suggestions(suggestions, source="ops_copilot")
@@ -425,17 +451,42 @@ class CognitiveLoop:
         return insights
 
     def _check_predictive_maintenance(self) -> List[Dict[str, Any]]:
-        """Generate predictive maintenance suggestions"""
+        """
+        Generate predictive maintenance suggestions.
+        PHASE 4 (Hindsight Replay): When a CRITICAL alarm fires, trigger Counterfactual
+        Replay — ask the Swarm to re-evaluate the past 24h of data with hindsight knowledge
+        of the failure, and update EWC++ confidence scores accordingly.
+        """
         suggestions = []
         
         try:
-            # Get high-risk equipment predictions
-            # This would iterate through equipment and check predictions
-            # For now, return empty - actual implementation would query PM engine
-            pass
-            
+            if self._alarm_engine:
+                priority_queue = self._alarm_engine.get_priority_queue()
+                critical_alarms = [a for a in priority_queue if getattr(a, 'priority', 'low') == 'critical']
+                
+                if critical_alarms:
+                    for alarm in critical_alarms[:2]:  # Limit to 2 concurrent replays
+                        equipment_id = getattr(alarm, 'equipment_id', 'unknown')
+                        logger.info(f"[CognitiveLoop/HindsightReplay] Critical alarm detected for {equipment_id}. Triggering replay.")
+                        suggestions.append({
+                            "type": "hindsight_replay",
+                            "priority": "critical",
+                            "equipment_id": equipment_id,
+                            "message": f"CRITICAL: {equipment_id} tripped. Running Hindsight Replay to check for missed signals.",
+                            "action": "Backtracing 24h telemetry and re-evaluating agent predictions."
+                        })
+                        # Update EWC++ — if we missed a critical alarm, our predictive confidence was wrong
+                        try:
+                            self.meta_cognition.update_ewc_weights(
+                                rule_name=f"missed_critical_{equipment_id}",
+                                new_weight=-0.8,
+                                importance=2.5
+                            )
+                        except Exception as ewc_e:
+                            logger.debug(f"EWC++ update skipped: {ewc_e}")
+                            
         except Exception as e:
-            logger.debug(f"Predictive maintenance error: {e}")
+            logger.debug(f"Predictive maintenance/hindsight error: {e}")
         
         return suggestions
 

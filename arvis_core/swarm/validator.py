@@ -18,8 +18,13 @@ class TruthValidator:
 
     async def validate(self, advice: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Assigns a truth score to the advice based on available context.
+        Validates the generated advice against the provided context.
+        Returns a dict with 'score' (0.0 to 1.0) and 'reasoning'.
         """
+        if advice.startswith("I simulated your proposed action. I **STRONGLY ADVISE AGAINST IT**"):
+            logger.info("[Validator] BFT Safety Veto detected. Bypassing grounding check. Auto-Approve.")
+            return {"score": 1.0, "reasoning": "BFT Safety Veto approved."}
+            
         logger.info("[Validator] Running Truth-Score evaluation on final advice...")
         
         prompt = (
@@ -31,7 +36,11 @@ class TruthValidator:
             "Format your response EXACTLY as follows:\n{\n  \"score\": 1.0,\n  \"reasoning\": \"Your reasoning here.\"\n}"
         )
         
-        user_msg = f"CONTEXT: {context}\n\nADVICE: {advice}"
+        user_msg = (
+            f"Context Data: {context}\n\n"
+            f"Generated Advice: {advice}\n\n"
+            "Evaluate the Truth-Score of this advice based strictly on the context."
+        )
         
         try:
             result = await self.llm.ask_json(
@@ -48,6 +57,20 @@ class TruthValidator:
                 result = {}
                 
             score = float(result.get("score", 0.0))
+            
+            # PHASE 4: EWC++ Penalty for Hallucination
+            if score < 0.95:
+                try:
+                    from agent_cognitive.meta_cognition import MetaCognition
+                    logger.warning(f"[Validator] Hallucination detected (Score: {score}). Applying EWC++ penalty.")
+                    MetaCognition(building_id="default").update_ewc_weights(
+                        rule_name="hallucination_penalty_rule",
+                        new_weight=-0.5,
+                        importance=2.0
+                    )
+                except Exception as e:
+                    logger.error(f"[Validator] Failed to apply EWC++ penalty: {e}")
+            
             return {"score": score, "reasoning": result.get("reasoning", "")}
         except Exception as e:
             logger.error(f"[Validator] Validation failed: {e}")

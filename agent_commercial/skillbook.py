@@ -249,6 +249,30 @@ class BuildingSkillbook:
             """)
             
             await conn.execute("""
+                CREATE TABLE IF NOT EXISTS decisions (
+                    decision_id TEXT PRIMARY KEY,
+                    timestamp TEXT NOT NULL,
+                    context TEXT,
+                    chosen_action TEXT NOT NULL,
+                    alternatives TEXT,
+                    confidence REAL,
+                    reasoning TEXT,
+                    outcome TEXT,
+                    outcome_quality TEXT,
+                    event_id TEXT,
+                    trajectory TEXT
+                )
+            """)
+            
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_decisions_timestamp 
+                ON decisions(timestamp DESC)
+            """)
+            
+            # Log initialization
+            logger.info("Database schema initialized")
+            
+            await conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_skills_type 
                 ON skills(skill_type)
             """)
@@ -559,6 +583,61 @@ class BuildingSkillbook:
             ) as cursor:
                 row = await cursor.fetchone()
                 return self._row_to_skill(row) if row else None
+
+    async def log_decision(self, decision_id: str, context: Dict[str, Any], chosen_action: str, 
+                           alternatives: List[str], confidence: float, reasoning: str, 
+                           event_id: Optional[str] = None, trajectory: Optional[Dict[str, Any]] = None) -> None:
+        """Records a Swarm trajectory decision in the database for later MetaCognition analysis."""
+        import json
+        from datetime import datetime
+        
+        query = """
+            INSERT INTO decisions 
+            (decision_id, timestamp, context, chosen_action, alternatives, confidence, reasoning, event_id, trajectory) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        params = (
+            decision_id,
+            datetime.now().isoformat(),
+            json.dumps(context) if context else None,
+            chosen_action,
+            json.dumps(alternatives) if alternatives else None,
+            confidence,
+            reasoning,
+            event_id,
+            json.dumps(trajectory) if trajectory else None
+        )
+        
+        async with self.get_db() as conn:
+            await conn.execute(query, params)
+            await conn.commit()
+
+    async def update_decision_outcome(self, decision_id: str, outcome: str, quality: str) -> bool:
+        """Updates a logged decision with its actual real-world outcome and quality ('good', 'poor')."""
+        query = "UPDATE decisions SET outcome = ?, outcome_quality = ? WHERE decision_id = ?"
+        async with self.get_db() as conn:
+            cursor = await conn.execute(query, (outcome, quality, decision_id))
+            await conn.commit()
+            return cursor.rowcount > 0
+
+    async def get_recent_decisions(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """Retrieves raw decision trajectories for MetaCognitive reflection."""
+        import json
+        query = "SELECT * FROM decisions ORDER BY timestamp DESC LIMIT ?"
+        decisions = []
+        async with self.get_db() as conn:
+            async with conn.execute(query, (limit,)) as cursor:
+                async for row in cursor:
+                    d = dict(row)
+                    # parse json columns
+                    for col in ['context', 'alternatives', 'trajectory']:
+                        if d.get(col):
+                            try:
+                                d[col] = json.loads(d[col])
+                            except:
+                                d[col] = None
+                    decisions.append(d)
+        return decisions
     
     async def get_relevant_skills(self, 
                            context: Dict[str, Any],
