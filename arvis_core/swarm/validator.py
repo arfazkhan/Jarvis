@@ -38,6 +38,15 @@ class TruthValidator:
                 messages=[{"role": "user", "content": user_msg}],
                 system_msgs=[{"role": "system", "content": prompt}]
             )
+            
+            logger.info(f"[Validator] Raw ask_json result: {result}")
+            
+            # Handle case where LLM returns a JSON array instead of an object
+            if isinstance(result, list) and len(result) > 0:
+                result = result[0]
+            elif not isinstance(result, dict):
+                result = {}
+                
             score = float(result.get("score", 0.0))
             return {"score": score, "reasoning": result.get("reasoning", "")}
         except Exception as e:

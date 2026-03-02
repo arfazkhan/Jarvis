@@ -21,6 +21,7 @@ class QueenCoordinator(BaseModel):
     the consensus into final advisory actions.
     """
     nodes: Dict[str, SwarmNode] = Field(default_factory=dict)
+    tool_handler: Any = Field(default=None, exclude=True)
     llm: Any = Field(default=None, exclude=True)
 
     class Config:
@@ -33,63 +34,106 @@ class QueenCoordinator(BaseModel):
 
     def register_node(self, node: SwarmNode):
         """Register a specialized agent into the swarm."""
+        if self.tool_handler and not node.tool_handler:
+            node.tool_handler = self.tool_handler
+            
         self.nodes[node.name] = node
-        logger.info(f"[Queen] Registered new node: {node.name}")
+        logger.info(f"[Queen] Registered new node: {node.name} with {len(node.tools)} tools")
 
     async def _route_intent(self, query: str) -> List[SwarmNode]:
         """
-        Dynamic Tiered Routing (Smart Router).
-        Decides which subclass agents need to be invoked for this specific query.
-        For phase 1, we return all relevant nodes for parallel processing, 
-        but in the future this will use complexity scoring.
-        """
-        # A fast LLM pass or heuristic to determine required domains
-        # For this skeleton, if it mentions energy, bring in Energy. If it mentions temperatures, Comfort.
-        query_lower = query.lower()
-        selected_nodes = []
+        Tiered Smart Router — Routes queries to the right agents across all 3 tiers.
         
-        # Extremely basic heuristics for skeleton
-        if 'energy' in query_lower or 'cost' in query_lower:
-            if 'Energy_Agent' in self.nodes: selected_nodes.append(self.nodes['Energy_Agent'])
-        if 'alarm' in query_lower or 'fault' in query_lower or 'broken' in query_lower:
-            if 'Alarm_Agent' in self.nodes: selected_nodes.append(self.nodes['Alarm_Agent'])
-        if 'hot' in query_lower or 'cold' in query_lower or 'comfort' in query_lower:
-            if 'Comfort_Agent' in self.nodes: selected_nodes.append(self.nodes['Comfort_Agent'])
-        if 'maintenance' in query_lower or 'life' in query_lower or 'pm' in query_lower:
-            if 'Maintenance_Agent' in self.nodes: selected_nodes.append(self.nodes['Maintenance_Agent'])
+        Routing Strategy:
+        - Tier 1 (Perception): Always include relevant perception agents
+        - Tier 2 (Cognition): Include Strategic for complex queries, Memory for context
+        - Tier 3 (Expression): Include Briefing for summary requests, Voice for dialogue
+        - Fallback: P0 agents (Energy, Alarm, Maintenance, Comfort) for general queries
+        """
+        query_lower = query.lower()
+        selected = set()
+        
+        # --- TIER 1: PERCEPTION ROUTING ---
+        energy_keywords = {'energy', 'cost', 'kwh', 'consumption', 'burn rate', 'waste', 'ghost', 'occupancy', 'gsas', 'gord', 'certification', 'green', 'benchmark'}
+        alarm_keywords = {'alarm', 'fault', 'broken', 'alert', 'cascade', 'root cause', 'critical', 'emergency', 'trip', 'failure'}
+        maintenance_keywords = {'maintenance', 'life', 'rul', 'predict', 'health', 'work order', 'pm', 'lifecycle', 'runtime', 'hours', 'degradation', 'vibration'}
+        comfort_keywords = {'hot', 'cold', 'comfort', 'temperature', 'humidity', 'co2', 'zone', 'setpoint', 'occupant', 'thermal'}
+        sensor_keywords = {'sensor', 'drift', 'calibration', 'data quality', 'reading', 'stale', 'virtual sensor', 'accuracy'}
+        
+        if any(kw in query_lower for kw in energy_keywords):
+            if 'Energy_Agent' in self.nodes: selected.add('Energy_Agent')
+        if any(kw in query_lower for kw in alarm_keywords):
+            if 'Alarm_Agent' in self.nodes: selected.add('Alarm_Agent')
+        if any(kw in query_lower for kw in comfort_keywords):
+            if 'Comfort_Agent' in self.nodes: selected.add('Comfort_Agent')
+        if any(kw in query_lower for kw in maintenance_keywords):
+            if 'Maintenance_Agent' in self.nodes: selected.add('Maintenance_Agent')
+        if any(kw in query_lower for kw in sensor_keywords):
+            if 'Sensor_Fusion_Agent' in self.nodes: selected.add('Sensor_Fusion_Agent')
             
-        # If no specific nodes found, return all available nodes for a swarm debate
-        if not selected_nodes:
-            selected_nodes = list(self.nodes.values())
+        # --- TIER 2: COGNITION ROUTING ---
+        strategic_keywords = {'why', 'correlat', 'cause', 'what if', 'simulate', 'trust', 'fleet', 'goal', 'compare', 'trend', 'pattern'}
+        planning_keywords = {'plan', 'steps', 'sequence', 'how to', 'schedule', 'rollback', 'procedure'}
+        memory_keywords = {'remember', 'history', 'before', 'last time', 'skillbook', 'quirk', 'learned', 'knowledge', 'experience'}
+        
+        if any(kw in query_lower for kw in strategic_keywords):
+            if 'Strategic_Agent' in self.nodes: selected.add('Strategic_Agent')
+        if any(kw in query_lower for kw in planning_keywords):
+            if 'Planning_Agent' in self.nodes: selected.add('Planning_Agent')
+        if any(kw in query_lower for kw in memory_keywords):
+            if 'Memory_Agent' in self.nodes: selected.add('Memory_Agent')
             
+        # --- TIER 3: EXPRESSION ROUTING ---
+        briefing_keywords = {'briefing', 'morning', 'summary', 'handoff', 'shift', 'today', 'overview', 'what should'}
+        
+        if any(kw in query_lower for kw in briefing_keywords):
+            if 'Briefing_Agent' in self.nodes: selected.add('Briefing_Agent')
+        
+        # --- ALWAYS INCLUDE MEMORY for institutional context ---
+        if 'Memory_Agent' in self.nodes and len(selected) > 0:
+            selected.add('Memory_Agent')
+        
+        # --- FALLBACK: P0 perception agents for general/broad queries ---
+        if not selected:
+            p0_agents = ['Energy_Agent', 'Alarm_Agent', 'Maintenance_Agent', 'Comfort_Agent']
+            selected = {name for name in p0_agents if name in self.nodes}
+            
+        selected_nodes = [self.nodes[name] for name in selected if name in self.nodes]
         logger.info(f"[Queen] Routing query to {len(selected_nodes)} nodes: {[n.name for n in selected_nodes]}")
         return selected_nodes
 
-    async def execute_swarm(self, query: str, context: Optional[Dict[str, Any]] = None) -> str:
+    async def execute_swarm(self, query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Main entry point for dealing with the swarm.
-        1. Route to specialized agents
-        2. Execute in parallel
-        3. Consensus / Debate
-        4. Synthesize final answer
+        Returns a dict: {"advice": str, "context": Dict}
         """
         logger.info(f"[Queen] Initiating swarm execution for query: '{query}'")
         
         # 1. Route Intent
         active_nodes = await self._route_intent(query)
         if not active_nodes:
-             return "I could not find any specialized agents equipped to handle this request."
+             return {
+                 "advice": "I could not find any specialized agents equipped to handle this request.", 
+                 "context": {}
+             }
 
         # 2. Sequential Execution with Rate Limiting
-        # K2 Think API has ~20 RPM limit. Running nodes in parallel overwhelms the API.
-        # Execute each node sequentially with a delay between calls to stay within rate limits.
         INTER_NODE_DELAY = 3.0  # seconds between each node call
         
         proposals = {}
+        aggregated_context = {}
+        
         for i, node in enumerate(active_nodes):
             try:
-                result = await node.process(query, context)
-                proposals[node.name] = result.content
+                result_map = await node.process(query, context)
+                proposals[node.name] = result_map["response"].content
+                
+                # Extract any tool calls/observations from this node's history to feed the validator
+                for msg in result_map["history"]:
+                    if msg.get("role") == "tool":
+                        key = f"{node.name}_{msg.get('name')}"
+                        aggregated_context[key] = msg.get("content")
+                        
             except Exception as e:
                 logger.error(f"[Queen] Node {node.name} failed: {e}")
                 proposals[node.name] = f"Node Failed: {str(e)}"
@@ -99,12 +143,12 @@ class QueenCoordinator(BaseModel):
                 await asyncio.sleep(INTER_NODE_DELAY)
         
         # 3. Simulated Debate (Consensus)
-        # We synthesize the proposals into a final, verified piece of advice.
-        # This acts as the consensus mechanism where the Queen resolves conflicts 
-        # (e.g., Energy wants X, Comfort wants Y).
         final_advice = await self._synthesize_consensus(query, proposals, context)
         
-        return final_advice
+        return {
+            "advice": final_advice,
+            "context": aggregated_context
+        }
 
     async def _synthesize_consensus(self, original_query: str, proposals: Dict[str, str], context: Optional[Dict[str, Any]]) -> str:
         """

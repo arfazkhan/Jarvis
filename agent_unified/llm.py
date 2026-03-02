@@ -289,8 +289,8 @@ class UnifiedLLM(BaseModel):
                 })
             elif role == "assistant":
                 msg = {"role": "assistant"}
-                if content:
-                    msg["content"] = content
+                # API requires content field even if empty when there are tool calls
+                msg["content"] = content or ""
                 if m.get("tool_calls"):
                 # Convert our internal tool calls back to API format
                 # Handle both ToolCall objects and dicts (from model_dump)

@@ -249,7 +249,8 @@ class BMSLLMAgent:
             from arvis_core.swarm.queen import QueenCoordinator
             from agent_commercial.swarm_nodes import get_all_swarm_nodes
             self.queen = QueenCoordinator()
-            for node in get_all_swarm_nodes(self.tools):
+            self.queen.tool_handler = self.tool_handler
+            for node in get_all_swarm_nodes():
                 self.queen.register_node(node)
             logger.info("ARVIS Phase 1 Swarm (Queen Coordinator & Nodes) initialized within BMSLLMAgent.")
         except Exception as e:
@@ -752,16 +753,29 @@ class BMSLLMAgent:
             asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": [{"id": "swarm", "task": "Multi-Agent Debate & Consensus", "status": "in_progress"}]}))
             
             # DELEGATE TO SWARM
-            final_advice = await self.queen.execute_swarm(query, context)
+            swarm_payload = await self.queen.execute_swarm(query, context)
+            
+            # Swarm now returns a dict with the consensus AND the raw tool context discovered by nodes
+            if isinstance(swarm_payload, dict):
+                final_advice = swarm_payload.get("advice", "")
+                swarm_context = swarm_payload.get("context", {})
+            else:
+                final_advice = str(swarm_payload)
+                swarm_context = {}
+                
+            # Merge the facts discovered by Swarm Nodes into the ground truth context for the Validator
+            full_context = {**(context or {}), **swarm_context}
             
             # VALIDATE TRUTH SCORE
             try:
                 from arvis_core.swarm.validator import TruthValidator
                 validator = TruthValidator()
-                validation_result = await validator.validate(final_advice, context)
+                validation_result = await validator.validate(final_advice, full_context)
                 if validation_result.get("score", 0.0) < 0.95:
-                    logger.warning(f"Truth Score failed ({validation_result.get('score')}). Halting advice.")
+                    logger.warning(f"Truth Score failed ({validation_result.get('score')}): {validation_result.get('reasoning')}")
                     final_advice = "The swarm generated an advisory, but it failed the internal Truth-Score validation against the current BMS telemetry. I have withheld the action."
+                else:
+                    logger.info(f"Truth Score Verified: {validation_result.get('score')} - {validation_result.get('reasoning')}")
             except Exception as e:
                 logger.error(f"Validator failure: {e}")
             
