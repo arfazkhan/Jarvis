@@ -14,8 +14,9 @@ from agent_unified.schema import Message, ToolCall
 import re
 
 # Global singletons for hybrid architecture
-_REASONING_AGENT = None  # K2 Think
-_TOOL_AGENT = None       # Groq
+_REASONING_AGENT = None  # K2 Think (Reasoning Layer)
+_TOOL_AGENT = None       # Primary Execution Layer (Configurable)
+_FALLBACK_TOOL_AGENT = None # Groq Fallback Layer
 
 def _extract_k2_answer(content: str) -> str:
     """
@@ -56,7 +57,7 @@ class UnifiedLLM(BaseModel):
 
     def __init__(self, **data):
         super().__init__(**data)
-        global _REASONING_AGENT, _TOOL_AGENT
+        global _REASONING_AGENT, _TOOL_AGENT, _FALLBACK_TOOL_AGENT
         
         # Initialize Reasoning Agent (K2 Think)
         # Initialize Reasoning Agent (Configurable)
@@ -106,7 +107,7 @@ class UnifiedLLM(BaseModel):
             tool_provider = os.getenv("TOOL_PROVIDER", "groq")
             tool_model = os.getenv("TOOL_MODEL", "llama-3.3-70b-versatile")
             
-            print(f"[UnifiedLLM] Initializing Tool Agent with Provider: {tool_provider}, Model: {tool_model}")
+            print(f"[UnifiedLLM] Initializing Primary Tool Agent with Provider: {tool_provider}, Model: {tool_model}")
             
             _TOOL_AGENT = LLMAgent(
                 event_bus=DummyBus(), 
@@ -116,6 +117,26 @@ class UnifiedLLM(BaseModel):
                 override_provider=tool_provider,
                 override_model=tool_model
             )
+            
+            # 🚀 K2 Agentic Routing (build-api)
+            if tool_provider == "k2think" and _TOOL_AGENT.client:
+                _TOOL_AGENT.client.base_url = "https://build-api.k2think.ai/v1"
+                print(f"[UnifiedLLM] K2 Agentic Endpoint Active: {_TOOL_AGENT.client.base_url}")
+                
+        # Initialize Groq Fallback Layer (Always warm if Groq is not the primary)
+        if _FALLBACK_TOOL_AGENT is None:
+            if os.getenv("TOOL_PROVIDER", "groq") != "groq":
+                print(f"[UnifiedLLM] Initializing Groq Fallback Layer...")
+                _FALLBACK_TOOL_AGENT = LLMAgent(
+                    event_bus=DummyBus(),
+                    state_engine=None,
+                    automations=None,
+                    subscribe_to_voice=False,
+                    override_provider="groq",
+                    override_model="llama-3.3-70b-versatile"
+                )
+            else:
+                _FALLBACK_TOOL_AGENT = _TOOL_AGENT
 
     async def ask(
         self, 
@@ -160,7 +181,20 @@ class UnifiedLLM(BaseModel):
             full_system_prompt = "\n".join([m["content"] for m in system_msgs])
             
         # Route to TOOL AGENT
-        return await self._ask_provider(_TOOL_AGENT, full_system_prompt, messages, tools, tool_choice)
+        try:
+            return await self._ask_provider(_TOOL_AGENT, full_system_prompt, messages, tools, tool_choice)
+        except Exception as e:
+            # 🛡️ Groq Fallback safety net
+            if _FALLBACK_TOOL_AGENT and _FALLBACK_TOOL_AGENT != _TOOL_AGENT:
+                logger.warning(f"[UnifiedLLM] ⚠️ Primary Tool Agent failed: {e}. Retrying with Groq Fallback...")
+                try:
+                    return await self._ask_provider(_FALLBACK_TOOL_AGENT, full_system_prompt, messages, tools, tool_choice)
+                except Exception as fallback_err:
+                    logger.error(f"[UnifiedLLM] ❌ Both Primary and Fallback Tool Agents failed: {fallback_err}")
+                    raise fallback_err
+            else:
+                logger.error(f"[UnifiedLLM] ❌ Primary Tool Agent failed and no separate fallback available: {e}")
+                raise e
 
     async def ask_streaming(self, messages: List[Dict], system_msgs: Optional[List[Dict]] = None):
         """Streaming generator (Phase 6 support)"""
