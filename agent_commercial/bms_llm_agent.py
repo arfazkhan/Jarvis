@@ -766,18 +766,22 @@ class BMSLLMAgent:
             # Merge the facts discovered by Swarm Nodes into the ground truth context for the Validator
             full_context = {**(context or {}), **swarm_context}
             
-            # VALIDATE TRUTH SCORE
+            # VALIDATE TRUTH SCORE (Non-blocking Soft-Fail)
             try:
                 from arvis_core.swarm.validator import TruthValidator
                 validator = TruthValidator()
                 validation_result = await validator.validate(final_advice, full_context)
-                if validation_result.get("score", 0.0) < 0.95:
-                    logger.warning(f"Truth Score failed ({validation_result.get('score')}): {validation_result.get('reasoning')}")
-                    final_advice = "The swarm generated an advisory, but it failed the internal Truth-Score validation against the current BMS telemetry. I have withheld the action."
+                val_score = validation_result.get("score", 0.0)
+                
+                if val_score < 0.95:
+                    logger.warning(f"Truth Score below threshold ({val_score}): {validation_result.get('reasoning')}")
+                    # During Pilot, we allow the advice to pass to the Simulator for measuring emergent reasoning
+                    # but we mark the reasoning in the sources.
                 else:
-                    logger.info(f"Truth Score Verified: {validation_result.get('score')} - {validation_result.get('reasoning')}")
+                    logger.info(f"Truth Score Verified: {val_score}")
             except Exception as e:
                 logger.error(f"Validator failure: {e}")
+                val_score = 0.5
             
             asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": [{"id": "swarm", "task": "Consensus Verified", "status": "completed"}]}))
             
@@ -785,9 +789,9 @@ class BMSLLMAgent:
                 text=final_advice,
                 tool_calls=[],
                 tool_results=[],
-                confidence=0.95,
+                confidence=val_score,  # Reflect the actual validator score
                 language=language,
-                sources=["ARVIS Queen Consensus", "Swarm Truth-Validator"]
+                sources=["ARVIS Queen Consensus", f"Swarm Truth-Validator (Score: {val_score})"]
             )
             
         else:

@@ -93,8 +93,9 @@ class SwarmNode(BaseModel):
                     logger.info(f"[Node: {self.name}] Executing tool: {tool_name}")
                     
                     try:
-                        import json
                         args = json.loads(args_str) if isinstance(args_str, str) else args_str
+                        if args is None:
+                            args = {}
                         
                         if self.tool_handler:
                             result = await self.tool_handler.execute(tool_name, args)

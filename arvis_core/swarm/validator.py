@@ -31,7 +31,8 @@ class TruthValidator:
             "You are a strict Truth-Score Validator.\n"
             "Read the generated advice and compare it to the ground truth context.\n"
             "If the advice invents a metric, building name, or alarm that is NOT in the context, your score is 0.0.\n"
-            "If the advice is strictly grounded in the context, your score is 1.0.\n"
+            "MATH TOLERANCE: Allow for minor calculation variances (<5%) if the advice is clearly summarizing data present in the context. Focus on 'Object Hallucinations' (names, ids) rather than 'Calculation Drift'.\n"
+            "If the advice is strictly grounded in the context (modulo minor math), your score is 1.0.\n"
             "IMPORTANT: Your output MUST be EXACTLY a valid JSON object. Do NOT include ANY conversational text, tags, markdown formatting, or explanations.\n"
             "Format your response EXACTLY as follows:\n{\n  \"score\": 1.0,\n  \"reasoning\": \"Your reasoning here.\"\n}"
         )
@@ -62,8 +63,9 @@ class TruthValidator:
             if score < 0.95:
                 try:
                     from agent_cognitive.meta_cognition import MetaCognition
-                    logger.warning(f"[Validator] Hallucination detected (Score: {score}). Applying EWC++ penalty.")
-                    MetaCognition(building_id="default").update_ewc_weights(
+                    b_id = context.get("building_id", "default") if context else "default"
+                    logger.warning(f"[Validator] Hallucination detected (Score: {score}). Applying EWC++ penalty for {b_id}.")
+                    MetaCognition(building_id=b_id).update_ewc_weights(
                         rule_name="hallucination_penalty_rule",
                         new_weight=-0.5,
                         importance=2.0

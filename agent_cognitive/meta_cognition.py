@@ -174,12 +174,12 @@ class MetaCognition:
             logger.error(f"[MetaCognition] Failed to record outcome: {e}")
             return False
         
-    def reflect(self, lookback_days: int = 7) -> Dict[str, Any]:
+    async def reflect(self, lookback_days: int = 7) -> Dict[str, Any]:
         """
         Analyze recent decisions for patterns and self-improvement opportunities.
         """
         # Fetch raw dicts from DB
-        raw_decisions = self.skillbook.get_recent_decisions(limit=200)
+        raw_decisions = await self.skillbook.get_recent_decisions(limit=200)
         
         # Filter by time if needed (DB limit is rough proxy)
         decisions = [self._dict_to_record(d) for d in raw_decisions]
@@ -213,7 +213,7 @@ class MetaCognition:
             from agent_unified.llm import UnifiedLLM
             llm = UnifiedLLM() # Assumes env vars are set
             
-            report = self.reflect(lookback_days)
+            report = await self.reflect(lookback_days)
             # Minimize token usage by summarizing
             summary_json = json.dumps({
                 "stats": report["stats"],

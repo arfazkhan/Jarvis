@@ -109,10 +109,10 @@ class BMSToolHandler(
             self.tracker = recommendation_tracker
             self.preference_learner = preference_learner
     
-    def _sanitize_args(self, tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    def _sanitize_args(self, tool_name: str, args: Any) -> Dict[str, Any]:
         """Hard type enforcement for tool arguments to prevent LLM type hallucinations."""
-        if not args:
-            return args
+        if not isinstance(args, dict):
+            return {}
             
         # Integer fields
         int_fields = {"limit", "top_k", "forecast_hours", "time_window_minutes", "minutes", "window_days", "system_depth"}
@@ -140,7 +140,9 @@ class BMSToolHandler(
         import time
         start_time = time.perf_counter()
         
-        # 1. Hard Type Enforcement
+        # 1. Hard Type Enforcement & Safety
+        if args is None:
+            args = {}
         args = self._sanitize_args(tool_name, args)
         
         # Route to handler method dynamically

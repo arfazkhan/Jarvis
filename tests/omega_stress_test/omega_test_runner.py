@@ -1439,20 +1439,50 @@ Analyze the ORIENT analytics and SENSOR READINGS above. You MUST prioritize the 
             # Extract text from ChatResponse object
             raw_response = chat_response.text if hasattr(chat_response, 'text') else str(chat_response)
             
-            # Wrap the response in an advisory to preserve the Omega UI format
-            if raw_response:
-                msg = raw_response[:200] + "..." if len(raw_response) > 200 else raw_response
-                advisories.append({
-                    "id": f"LLM-{day}-{hour}-{self.llm_calls}",
-                    "day": day,
-                    "type": "observation",
-                    "severity": "observation",
-                    "message": msg,
-                    "analysis": raw_response,
-                    "confidence": chat_response.confidence if hasattr(chat_response, 'confidence') else 0.85,
-                    "evidence": [{"source": "Swarm Consensus Protocol"}],
-                    "recommended_action": {"type": "investigate"}
-                })
+            # Robust JSON parsing of the swarm response
+            try:
+                # Find JSON bounds in case of narrative prefix/suffix
+                import json
+                start = raw_response.find('{')
+                end = raw_response.rfind('}') + 1
+                if start >= 0 and end > start:
+                    json_str = raw_response[start:end]
+                    data = json.loads(json_str)
+                    
+                    if isinstance(data, dict) and "advisories" in data:
+                        parsed_advisories = data["advisories"]
+                        for adv in parsed_advisories:
+                            # Ensure required runner fields
+                            adv["day"] = day
+                            if "id" not in adv or adv["id"] == "auto":
+                                adv["id"] = f"SWARM-{day}-{hour}-{len(advisories)}"
+                            if "analysis" not in adv:
+                                adv["analysis"] = data.get("analysis", "Swarm consensus reasoning.")
+                            advisories.append(adv)
+                        
+                        logger.info(f"Successfully parsed {len(parsed_advisories)} advisories from Swarm JSON")
+                    else:
+                        # Fallback if JSON is valid but doesn't have advisories key
+                        raise ValueError("JSON missing 'advisories' key")
+                else:
+                    raise ValueError("No JSON found")
+                    
+            except Exception as e:
+                logger.debug(f"Parsing swarm narrative (non-JSON): {e}")
+                # Wrap the narrative response in an advisory to preserve the Omega UI format
+                if raw_response:
+                    msg = raw_response[:200] + "..." if len(raw_response) > 200 else raw_response
+                    advisories.append({
+                        "id": f"LLM-{day}-{hour}-{self.llm_calls}",
+                        "day": day,
+                        "type": "observation",
+                        "severity": "observation",
+                        "message": msg,
+                        "analysis": raw_response,
+                        "confidence": chat_response.confidence if hasattr(chat_response, 'confidence') else 0.85,
+                        "evidence": [{"source": "Swarm Consensus Protocol"}],
+                        "recommended_action": {"type": "investigate"}
+                    })
             
             # Brief summary logging to console
             if advisories:

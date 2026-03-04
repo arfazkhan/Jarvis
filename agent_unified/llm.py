@@ -30,21 +30,13 @@ def _extract_k2_answer(content: str) -> str:
     # 1. Extract <answer> block if present (preferred)
     answer_match = re.search(r'<answer>(.*?)</answer>', content, re.DOTALL)
     if answer_match:
-        return answer_match.group(1).strip()
+        content = answer_match.group(1).strip()
     
-    # 2. Strip <think> blocks (model reasoned but didn't use <answer> tags)
-    think_match = re.search(r'<think>(.*?)</think>', content, re.DOTALL)
-    if think_match:
-        cleaned = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
-        cleaned = re.sub(r'</?think>', '', cleaned)  # unclosed tags
-        cleaned = cleaned.strip()
-        if cleaned:
-            return cleaned
-        # If ONLY think tags and nothing else, return the raw content
-        # (better than empty string - let the caller handle it)
-        return content
+    # 2. Extract content between first { or [ and last } or ] if tags fail
+    # This is a safety layer for mixed content
     
-    # 3. Strip orphaned tags just in case
+    # 3. Strip <think> blocks (model reasoned but didn't use <answer> tags or used them incorrectly)
+    content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
     content = re.sub(r'</?think>', '', content)
     content = re.sub(r'</?answer>', '', content)
     return content.strip()
@@ -96,7 +88,8 @@ class UnifiedLLM(BaseModel):
             
             # Configure Provider Specifics
             if provider == "k2think" and _REASONING_AGENT.client:
-                _REASONING_AGENT.client.base_url = "https://api.k2think.ai/v2"
+                _REASONING_AGENT.client.base_url = "https://api.k2think.ai/v1"
+
                 k2_key = os.getenv("K2THINK_API_KEY")
                 if k2_key:
                     _REASONING_AGENT.client.api_key = k2_key
@@ -184,7 +177,7 @@ class UnifiedLLM(BaseModel):
         system_msgs: Optional[List[Dict[str, str]]] = None
     ) -> Dict[str, Any]:
         """
-        Ask LLM and enforce JSON output with Self-Repair Loop.
+        Ask LLM and enforce JSON output with Robust Extraction and Self-Repair Loop.
         """
         import re
         attempts = 0
@@ -196,64 +189,73 @@ class UnifiedLLM(BaseModel):
                 response = await self.ask(current_messages, system_msgs=system_msgs)
                 content = response.content or "{}"
                 
-                # Safety net: strip any residual <think>/<answer> tags
-                # (Primary stripping happens in _extract_k2_answer at adapter level)
+                # 1. Clean Markdown and Tags
                 content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
-                content = re.sub(r'</?think>', '', content)
-                content = re.sub(r'</?answer>', '', content)
+                content = re.sub(r'</?(?:think|answer)>', '', content)
                 
-                # 1. Clean Markdown
                 if "```json" in content:
                     content = content.split("```json")[1].split("```")[0].strip()
                 elif "```" in content:
-                    content = content.split("```")[1].split("```")[0].strip()
+                    # Generic markdown block - check if it looks like JSON
+                    blocks = content.split("```")
+                    for b in blocks:
+                        b = b.strip()
+                        if b.startswith('{') or b.startswith('['):
+                            content = b
+                            break
                 
-                # 2. Robust Extraction
                 content = content.strip()
-                
                 if not content:
-                    raise json.JSONDecodeError("Empty content after tag stripping", "", 0)
+                    raise json.JSONDecodeError("Empty content", "", 0)
+
+                # 2. Robust Regex Extraction
+                # Find all potential JSON objects or arrays
+                json_patterns = [
+                    r'(\{.*?\})', # Non-greedy objects
+                    r'(\[.*?\])', # Non-greedy arrays
+                    r'(\{.*\})',   # Greedy objects (most likely the full payload)
+                    r'(\[.*\])'    # Greedy arrays
+                ]
                 
-                first_brace = content.find('{')
-                first_bracket = content.find('[')
+                candidates = []
+                for pattern in json_patterns:
+                    matches = re.findall(pattern, content, re.DOTALL)
+                    candidates.extend(matches)
                 
-                is_obj = first_brace != -1 and (first_bracket == -1 or first_brace < first_bracket)
-                is_arr = first_bracket != -1 and (first_brace == -1 or first_bracket < first_brace)
+                # Add the raw content as a candidate
+                candidates.append(content)
                 
-                start_idx = first_brace if is_obj else (first_bracket if is_arr else -1)
-                end_char = '}' if is_obj else ']'
+                # Sort candidates by length (longest first) to find the most complete JSON
+                candidates.sort(key=len, reverse=True)
                 
-                if start_idx != -1:
-                    # Try finding the valid end by parsing substrings from back to front
-                    for end_idx in range(len(content), start_idx, -1):
-                        if content[end_idx-1] == end_char:
-                            try:
-                                return json.loads(content[start_idx:end_idx])
-                            except json.JSONDecodeError:
-                                continue
-                                
-                # 3. Fallback Parse (in case it's a naked string/number or fails extraction)
+                for cand in candidates:
+                    cand = cand.strip()
+                    if not cand: continue
+                    try:
+                        return json.loads(cand)
+                    except json.JSONDecodeError:
+                        continue
+                
+                # If regex fails, try one last attempt with literal json.loads
                 return json.loads(content)
                 
             except json.JSONDecodeError as e:
                 attempts += 1
                 last_error = e
-                print(f"[UnifiedLLM] ⚠️ JSON Parse Error (Attempt {attempts}/{retries+1}): {e} | Content Snippet: {content[:100]!r}")
+                logger.error(f"[UnifiedLLM] ⚠️ JSON Parse Error (Attempt {attempts}/{retries+1}): {e}")
                 
                 if attempts <= retries:
                     # 3. SELF-REPAIR: Ask LLM to fix it
-                    repair_prompt = f"""
-                    Your previous response was not valid JSON. 
-                    Error: {str(e)}
+                    repair_prompt = f"Your previous response was not valid JSON. Error: {str(e)}. Return ONLY the valid JSON object. No conversational text."
                     
-                    Please fix the JSON and return ONLY the valid JSON object. Do not add any markdown formatting or explanation.
-                    """
-                    # Append the invalid response and the repair request to history
-                    # We treat the invalid response as an assistant message for context
+                    # Prevent circular error loops where model apologizes for failing but doesn't fix it
+                    if len(current_messages) > 10: # Prune history if it gets too long
+                         current_messages = current_messages[:2] + current_messages[-4:]
+                         
                     current_messages.append({"role": "assistant", "content": response.content})
                     current_messages.append({"role": "user", "content": repair_prompt})
                     
-        raise ValueError(f"Failed to get valid JSON after {retries} retries. Last error: {last_error}")
+        raise ValueError(f"Failed to get valid JSON after {retries} retries. Last content snippet: {content[:100]!r}")
 
     # ═══════════════════════════════════════════════════════════
     # ADAPTERS

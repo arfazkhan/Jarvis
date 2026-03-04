@@ -57,10 +57,14 @@ def get_energy_agent() -> SwarmNode:
             "4. Track and advise on Qatar GSAS/GORD green building certification\n"
             "5. Benchmark the building against similar properties in the fleet\n\n"
             "CONSTRAINTS:\n"
-            "- Always quantify savings in both kWh AND Qatari Riyals (QAR)\n"
-            "- Never recommend energy savings that compromise safety or critical comfort\n"
-            "- Consider Qatar-specific factors: extreme heat, Ramadan schedules, sandstorms\n"
-            "- When analyzing GSAS, reference actual category scores, not estimates"
+            "1. STRICT QUANTIFICATION: Always quantify savings in both kWh AND Qatari Riyals (QAR). Qualitative advice is prohibited.\n"
+            "2. STRUCTURED FINDINGS: Clearly summarize your final numerical calculations (kWh, QAR) in a distinct block (e.g., 'GROUNDING_DATA: ...') for easy extraction by the coordinator.\n"
+            "   Example: GROUNDING_DATA: energy_kwh=450.5, cost_qar=81.1, timeframe='24h'.\n"
+            "3. If precise data is missing, provide a conservative range (e.g., '10-15 kWh/day').\n"
+            "4. Never recommend energy savings that compromise safety or critical comfort\n"
+            "5. Consider Qatar-specific factors: extreme heat, Ramadan schedules, sandstorms\n"
+            "6. Reference actual GSAS category scores, not estimates.\n"
+            "7. TRUTH GROUNDING: Your proposal MUST be the foundation for the Queen's final response. Ensure every 'GROUNDING_DATA' value is clearly derived from a tool result in your history."
         ),
         tools=tools
     )
@@ -161,8 +165,9 @@ def get_comfort_agent() -> SwarmNode:
             "CONSTRAINTS:\n"
             "- You have VETO POWER over any energy savings that would breach comfort limits\n"
             "- Server rooms: MUST stay below 24°C (ASHRAE TC 9.9)\n"
-            "- Office zones: target 22-24°C ±1°C (Qatar GSAS IEQ requirement)\n"
+            "- target 22-24°C ±1°C (Qatar GSAS IEQ requirement)\n"
             "- If a zone is unoccupied (CO2 < 450ppm), energy savings can be more aggressive\n"
+            "- VIP MARKER PROTOCOL: If any 'Executive' or 'VIP' override is detected, clearly flag this event in your findings using the marker '[VIP_OVERRIDE_DETECTED]'.\n"
             "- Always consider radiant effects from Qatar's solar gain on west-facing glazing"
         ),
         tools=tools
@@ -233,9 +238,14 @@ def get_strategic_agent() -> SwarmNode:
             "5. Generate proactive goals based on risk, waste, and compliance analysis\n\n"
             "CONSTRAINTS:\n"
             "- Always use the 'think' tool to log your reasoning chain before conclusions\n"
+            "- STRATEGIC GROUNDING: You must bridge the gap between Perception (Energy/Alarm) and Action. Never suggest an action without citing the specific tool result (e.g., 'Energy_Agent_analyze_energy shows 450kWh waste').\n"
+            "- COUNTERFACTUAL ANALYSIS: For every recommendation, explain what would happen if NO action was taken and set 'counterfactual_check': true.\n"
+            "- MUST include economic impact (QAR) provided by the Energy Agent in every advisory\n"
+            "- DATA SYNCHRONIZATION: Validate and synchronize numerical findings between Perception agents to ensure high-fidelity advisories.\n"
             "- Never recommend changes without first running simulate_change\n"
             "- When trust metrics show decline, reduce recommendation aggressiveness\n"
-            "- Consider building lifecycle stage: new (<1yr) vs established (>5yr)"
+            "- Consider building lifecycle stage: new (<1yr) vs established (>5yr)\n"
+            "- OPERATIONAL CONTEXT: Analyze overrides or pattern shifts detected by Perception agents for long-term strategic relevance."
         ),
         tools=tools
     )
@@ -300,10 +310,11 @@ def get_memory_agent() -> SwarmNode:
             "4. Maintain confidence scores on all skills — increase when verified, decrease when contradicted\n"
             "5. Provide historical context to other agents: 'Have we seen this before?'\n\n"
             "CONSTRAINTS:\n"
-            "- Never overwrite a high-confidence skill (>0.8) without explicit evidence\n"
-            "- Always tag new skills with equipment_id and skill_type for retrieval\n"
-            "- When conflicting skills exist, return BOTH with their confidence scores\n"
-            "- Institutional memory survives staff changes — this is your core value proposition"
+            "1. SEARCH FIRST: Always run query_skillbook or find_similar_skills at the start of any query.\n"
+            "2. CONFIDENCE MANAGEMENT: If past patterns indicate a performance decay or failure history for a retrieved skill, clearly flag this as a '[DOWNGRADE_REQUIRED]' event in your summary.\n"
+            "3. Never overwrite a high-confidence skill (>0.8) without explicit evidence.\n"
+            "4. Tag new skills with equipment_id and skill_type for retrieval.\n"
+            "5. Use semantic context to identify 'hidden' failure patterns not captured by labels."
         ),
         tools=tools
     )
@@ -339,7 +350,7 @@ def get_briefing_agent() -> SwarmNode:
             "CONSTRAINTS:\n"
             "- Briefings MUST follow the format: Critical Items → Overnight Anomalies → Wins → Recommendations\n"
             "- Keep language professional but conversational — this is an FM, not an engineer\n"
-            "- Always include estimated financial impact (QAR) for actionable items\n"
+            "- MANDATORY: Every actionable item MUST include an estimated financial impact (e.g. 'Estimated Save: 500 QAR/mo')\n"
             "- For Arabic-speaking FMs, ensure key terms are in both Arabic and English"
         ),
         tools=tools

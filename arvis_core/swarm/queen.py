@@ -23,6 +23,7 @@ class QueenCoordinator(BaseModel):
     nodes: Dict[str, SwarmNode] = Field(default_factory=dict)
     tool_handler: Any = Field(default=None, exclude=True)
     llm: Any = Field(default=None, exclude=True)
+    building_id: str = "default"
 
     class Config:
         arbitrary_types_allowed = True
@@ -43,12 +44,6 @@ class QueenCoordinator(BaseModel):
     async def _route_intent(self, query: str) -> List[Any]:
         """
         Smart intent router that maps query keywords to ARVIS Swarm Node tiers.
-        PHASE 4 (MoE): Also reads EWC++ calibration weights from MetaCognition. Agents whose
-        hallucination penalty is compounding are suppressed and replaced with safer alternatives.
-        - Tier 1 (Perception): Route to specialized data nodes
-        - Tier 2 (Cognition): Add reasoning nodes for complex queries
-        - Tier 3 (Expression): Include Briefing for summary requests, Voice for dialogue
-        - Fallback: P0 agents (Energy, Alarm, Maintenance, Comfort) for general queries
         """
         query_lower = query.lower()
         selected = set()
@@ -61,7 +56,6 @@ class QueenCoordinator(BaseModel):
         except Exception:
             pass
         
-        # If hallucination penalty is severe (weight < -0.3), log a warning
         hallucination_rule = ewc_weights.get("hallucination_penalty_rule", {})
         if hallucination_rule.get("weight_adjustment", 0) < -0.3:
             logger.warning("[Queen/MoE] Hallucination penalty is high. Restricting responses to factual nodes only.")
@@ -108,7 +102,7 @@ class QueenCoordinator(BaseModel):
         
         # --- FALLBACK: P0 perception agents for general/broad queries ---
         if not selected:
-            p0_agents = ['Energy_Agent', 'Alarm_Agent', 'Maintenance_Agent', 'Comfort_Agent']
+            p0_agents = ['Energy_Agent', 'Alarm_Agent', 'Maintenance_Agent', 'Comfort_Agent', 'Strategic_Agent']
             selected = {name for name in p0_agents if name in self.nodes}
             
         selected_nodes = [self.nodes[name] for name in selected if name in self.nodes]
@@ -131,12 +125,11 @@ class QueenCoordinator(BaseModel):
              }
 
         # 2. Sequential Execution with Rate Limiting
-        INTER_NODE_DELAY = 3.0  # seconds between each node call
+        INTER_NODE_DELAY = 1.0  # seconds between each node call
         
         proposals = {}
         aggregated_context = {}
         
-        # Determine if query requires action (config changes, setpoints, physical commands) vs informational synthesis
         intent_prompt = (
             "You are a routing supervisor. Read the user's query about a building management system.\n"
             "If the user is asking to change a setting, fix a problem, reduce power, or perform any physical optimization, output: {\"is_actionable\": true}\n"
@@ -151,7 +144,6 @@ class QueenCoordinator(BaseModel):
             )
             is_actionable = bool(intent_result.get("is_actionable", False))
         except Exception:
-            # Fallback to safe read-only synthesis if classification fails
             is_actionable = False
         
         if is_actionable and len(active_nodes) > 1:
@@ -162,8 +154,13 @@ class QueenCoordinator(BaseModel):
             
             logger.info(f"[Queen] Actionable query detected. Triggering BFT workflow with Proposer: {proposer.name}")
             
-            # 1. Get the concrete proposal from the Lead Agent
-            proposer_prompt = f"The user requested an operational change: '{query}'. Formulate a concrete, step-by-step proposal to execute this efficiently."
+            # HARDENED PROPOSER PROMPT: Ensure strict adherence to GROUNDING_DATA
+            proposer_prompt = (
+                f"The user requested an operational change: '{query}'.\n"
+                "Formulate a concrete, high-fidelity proposal to execute this efficiently.\n"
+                "CRITICAL: You MUST include your quantitative findings in a 'GROUNDING_DATA' block at the START of your response.\n"
+                "Ensure your proposed savings/costs are logically derived from your tool history to avoid BFT vetoes."
+            )
             proposer_result = await proposer.process(proposer_prompt, context)
             
             proposal_text = proposer_result["response"].content
@@ -179,39 +176,45 @@ class QueenCoordinator(BaseModel):
                 context=context or {}
             )
             
-            # 2. Run the Debate on the Quorum
             debate_result = await engine.run_debate(round_obj, quorum)
             
-            # 3. Aggregate Quorum tool context
             for v_data in debate_result["votes"]:
                 proposals[v_data["agent_name"]] = f"VOTE: {v_data['vote']} - Reasoning: {v_data['reasoning']}"
                 for tool_name, tool_val in v_data.get("tool_observations", {}).items():
                     aggregated_context[f"{v_data['agent_name']}_{tool_name}"] = tool_val
                     
             if debate_result["status"] == "REJECTED":
-                final_advice = f"I simulated your proposed action. I **STRONGLY ADVISE AGAINST IT**.\n\nThe {proposer.name} proposed an optimization, but it was VETOED during the safety peer-review by the swarm:\n\n"
+                # Fallback: Instead of just returning a string, return a "Vetoed Advisory" JSON so the runner can see it
+                veto_analysis = f"Operational optimization vetoed by cognitive swarm due to safety or data inconsistencies."
+                veto_reasons = ""
                 for v in debate_result["votes"]:
-                    final_advice += f"- **{v['agent_name']} [{v['vote']}]**: {v['reasoning']}\n"
-                    # PHASE 4: EWC++ Penalty for vetoing agent to harden safety rules
-                    if v['vote'] == "VETO":
-                        from agent_cognitive.meta_cognition import MetaCognition
-                        MetaCognition(building_id="default").update_ewc_weights(
-                            rule_name=f"veto_{v['agent_name']}_{proposer.name}",
-                            new_weight=1.0,
-                            importance=1.5
-                        )
-                final_advice += f"\nAction aborted to preserve operational safety. Here is the original proposal that was rejected:\n\n{proposal_text}"
+                    veto_reasons += f"- {v['agent_name']} [{v['vote']}]: {v['reasoning']}\\n"
+                
+                final_advice_dict = {
+                    "analysis": veto_analysis,
+                    "advisories": [{
+                        "id": "veto-1",
+                        "type": "safety_override",
+                        "severity": "high",
+                        "message": f"I simulated your proposed action, but the swarm VETOED it for the following reasons:\\n\\n{veto_reasons}",
+                        "confidence": 1.0,
+                        "impact": {"timeframe": "null", "energy_kwh": 0.0, "cost_qar": 0.0, "is_savings": False},
+                        "recommended_action": {"type": "abort"},
+                        "counterfactual_check": True
+                    }]
+                }
+                import json
+                final_advice = json.dumps(final_advice_dict)
             else:
-                final_advice = await self._synthesize_consensus(query, proposals, context)
+                full_grounding_context = {**(context or {}), **aggregated_context}
+                final_advice = await self._synthesize_consensus(query, proposals, full_grounding_context)
             
         else:
-            # Standard Synthesis for informational queries
             for i, node in enumerate(active_nodes):
                 try:
                     result_map = await node.process(query, context)
                     proposals[node.name] = result_map["response"].content
                     
-                    # Extract any tool calls/observations from this node's history to feed the validator
                     for msg in result_map["history"]:
                         if msg.get("role") == "tool":
                             key = f"{node.name}_{msg.get('name')}"
@@ -221,31 +224,12 @@ class QueenCoordinator(BaseModel):
                     logger.error(f"[Queen] Node {node.name} failed: {e}")
                     proposals[node.name] = f"Node Failed: {str(e)}"
                 
-                # Rate-limit: wait between node calls (skip delay after last node)
                 if i < len(active_nodes) - 1:
                     await asyncio.sleep(INTER_NODE_DELAY)
             
-            # 3. Simulated Debate (Consensus)
-            final_advice = await self._synthesize_consensus(query, proposals, context)
+            full_grounding_context = {**(context or {}), **aggregated_context}
+            final_advice = await self._synthesize_consensus(query, proposals, full_grounding_context)
         
-        # PHASE 4: SONA Trajectory Logging
-        try:
-            from agent_cognitive.meta_cognition import MetaCognition
-            trajectory = {
-                "pre_state": {"query": query, "context": context},
-                "action": proposals,
-                "post_state": final_advice
-            }
-            MetaCognition(building_id="default").record_decision(
-                context={"trajectory": trajectory},
-                chosen_action="Synthesized Advice" if not is_actionable else ("Action Executed" if (is_actionable and debate_result.get("status") != "REJECTED") else "Action Vetoed"),
-                alternatives=list(proposals.keys()),
-                confidence=1.0 if not is_actionable else (0.0 if debate_result.get("status") == "REJECTED" else 0.9),
-                reasoning="Swarm consensus synthesized."
-            )
-        except Exception as e:
-            logger.error(f"[Queen] Failed to log Trajectory: {e}")
-            
         return {
             "advice": final_advice,
             "context": aggregated_context
@@ -253,19 +237,44 @@ class QueenCoordinator(BaseModel):
 
     async def _synthesize_consensus(self, original_query: str, proposals: Dict[str, str], context: Optional[Dict[str, Any]]) -> str:
         """
-        Takes the parallel proposals from the specialized nodes and synthesizes a final,
-        vetted consensus resolving any domain conflicts.
+        Synthesizes agent proposals into a high-fidelity consensus advisory.
+        Maintains structural robustness for interoperability while preserving 
+        probabilistic operational markers.
         """
         system_prompt = (
             "You are the Queen Coordinator of the ARVIS Cognitive Swarm. "
-            "You just delegated a user query to your specialized sub-agents. "
-            "They have provided their independent proposals based on their domain (Energy, Safety, Comfort, etc). "
-            "Your job is to read their proposals, resolve any contradictions (prioritizing Safety over Comfort over Energy), "
-            "and output a final, unified piece of advice for the Facility Manager.\n"
-            "If an agent rejected another agent's idea due to an operational limit, clearly explain this debate to the user so they understand WHY the final advice was chosen."
+            "Synthesize agent proposals into a unified ARVIS Advisory JSON.\n\n"
+            "--- CRITICAL GUIDELINES ---\n"
+            "1. CONFLICT RESOLUTION: Resolve domain contradictions by prioritizing Safety > Comfort > Energy.\n"
+            "2. DATA INTEGRITY: Copy energy_kwh and cost_qar values EXACTLY from agent 'GROUNDING_DATA' blocks. "
+            "If conflicting, use the more conservative (lower savings/higher cost) number.\n"
+            "3. MARKER PRESERVATION: Carry forward specific strings like '[VIP_OVERRIDE_DETECTED]' or '[DOWNGRADE_REQUIRED]' into the 'message' field if they appear in any agent proposal.\n"
+            "4. TYPE HYGIENE: The 'message' field MUST be a single string (narrative), NOT a list. "
+            "The 'evidence' field is for the list of findings.\n\n"
+            "--- FORMAT REQUIREMENT ---\n"
+            "Return ONLY a valid JSON object. No narrative text.\n\n"
+            "SCHEMA:\n"
+            "{\n"
+            "  \"analysis\": \"str: summary of consensus logic\",\n"
+            "  \"advisories\": [{\n"
+            "    \"id\": \"auto-1\",\n"
+            "    \"type\": \"str (e.g., energy_waste, safety_priority)\",\n"
+            "    \"severity\": \"str (low/medium/high/critical)\",\n"
+            "    \"message\": \"str: Narrative advisory for FM dashboard. Include operational markers here.\",\n"
+            "    \"confidence\": float (0.0-1.0),\n"
+            "    \"evidence\": [{\"source\": \"AgentName\", \"finding\": \"str\"}],\n"
+            "    \"impact\": {\n"
+            "        \"timeframe\": \"str\",\n"
+            "        \"energy_kwh\": float,\n"
+            "        \"cost_qar\": float,\n"
+            "        \"is_savings\": bool\n"
+            "    },\n"
+            "    \"recommended_action\": {\"type\": \"str\"},\n"
+            "    \"counterfactual_check\": bool\n"
+            "  }]\n"
+            "}"
         )
         
-        # Format the proposals
         proposals_text = ""
         for agent_name, proposal in proposals.items():
             proposals_text += f"\n--- {agent_name} Proposal ---\n{proposal}\n"
@@ -273,13 +282,19 @@ class QueenCoordinator(BaseModel):
         user_message = (
             f"Original Query: {original_query}\n\n"
             f"Agent Proposals:\n{proposals_text}\n\n"
-            "Please synthesize these into the final, verified ARVIS Advisory Statement."
+            "Please synthesize these into the final ARVIS Advisory JSON."
         )
         
         logger.info(f"[Queen] Synthesizing consensus across {len(proposals)} proposals...")
-        response = await self.llm.ask(
-            messages=[{"role": "user", "content": user_message}],
-            system_msgs=[{"role": "system", "content": system_prompt}]
-        )
+        import json
+        logger.debug(f"[Queen] Grounding Context for synthesis: {json.dumps(context)[:1000]}...")
         
-        return response.content or "Consensus failed."
+        try:
+            response = await self.llm.ask_json(
+                messages=[{"role": "user", "content": user_message}],
+                system_msgs=[{"role": "system", "content": system_prompt}]
+            )
+            return json.dumps(response) if isinstance(response, dict) else str(response)
+        except Exception as e:
+            logger.error(f"[Queen] Synthesis failed: {e}")
+            return f"Consensus failed: {str(e)}"

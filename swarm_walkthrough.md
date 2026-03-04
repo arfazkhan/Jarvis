@@ -1,0 +1,130 @@
+# Walkthrough: Interactive Pilot Environment (Advisory-Only)
+
+This walkthrough documents the ARVIS Operating System running in an interactive "Virtual Pilot" environment.
+
+## 1. Building Initialization
+Before starting the pilot, you should initialize the virtual building with its equipment inventory.
+
+```http
+POST /api/v1/demo/initialize-building
+Content-Type: application/json
+
+{
+  "building_id": "DOHA-TOWER-001",
+  "equipment": [
+    {"id": "AHU-01", "type": "AHU", "location": "Floor 1, Zone A"},
+    {"id": "AHU-02", "type": "AHU", "location": "Floor 2, Zone B"},
+    {"id": "CHILLER-01", "type": "CHILLER", "location": "Plant Room"}
+  ]
+}
+```
+**Outcome**: ARVIS registers these assets and automatically begins simulating their baseline sensors (SAT, KW, Vibration, etc.).
+
+---
+
+## 2. Virtual Physics Behavior
+Virtual equipment in the pilot environment replicates real-world thermodynamics and mechanical laws:
+
+-   **AHUs (Air Handlers)**: If turned **OFF**, **Supply Air Temp (SAT)** drifts up towards the outdoor ambient temperature. If **ON**, it pulls down to 19°C.
+-   **Chillers**: Exhibit continuous micro-fluctuations in vibration (±0.05 mm/s). **Energy load (KW)** scales with building cooling demand.
+-   **Pumps**: Obey affinity laws (e.g., **Power (KW)** scales with speed cubed, **Differential Pressure (DP)** scales with speed squared).
+-   **Cooling Towers**: Simulate thermal exchange. **Condenser Water Supply (CW_ST)** pulls towards the atmospheric wet-bulb limit based on fan speed and ambient conditions.
+
+---
+
+## 3. Scenario Management (Fault Injection)
+Test ARVIS’s reasoning by injecting stressors into the environment.
+
+```http
+POST /api/v1/sim/inject
+Content-Type: application/json
+
+{
+  "type": "EQUIPMENT_FAULT",
+  "target": "CHILLER-01",
+  "parameter": "vibration",
+  "value": 5.8,
+  "duration_hours": 4
+}
+```
+
+### Supported Fault Types:
+-   `EQUIPMENT_FAULT`: Direct BMS sensor override.
+-   `WEATHER_EVENT`: Simulate heatwaves or dust storms. 
+-   `VIP_OVERRIDE`: Trigger discomfort-driven executive requests.
+-   `DATA_CORRUPTION`: Test ARVIS's data integrity verification.
+
+---
+
+## 4. Live Thought Stream (Glass Box AI)
+To see ARVIS "thinking" in real-time, subscribe to the SSE thought stream.
+
+**Endpoint**: `GET /api/v1/stream/thoughts`
+
+**Sample Event Payload**:
+```json
+// SSE event: thought
+{
+  "agent_id": "Strategic_Agent",
+  "content": "Detected vibration surge (5.8 mm/s) on Chiller-01. Cross-referencing with pump flow to verify mechanical root cause...",
+  "timestamp": "2026-03-04T11:20:00",
+  "type": "ambient",
+  "severity": "medium"
+}
+```
+
+---
+
+## 5. Demo Status & Control
+Query the live state of the simulation and control the clock.
+
+**Status Request**: `GET /api/v1/demo/status`
+
+**Response**:
+```json
+{
+  "is_running": true,
+  "agent_state": "MONITORING",
+  "sim_time": "2026-03-04T11:25:00",
+  "sim_day": 1,
+  "speed": 10,
+  "pending_advisories": 1,
+  "total_advisories": 12,
+  "active_faults": 1,
+  "architecture": "ADVISORY-ONLY"
+}
+```
+
+**Control Command**: `POST /api/v1/demo/control`
+```json
+{
+  "action": "SET_SPEED",
+  "speed": 20 
+}
+```
+*(Speed = Sim-minutes per real-second tick)*
+
+---
+
+## 6. Responding to ARVIS Advice
+When ARVIS detects an issue, it generates a pending advisory and enters the `INTERVENING` state.
+
+### Accept Advice (Simulates physical FM action)
+```http
+POST /api/v1/demo/advisory/{id}/respond
+Content-Type: application/json
+
+{
+  "action": "ACCEPT",
+  "reason": "Authorized. Maintenance team dispatched to Chiller-01."
+}
+```
+**Outcome**: The physical engine applies the fix (e.g., vibration resets), and ARVIS confirms resolution in its logs.
+
+---
+
+## Agent Lifecycle States
+- `MONITORING`: Ambient thinking active.
+- `ANALYZING`: Running deep swarm analysis.
+- `INTERVENING`: Simulation paused, awaiting Human Response.
+- `ESCALATED_TIMEOUT`: Auto-resumed after 120s of no response.

@@ -326,6 +326,64 @@ class MultiOptionAdvisor:
         
         return response
     
+    async def get_recommendations(
+        self,
+        context: Any,
+        equipment_id: Optional[str] = None,
+        alarm_id: Optional[str] = None,
+        top_k: int = 3
+    ) -> Dict[str, Any]:
+        """
+        Tool-compatible wrapper for get_advice.
+        Maps tool arguments to get_advice and formats the output for the tool.
+        """
+        # 1. Prepare context dict
+        if isinstance(context, str):
+            ctx_dict = {"query_context": context}
+        else:
+            ctx_dict = context or {}
+            
+        # 2. Determine issue type and equipment
+        issue_type = alarm_id if alarm_id else "general_operational_review"
+        eq_id = equipment_id or "unknown"
+        
+        # 3. Call get_advice
+        try:
+            advisory_response = await self.get_advice(
+                context=ctx_dict,
+                issue_type=issue_type,
+                equipment_id=eq_id,
+                num_options=top_k
+            )
+            
+            # 4. Format for tool response
+            return {
+                "issue_type": issue_type,
+                "equipment_id": eq_id,
+                "recommendations": [
+                    {
+                        "id": opt.option.get("id", f"opt-{i}"),
+                        "title": opt.option.get("action_type", "Recommended Action"),
+                        "description": opt.option.get("action_description", ""),
+                        "confidence": round(opt.confidence, 3),
+                        "impact": opt.option.get("energy_impact", f"{opt.option.get('energy_kwh_saved', 0)} kWh"),
+                        "risk": opt.option.get("risk_score", "low")
+                    }
+                    for i, opt in enumerate(advisory_response.options)
+                ],
+                "top_explanation": advisory_response.top_explanation,
+                "overall_confidence": round(advisory_response.overall_confidence, 3),
+                "calibrated_confidence": round(advisory_response.calibrated_confidence, 3)
+            }
+        except Exception as e:
+            logger.error(f"Error in MultiOptionAdvisor.get_recommendations: {e}")
+            # Fallback if get_advice fails
+            return {
+                "error": str(e),
+                "recommendations": [],
+                "note": "Failed to generate AI recommendations"
+            }
+    
     async def record_decision(
         self,
         recommendation_id: str,

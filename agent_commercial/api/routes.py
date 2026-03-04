@@ -31,6 +31,7 @@ from agent_commercial.api.auth import (
     Token
 )
 from agent_commercial.api.middleware import SecurityAuditMiddleware
+from agent_commercial.api.routes_omega import router as omega_router
 
 logger = logging.getLogger("arvis.bms.api")
 
@@ -199,6 +200,9 @@ def create_api(
     
     # Advanced Simulation
     app.state.sim_service = sim_service
+
+    # Include Omega Simulation Routes
+    app.include_router(omega_router)
 
     # ═══════════════════════════════════════════════════════════════════════
     # AUTHENTICATION ENDPOINTS

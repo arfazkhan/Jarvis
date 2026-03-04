@@ -397,9 +397,9 @@ class LLMAgent:
                     from openai import OpenAI
                     self.client = OpenAI(
                         api_key=k2think_key,
-                        base_url="https://api.k2think.ai/v2/chat/completions".replace("/chat/completions", "")
+                        base_url="https://api.k2think.ai/v1"
                     )
-                    self.k2think_model = os.environ.get("K2THINK_MODEL", "MBZUAI-IFM/K2-Think")
+                    self.k2think_model = os.environ.get("K2THINK_MODEL", "MBZUAI-IFM/K2-Think-v2")
                     self.provider = "k2think"
                     print(f"[LLMAgent] ✅ Using K2 Think ({self.k2think_model})")
                 except Exception as e:

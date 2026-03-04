@@ -175,13 +175,29 @@ class SovereignHandlerMixin:
             )
         
         # Fallback: simple estimation
-        delta = (proposed_value or 0) - (current_value or 0)
+        try:
+            # Safe casting for strings like 'always_on' or 'aligned_with_occupancy'
+            def safe_float(val, default=0.0):
+                if val is None: return default
+                if isinstance(val, (int, float)): return float(val)
+                try:
+                    return float(val)
+                except (ValueError, TypeError):
+                    logger.warning(f"[ToolHandler] Cannot cast '{val}' to float, using 0.0")
+                    return default
+
+            c_val = safe_float(current_value)
+            p_val = safe_float(proposed_value)
+            delta = p_val - c_val
+        except Exception as e:
+            logger.error(f"[ToolHandler] Simulation failed: {e}")
+            delta = 0
         
         return {
             "change_type": change_type,
             "target": target,
             "energy_impact_kwh": round(abs(delta) * duration_hours * 0.5, 1),
-            "energy_impact_qar": round(abs(delta) * duration_hours * 0.05, 2),
+            "energy_impact_qar": round(abs(delta) * duration_hours * 0.05, 1),
             "comfort_impact": "minimal" if abs(delta) <= 1 else "moderate",
             "risk_level": "low",
             "fleet_comparison": "Within normal range",

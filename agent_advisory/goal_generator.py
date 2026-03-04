@@ -154,6 +154,24 @@ class GoalGenerator:
         self._last_resolution = None  # Cache for briefing access
         self._last_terminal_advisory = None  # Cache for briefing access
         
+    def get_active_goals(self, category: Optional[str] = None, building_id: str = "default") -> List[Dict[str, Any]]:
+        """
+        Retrieve active goals as a list of dictionaries for tool consumption.
+        
+        Args:
+            category: Optional filter by goal type
+            building_id: Target building (defaults to 'default')
+            
+        Returns:
+            List of dictionaries representing active goals
+        """
+        goals = self.generate_goals(building_id)
+        
+        if category:
+            goals = [g for g in goals if g.goal_type == category]
+            
+        return [g.to_dict() for g in goals]
+        
     def generate_goals(self, building_id: str) -> List[ProactiveGoal]:
         """
         Generate all proactive goals for a building.
@@ -249,16 +267,13 @@ class GoalGenerator:
                         description=advisory.summary,
                         goal_type="safety",
                         priority="critical",
-                        confidence=1.0,  # Terminal = certainty
                         score=1.0,       # Always top priority
-                        source="terminal_advisory_engine",
-                        suggested_actions=[{
-                            "action": "acknowledge_terminal_advisory",
-                            "advisory_id": advisory.advisory_id,
-                            "severity": advisory.severity.value,
-                            "time_to_breach_hours": advisory.time_to_breach_hours,
-                            "affected_equipment": advisory.affected_equipment,
-                        }],
+                        source_engine="terminal_advisory_engine",
+                        building_id=building_id,
+                        equipment_ids=advisory.affected_equipment,
+                        potential_savings_qar=0.0,
+                        risk_reduction=f"Critical safety breach: {advisory.severity.value}",
+                        suggested_actions=[f"Acknowledge terminal advisory {advisory.advisory_id}"],
                     )
                     goals.insert(0, terminal_goal)  # Always first
                     logger.warning(

@@ -278,3 +278,117 @@ async def interactive_chat(payload: ChatRequest, request: Request):
         "confidence": getattr(response, 'confidence', 0.9),
         "tool_calls": getattr(response, 'tool_calls', [])
     }
+
+# ═══════════════════════════════════════════════════════════════════════════
+# INTERACTIVE DEMO MODE (Human-in-the-Loop)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class FaultInjectionRequest(BaseModel):
+    type: str = Field(..., description="EQUIPMENT_FAULT, WEATHER_EVENT, VIP_OVERRIDE, DATA_CORRUPTION")
+    target: Optional[str] = Field(None, description="Equipment ID or zone name")
+    parameter: Optional[str] = Field(None, description="e.g. vibration, temperature")
+    value: Optional[float] = Field(None, description="Override value")
+    duration_hours: int = Field(default=2, description="How long the fault persists in sim-hours")
+
+class AdvisoryResponseRequest(BaseModel):
+    action: str = Field(..., description="ACCEPT or REJECT")
+    reason: str = Field(default="", description="Operator justification")
+
+class DemoControlRequest(BaseModel):
+    action: str = Field(..., description="START, STOP, PAUSE, RESUME, SET_SPEED")
+    speed: Optional[int] = Field(None, description="Sim-minutes per real-second tick (1-120)")
+
+@router.post("/demo/control")
+async def control_demo(payload: DemoControlRequest, request: Request):
+    """Control the interactive demo lifecycle."""
+    from agent_commercial.api.demo_orchestrator import DemoOrchestrator
+    
+    demo = getattr(request.app.state, "demo_orchestrator", None)
+    if not demo:
+        # Lazy init
+        bms_state = getattr(request.app.state, "bms_state", None)
+        llm_agent = getattr(request.app.state, "llm_agent", None)
+        demo = DemoOrchestrator(bms_state=bms_state, llm_agent=llm_agent, broadcaster=broadcaster)
+        request.app.state.demo_orchestrator = demo
+    
+    action = payload.action.upper()
+    
+    if action == "START":
+        return await demo.start()
+    elif action == "STOP":
+        return await demo.stop()
+    elif action == "PAUSE":
+        await demo.pause()
+        return {"status": "success", "action": "PAUSE"}
+    elif action == "RESUME":
+        await demo.resume()
+        return {"status": "success", "action": "RESUME"}
+    elif action == "SET_SPEED":
+        demo.set_speed(payload.speed or 10)
+        return {"status": "success", "speed": demo.sim_minutes_per_tick}
+    else:
+        raise HTTPException(400, f"Unknown action: {action}")
+
+@router.get("/demo/status")
+async def get_demo_status(request: Request):
+    """Get current interactive demo state."""
+    demo = getattr(request.app.state, "demo_orchestrator", None)
+    if not demo:
+        return {"is_running": False, "agent_state": "IDLE", "message": "Demo not initialized"}
+    return demo.get_status()
+
+@router.post("/sim/inject")
+async def inject_fault(payload: FaultInjectionRequest, request: Request):
+    """Inject a manual fault or condition into the running demo."""
+    demo = getattr(request.app.state, "demo_orchestrator", None)
+    if not demo or not demo.is_running:
+        raise HTTPException(503, "Demo not running. Start with POST /demo/control {action: START}")
+    
+    return await demo.inject_fault(payload.dict())
+
+@router.post("/demo/advisory/{advisory_id}/respond")
+async def respond_advisory(advisory_id: str, payload: AdvisoryResponseRequest, request: Request):
+    """Human operator responds to a pending advisory (ACCEPT/REJECT)."""
+    demo = getattr(request.app.state, "demo_orchestrator", None)
+    if not demo:
+        raise HTTPException(503, "Demo not initialized")
+    
+    return await demo.respond_to_advisory(advisory_id, payload.action, payload.reason)
+
+@router.post("/simulation/manual-control")
+async def manual_control(payload: Dict[str, Any], request: Request):
+    """
+    Simulate a physical building action (User as Environment/FM).
+    Payload: {"equipment_id": "...", "parameter": "...", "value": ...}
+    """
+    demo = getattr(request.app.state, "demo_orchestrator", None)
+    if not demo:
+        raise HTTPException(503, "Demo not initialized")
+    
+    return await demo.manual_equipment_control(
+        payload["equipment_id"], 
+        payload["parameter"], 
+        payload["value"]
+    )
+
+@router.get("/demo/advisories/pending")
+async def get_pending_advisories(request: Request):
+    """Get all advisories awaiting human response."""
+    demo = getattr(request.app.state, "demo_orchestrator", None)
+    if not demo:
+        return {"pending": [], "count": 0}
+    return {"pending": demo.pending_advisories, "count": len(demo.pending_advisories)}
+
+@router.post("/demo/initialize-building")
+async def initialize_building(payload: Dict[str, Any], request: Request):
+    """Bulk-initialize virtual equipment for the pilot."""
+    demo = getattr(request.app.state, "demo_orchestrator", None)
+    if not demo:
+        # Lazy init
+        from agent_commercial.api.demo_orchestrator import DemoOrchestrator
+        bms_state = getattr(request.app.state, "bms_state", None)
+        llm_agent = getattr(request.app.state, "llm_agent", None)
+        demo = DemoOrchestrator(bms_state=bms_state, llm_agent=llm_agent, broadcaster=broadcaster)
+        request.app.state.demo_orchestrator = demo
+    
+    return await demo.initialize_building(payload)
