@@ -5,6 +5,7 @@ Acts as the central router and orchestrator for the specialized Agent Nodes.
 
 import logging
 import asyncio
+import json
 from typing import Dict, Any, List, Optional
 from pydantic import BaseModel, Field
 
@@ -100,7 +101,6 @@ class QueenCoordinator(BaseModel):
         if 'Memory_Agent' in self.nodes and len(selected) > 0:
             selected.add('Memory_Agent')
         
-        # --- FALLBACK: P0 perception agents for general/broad queries ---
         if not selected:
             p0_agents = ['Energy_Agent', 'Alarm_Agent', 'Maintenance_Agent', 'Comfort_Agent', 'Strategic_Agent']
             selected = {name for name in p0_agents if name in self.nodes}
@@ -118,6 +118,14 @@ class QueenCoordinator(BaseModel):
         
         # 1. Route Intent
         active_nodes = await self._route_intent(query)
+        
+        # 1.1 CRITICAL GROUNDING OVERRIDE: Ensure Safety agents are active if breaches exist
+        thermal_breaches = (context or {}).get("GROUNDING_THERMAL_SAFETY", [])
+        if thermal_breaches and "Comfort_Agent" in self.nodes:
+            if not any(n.name == "Comfort_Agent" for n in active_nodes):
+                logger.info("[Queen] Thermal breaches detected in grounding. FORCE-ADDING Comfort_Agent.")
+                active_nodes.append(self.nodes["Comfort_Agent"])
+
         if not active_nodes:
              return {
                  "advice": "I could not find any specialized agents equipped to handle this request.", 
@@ -132,8 +140,8 @@ class QueenCoordinator(BaseModel):
         
         intent_prompt = (
             "You are a routing supervisor. Read the user's query about a building management system.\n"
-            "If the user is asking to change a setting, fix a problem, reduce power, or perform any physical optimization, output: {\"is_actionable\": true}\n"
-            "If the user is just asking for status, history, explanations, or data, output: {\"is_actionable\": false}\n"
+            "If the user is asking to change a setting, fix a problem, reduce power, perform any physical optimization, or SIMULATE/assess the impact of a future change, output: {\"is_actionable\": true}\n"
+            "If the user is just asking for current status, history, explanations, or data, output: {\"is_actionable\": false}\n"
             "Return ONLY the JSON dictionary."
         )
         
@@ -145,6 +153,13 @@ class QueenCoordinator(BaseModel):
             is_actionable = bool(intent_result.get("is_actionable", False))
         except Exception:
             is_actionable = False
+            
+        if not is_actionable:
+            logger.info(f"[Queen] Non-actionable query detected. Bypassing Swarm to use Fast-Path routing.")
+            return {
+                "advice": "__FAST_PATH_ROUTING__",
+                "context": context or {}
+            }
         
         if is_actionable and len(active_nodes) > 1:
             from arvis_core.swarm.consensus import ConsensusEngine, VotingRound
@@ -203,29 +218,33 @@ class QueenCoordinator(BaseModel):
                         "counterfactual_check": True
                     }]
                 }
-                import json
                 final_advice = json.dumps(final_advice_dict)
             else:
                 full_grounding_context = {**(context or {}), **aggregated_context}
                 final_advice = await self._synthesize_consensus(query, proposals, full_grounding_context)
-            
+                
         else:
-            for i, node in enumerate(active_nodes):
+            # Execute all nodes in parallel to reduce latency
+            async def run_node(node):
                 try:
-                    result_map = await node.process(query, context)
-                    proposals[node.name] = result_map["response"].content
-                    
-                    for msg in result_map["history"]:
-                        if msg.get("role") == "tool":
-                            key = f"{node.name}_{msg.get('name')}"
-                            aggregated_context[key] = msg.get("content")
-                            
+                    result = await node.process(query, context)
+                    return node.name, result, None
                 except Exception as e:
                     logger.error(f"[Queen] Node {node.name} failed: {e}")
-                    proposals[node.name] = f"Node Failed: {str(e)}"
-                
-                if i < len(active_nodes) - 1:
-                    await asyncio.sleep(INTER_NODE_DELAY)
+                    return node.name, None, e
+
+            tasks = [run_node(node) for node in active_nodes]
+            results = await asyncio.gather(*tasks)
+
+            for node_name, result_map, err in results:
+                if err:
+                    proposals[node_name] = f"Node Failed: {str(err)}"
+                else:
+                    proposals[node_name] = result_map["response"].content
+                    for msg in result_map["history"]:
+                        if msg.get("role") == "tool":
+                            key = f"{node_name}_{msg.get('name')}"
+                            aggregated_context[key] = msg.get("content")
             
             full_grounding_context = {**(context or {}), **aggregated_context}
             final_advice = await self._synthesize_consensus(query, proposals, full_grounding_context)
@@ -281,12 +300,13 @@ class QueenCoordinator(BaseModel):
             
         user_message = (
             f"Original Query: {original_query}\n\n"
+            f"Grounding Context (FACTS): {json.dumps(context, default=str)}\n\n"
             f"Agent Proposals:\n{proposals_text}\n\n"
-            "Please synthesize these into the final ARVIS Advisory JSON."
+            "Please synthesize these into the final ARVIS Advisory JSON. "
+            "CRITICAL: If 'GROUNDING_THERMAL_SAFETY' contains items, you MUST generate a high-priority advisory even if agent proposals are weak."
         )
         
         logger.info(f"[Queen] Synthesizing consensus across {len(proposals)} proposals...")
-        import json
         logger.debug(f"[Queen] Grounding Context for synthesis: {json.dumps(context)[:1000]}...")
         
         try:

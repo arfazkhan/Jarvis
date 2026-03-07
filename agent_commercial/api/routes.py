@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
+import uuid
 from enum import Enum
 import logging
 
@@ -44,6 +45,7 @@ class ChatRequest(BaseModel):
     """Natural language query request"""
     query: str = Field(..., description="User's question in English or Arabic")
     context: Optional[Dict[str, Any]] = Field(default=None, description="Additional context")
+    session_id: Optional[str] = Field(default=None, description="Optional UUID to resume a conversation")
 
 
 class ChatResponse(BaseModel):
@@ -52,6 +54,7 @@ class ChatResponse(BaseModel):
     confidence: float = Field(..., ge=0, le=1)
     sources: List[str] = []
     suggested_actions: List[str] = []
+    session_id: Optional[str] = None
 
 
 class EquipmentStatusResponse(BaseModel):
@@ -523,8 +526,42 @@ def create_api(
             if request.context:
                 context.update(request.context)
             
+            # Handle Chat Session
+            session_id = request.session_id
+            
+            # Use AdvisoryDatabase since BMSDatabase might not be directly hooked, but let's try BMSDatabase first
+            # Actually, the user stated `BMSDatabase` in the plan so we use `app.state.bms_state.db`
+            db = getattr(state, "db", None)
+            
+            history = []
+            if db:
+                if not session_id:
+                    session_id = str(uuid.uuid4())
+                    title = "Session " + session_id[:8]
+                    if len(request.query) > 5:
+                        title = request.query[:30] + ("..." if len(request.query) > 30 else "")
+                    await db.create_chat_session(session_id, title)
+                else:
+                    # Fetch previous history to feed as context
+                    raw_hist = await db.get_chat_history(session_id, limit=20)
+                    for row in raw_hist:
+                        history.append({"role": row["role"], "content": row["content"]})
+                        
+                # Log User message
+                await db.add_chat_message(session_id, str(uuid.uuid4()), "user", request.query)
+            
+            # Pass history in context if available
+            if history:
+                context["chat_history"] = history[-10:] # Keep context window sane
+                
             # Call the BMS LLM agent
             response = await llm.chat(request.query, context)
+            
+            # Log Assistant message
+            if db and session_id:
+                # Store text (thoughts are streamed out of band, so we may only want the final answer here)
+                await db.add_chat_message(session_id, str(uuid.uuid4()), "assistant", response.text)
+
             
             # Extract suggested actions from tool results
             suggested_actions = []
@@ -541,11 +578,40 @@ def create_api(
                 confidence=response.confidence,
                 sources=response.sources,
                 suggested_actions=suggested_actions[:5],  # Top 5 actions
+                session_id=session_id
             )
             
         except Exception as e:
             logger.error(f"Chat error: {e}")
             raise HTTPException(500, f"Chat processing failed: {str(e)}")
+
+    @app.get("/api/v1/chat/sessions")
+    async def get_chat_sessions(limit: int = Query(50, description="Max sessions to return")):
+        """Get all past chat sessions for the sidebar."""
+        state = app.state.bms_state
+        db = getattr(state, "db", None)
+        if not db:
+            return []
+        
+        try:
+            return await db.get_chat_sessions(limit=limit)
+        except Exception as e:
+            logger.error(f"Failed to fetch chat sessions: {e}")
+            raise HTTPException(500, "Database unavailable")
+
+    @app.get("/api/v1/chat/sessions/{session_id}/history")
+    async def get_chat_session_history(session_id: str):
+        """Retrieve history array for a specific chat session."""
+        state = app.state.bms_state
+        db = getattr(state, "db", None)
+        if not db:
+            return []
+            
+        try:
+            return await db.get_chat_history(session_id)
+        except Exception as e:
+            logger.error(f"Failed to fetch chat history: {e}")
+            raise HTTPException(500, "Database unavailable")
     
     # ═══════════════════════════════════════════════════════════════════════
     # PREDICTIVE MAINTENANCE ENDPOINTS

@@ -134,17 +134,60 @@ class DemoOrchestrator:
         
         eq_list = config.get("equipment", [])
         for eq_data in eq_list:
+            # Robust EquipmentType mapping (supports name or value)
+            eq_type_str = eq_data["type"].upper()
+            try:
+                e_type = EquipmentType[eq_type_str]
+            except KeyError:
+                # Fallback to value lookup
+                e_type = EquipmentType(eq_data["type"].lower())
+
             eq = Equipment(
                 equipment_id=eq_data["id"],
                 name=eq_data.get("name", eq_data["id"]),
-                equipment_type=EquipmentType(eq_data["type"].upper()),
+                equipment_type=e_type,
                 location=eq_data.get("location", config.get("building_id", "Unknown")),
-                status=EquipmentStatus.OK
+                status=EquipmentStatus.RUNNING
             )
             await self.bms_state.register_equipment(eq)
             
             # Initialize default points for this equipment type
             await self._init_default_points(eq.equipment_id, eq.equipment_type)
+
+        # ⚠️ PRE-WARM DATABASE WITH SYNTHETIC HISTORY FOR UI
+        try:
+            from agent_commercial.database import get_database
+            import random
+            from datetime import timedelta
+            db = get_database()
+            if db:
+                conn = await db._get_async_connection()
+                today = datetime.now()
+                # 1. Seed GSAS Score history
+                await conn.execute("DELETE FROM gsas_scores") 
+                await conn.execute(
+                    "INSERT INTO gsas_scores (building_id, overall_score, certification_level, category_scores, timestamp) VALUES (?, ?, ?, ?, ?)",
+                    (config.get("building_id", "DOHA-TOWER-001"), 4.5, "Gold", json.dumps({"energy":4, "water":5, "ieq":4}), today.isoformat())
+                )
+                await conn.commit()
+
+                # 2. Seed 7 days of Energy Readings
+                await conn.execute("DELETE FROM energy_readings") 
+                for i in range(7):
+                    day_ts = today - timedelta(days=6-i)
+                    is_weekend = day_ts.weekday() >= 5
+                    base = 8000 if is_weekend else 11000
+                    val = base + random.randint(0, 3000)
+                    
+                    # We will store this as a daily aggregation for simplicity of the UI query
+                    await conn.execute(
+                        "INSERT INTO energy_readings (meter_id, value, unit, outdoor_temp, occupancy, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+                        ("MAIN-METER", val, "kWh", 35.0, 0.8, day_ts.isoformat())
+                    )
+                await conn.commit()
+                logger.info("Successfully seeded database with historic energy/GSAS data")
+        except Exception as e:
+            logger.error(f"Failed to seed history: {e}")
 
         logger.info(f"Initialized building with {len(eq_list)} equipments")
         return {"status": "success", "count": len(eq_list)}
@@ -223,7 +266,7 @@ class DemoOrchestrator:
     
     def set_speed(self, sim_minutes_per_tick: int):
         """Adjust simulation speed (more sim-minutes per real-second tick)."""
-        self.sim_minutes_per_tick = max(1, min(sim_minutes_per_tick, 120))
+        self.sim_minutes_per_tick = max(1, min(sim_minutes_per_tick, 10000))
         logger.info(f"Demo speed set to {self.sim_minutes_per_tick} sim-minutes per tick")
 
     # ─────────────────────────────────────────────────────────────────────
@@ -243,7 +286,7 @@ class DemoOrchestrator:
             point_id=f"{equipment_id}_{parameter}",
             equipment_id=equipment_id,
             name=f"{equipment_id} {parameter}",
-            point_type=PointType.ANALOG_INPUT if isinstance(value, (int, float)) else PointType.DIGITAL_INPUT,
+            point_type=PointType.SENSOR if isinstance(value, (int, float)) else PointType.STATUS,
             value=value,
             quality=PointQuality.GOOD,
             timestamp=self.sim_time,

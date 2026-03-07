@@ -1,94 +1,37 @@
-# UI Mapping Guide: Omega Infinity Artifacts
+# UI Mapping Guide: Swarm & Interactive Demo
 
-This guide explains how to map the internal simulation events and logs to specific UI components such as "Thinking", "Tool Calls", and "Plans".
+This guide explains how to map background swarm events and simulation states to specific UI components for a production-grade interactive demo.
 
-## 1. Thinking (Internal Monologue)
-Shows the agent's internal reasoning process before or during actions.
+## 1. Ambient Thinking (Background Monitoring)
+Shows the building's autonomous monitoring even when not "acting".
 
-- **Event Type**: `think` (via Tool Use) or `progress` (via Turn Summary).
-- **Log Pattern**: `UI_LOG: Morning briefing...` or lines ending in `-> INVESTIGATED`.
-- **SSE Payload**:
-  ```json
-  {
-    "event": "tool_use",
-    "data": {
-      "tool": "think",
-      "args": { "reasoning": "[PLAN] Analyzing vibration drift on CH-01..." },
-      "step": 1
-    }
-  }
-  ```
-- **UI Implementation**: Display the `reasoning` string in a "Thought Process" or "Mental Model" accordion.
+- **Event Type**: [thought](file:///e:/Automation/tests/omega_stress_test/omega_test_runner.py#2219-2251) (via SSE).
+- **Source**: [QueenCoordinator](file:///e:/Automation/arvis_core/swarm/queen.py#17-301) background loops.
+- **UI Component**: A fading "Neural Activity" ticker or a "Pulse" indicator.
+- **Message Logic**: Filter for "Monitoring", "Stabilizing", or "Analyzing" prefixes.
 
-## 2. Plans (Strategy)
-Shows the sequence of tools the agent intends to call for the current objective.
+## 2. Swarm Conflict (BFT Debate)
+Visualizes the internal debate between specialized agents.
 
-- **Event Type**: `plan`
-- **Source**: Emitted at the start of each ReAct turn in [bms_llm_agent.py](file:///e:/Automation/agent_commercial/bms_llm_agent.py).
-- **SSE Payload**:
-  ```json
-  {
-    "event": "plan",
-    "data": {
-      "step": 1,
-      "planned_tools": ["get_equipment_status", "analyze_energy", "think"],
-      "reasoning": "Verify chiller health before checking energy correlations."
-    }
-  }
-  ```
-- **UI Implementation**: Use a horizontal step-indicator or a "Next Actions" list using the `planned_tools` array.
+- **Event Type**: `swarm_event`.
+- **Payload**: `{"agent": "Comfort", "action": "VETO", "reason": "Occupant safety breach"}`.
+- **UI Component**: A "Swarm War Room" view with cards for each active agent (Energy, Comfort, Strategic). Highlight VETO actions in red.
 
-## 3. Tool Calls (Execution)
-Shows the specific functions being executed and their arguments.
+## 3. Truth-Score Gauge (Grounding)
+A real-time indicator of how well the AI's "hallucinated" projections match the "real" building sensors.
 
-- **Event Type**: `tool_use` (Input) and [tool_result](file:///e:/Automation/agent_commercial/bms_llm_agent.py#1184-1208) (Output).
-- **Log Pattern**: Traceable via `agent_commercial/tools/` execution logs.
-- **SSE Payload (Input)**:
-  ```json
-  {
-    "event": "tool_use",
-    "data": {
-      "tool": "get_equipment_status",
-      "args": { "equipment_id": "CHILLER-01" },
-      "status": "running"
-    }
-  }
-  ```
-- **SSE Payload (Output)**:
-  ```json
-  {
-    "event": "tool_result",
-    "data": {
-      "tool": "get_equipment_status",
-      "result": "Status: RUNNING, Vibration: 3.2mm/s, Temp: 7.2C"
-    }
-  }
-  ```
-- **UI Implementation**: A "Console" or "Activity Log" component showing function names and their corresponding JSON results.
+- **Event Type**: `truth_score`.
+- **UI Component**: A circular gauge (0-100%).
+- **State mapping**:
+    - **95-100%**: SOLID (Verified)
+    - **80-94%**: DRIFT (Warning)
+    - **<80%**: UNSAFE (Withheld)
 
-## 4. Task List (Objectives)
-The high-level "To-Do" list derived dynamically from the user's query.
+## 4. Interactive Simulation Control
+Maps manual UI actions to simulation injections.
 
-- **Event Type**: `task_list`
-- **SSE Payload**:
-  ```json
-  {
-    "event": "task_list",
-    "data": {
-      "tasks": [
-        { "id": "data_fault", "task": "Investigate equipment telemetry", "status": "completed" },
-        { "id": "reason", "task": "Synthesize findings", "status": "in-progress" }
-      ]
-    }
-  }
-  ```
-- **UI Implementation**: A sidebar checklist that updates its `status` (todo, in-progress, completed) in real-time.
-
-## Summary Table
-
-| UI Requirement | Event Key | Key Field | Source Component |
-| :--- | :--- | :--- | :--- |
-| **Thinking** | `think` / `progress` | `reasoning` / `content` | `BMSLLMAgent` + `Sovereign Tool` |
-| **Plans** | `plan` | `planned_tools` | `BMSLLMAgent._generate_tool_calls` |
-| **Tool Calls** | `tool_use` | `tool`, `args` | `ToolHandler` |
-| **Final Summary** | `summary` | `content` | `BMSLLMAgent._generate_final_summary` |
+| UI Action | API Call | Sim Impact |
+| :--- | :--- | :--- |
+| **Fault Switch** | `POST /sim/inject` | Trips equipment (e.g. Chiller vibration ramp). |
+| **Accept Advisory** | `POST /advisories/{id}/acknowledge` | Executes the swarm's proposed fix in the physics engine. |
+| **Speed Slider** | `POST /sim/control` | Adjusts how many simulation hours pass per real-time minute. |

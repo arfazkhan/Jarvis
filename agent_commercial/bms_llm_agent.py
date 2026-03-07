@@ -634,7 +634,7 @@ class BMSLLMAgent:
 
             # 2. Reasoning Tasks
             if task["id"] == "reason":
-                if any(tc["tool"] in ["simulate_change", "think", "forecast_energy"] for tc in current_tools):
+                if any(tc["tool"] in ["simulate_change", "forecast_energy"] for tc in current_tools):
                     if task["status"] == "todo": task["status"] = "in-progress"
                 # If we've completed all data tasks, we're reasoning
                 data_tasks = [t for t in todo_list if t["id"].startswith("data")]
@@ -752,7 +752,39 @@ class BMSLLMAgent:
             asyncio.create_task(broadcaster.broadcast("progress", {"content": "The ARVIS Queen is routing your query to specialized Swarm Nodes..."}))
             asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": [{"id": "swarm", "task": "Multi-Agent Debate & Consensus", "status": "in_progress"}]}))
             
-            # DELEGATE TO SWARM
+            # 1. GROUNDING INJECTION: Fast concurrent fetch
+            try:
+                alarms = await self.bms_state.get_active_alarms()
+                context["GROUNDING_ALARMS"] = [a.to_dict() for a in alarms]
+                
+                thermal_breaches = []
+                equipment = await self.bms_state.get_all_equipment()
+                
+                target_eqs = [eq for eq in equipment if eq.equipment_type in ["ahu", "chiller", "cooling_tower"]]
+                
+                async def fetch_and_check(eq):
+                    breaches = []
+                    points = await self.bms_state.get_points_by_equipment(eq.equipment_id)
+                    for p in points:
+                        if "temp" in p.name.lower() or "sat" in p.point_id.lower():
+                            if p.value and p.value > 25.0:
+                                breaches.append({
+                                    "equipment": eq.equipment_id,
+                                    "point": p.name,
+                                    "value": p.value,
+                                    "status": "CRITICAL" if p.value > 30.0 else "WARNING"
+                                })
+                    return breaches
+                
+                results = await asyncio.gather(*[fetch_and_check(eq) for eq in target_eqs])
+                for res in results:
+                    thermal_breaches.extend(res)
+                    
+                context["GROUNDING_THERMAL_SAFETY"] = thermal_breaches
+            except Exception as e:
+                logger.error(f"Grounding injection failed: {e}")
+                
+            # 2. DELEGATE TO SWARM
             swarm_payload = await self.queen.execute_swarm(query, context)
             
             # Swarm now returns a dict with the consensus AND the raw tool context discovered by nodes
@@ -763,6 +795,35 @@ class BMSLLMAgent:
                 final_advice = str(swarm_payload)
                 swarm_context = {}
                 
+            if final_advice == "__FAST_PATH_ROUTING__":
+                logger.info("[Queen] Executing Agentic Fast-Path via Tool Agent...")
+                from arvis_core.swarm.node import SwarmNode
+                
+                fast_node = SwarmNode(
+                    name="Fast_Router",
+                    role="You are ARVIS, a smart building assistant. You must ALWAYS use tools to check the real-world state of equipment before answering status queries. Be concise, factual, and helpful. Do not output xml reasoning tags.",
+                    tools=self.tools,
+                    tool_handler=self.tool_handler,
+                    llm=self.llm
+                )
+                
+                try:
+                    fast_result = await fast_node.process(query, context)
+                    fast_text = fast_result["response"].content
+                except Exception as e:
+                    logger.error(f"Fast-Path failed: {e}")
+                    fast_text = "Fast-Path routing failed."
+                    
+                asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": [{"id": "swarm", "task": "Fast-Path Resolved", "status": "completed"}]}))
+                return ChatResponse(
+                    text=fast_text,
+                    tool_calls=[],
+                    tool_results=[],
+                    confidence=0.99,
+                    language=language,
+                    sources=["ARVIS Fast-Path Router"]
+                )
+
             # Merge the facts discovered by Swarm Nodes into the ground truth context for the Validator
             full_context = {**(context or {}), **swarm_context}
             
@@ -959,7 +1020,7 @@ class BMSLLMAgent:
                 f"### Investigation History\n{history_text}\n\n"
                 "### Grounded Todo List Management\n"
                 "You are in a multi-turn investigative loop. You MUST maintain a mental Todo List using these STRICT rules:\n"
-                "1. **STRATEGIC TAGGING**: Every `think` tool call MUST start with one of: [PLAN], [DECIDE], [VERIFY], or [EXIT].\n"
+                "1. **STRATEGIC TAGGING**: Every <think> block MUST start with one of: [PLAN], [DECIDE], [VERIFY], or [EXIT].\n"
                 "2. **NO HALLUCINATION**: Only add items to the Todo list that are directly requested by the user or necessitated by a SPECIFIC tool result...\n"
                 "3. **EVIDENCE-BASED PROGRESS**: To mark a task as 'Complete', you MUST cite the specific evidence from tool results.\n"
                 "4. **SKEPTICISM**: If a tool returns an error, do NOT assume success.\n\n"

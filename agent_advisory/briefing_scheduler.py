@@ -165,6 +165,20 @@ class BriefingScheduler:
         resolution = getattr(self.goal_generator, '_last_resolution', None)
         briefing = BriefingGenerator.generate_daily_briefing(building_id, goals, resolution)
         self._deliver_briefing(briefing)
+
+    async def generate_briefing(self, building_id: str = "default", briefing_type: str = "daily_morning", focus_area: Optional[str] = None) -> Dict[str, Any]:
+        """On-demand briefing generation."""
+        logger.info(f"On-demand briefing requested: {briefing_type} for {building_id}")
+        goals = self.goal_generator.generate_goals(building_id)
+        
+        # Filter for focus area if provided
+        if focus_area:
+             goals = [g for g in goals if focus_area.lower() in g.description.lower() or focus_area.lower() in g.title.lower()]
+             
+        resolution = getattr(self.goal_generator, '_last_resolution', None)
+        briefing = BriefingGenerator.generate_daily_briefing(building_id, goals, resolution)
+        
+        return briefing.to_dict()
         
     async def _run_urgent_check(self, building_id: str):
         """Check for urgent risks requiring immediate alert"""

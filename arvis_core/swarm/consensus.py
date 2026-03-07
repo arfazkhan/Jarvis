@@ -39,11 +39,11 @@ class ConsensusEngine:
         
         votes: List[VoteResult] = []
         
-        # Sequentially ask for votes to avoid API rate limits
-        for node in quorum:
+        # Run quorum checks in parallel to reduce BFT latency
+        async def run_vote(node):
             if node.name == round_data.proposer_name:
-                continue # Proposer implicitly approves
-                
+                return None
+            
             logger.info(f"[Consensus] Seeking peer review from {node.name}...")
             
             prompt = (
@@ -55,16 +55,12 @@ class ConsensusEngine:
                 f"Output your final judgment in strict JSON: {{\"vote\": \"APPROVE\" or \"VETO\", \"reasoning\": \"Detailed technical reason\"}}"
             )
             
-            # Using process to allow the peer reviewer to use their tools
-            result_map = await node.process(query=prompt, context=round_data.context)
-            
-            # Try to parse the final response as JSON
-            raw_response = result_map["response"].content
-            
-            # Find JSON payload
             try:
+                result_map = await node.process(query=prompt, context=round_data.context)
+                raw_response = result_map["response"].content
+                
+                # Find JSON payload
                 import json
-                # Basic JSON extraction
                 content = raw_response
                 if "```json" in content:
                     content = content.split("```json")[1].split("```")[0].strip()
@@ -74,26 +70,33 @@ class ConsensusEngine:
                 vote_data = json.loads(content)
                 vote = vote_data.get("vote", "VETO").upper()
                 reasoning = vote_data.get("reasoning", "Failed to parse reasoning")
+                
+                reviewer_context = {}
+                for msg in result_map["history"]:
+                    if msg.get("role") == "tool":
+                        reviewer_context[msg.get("name")] = msg.get("content")
+                        
+                return VoteResult(
+                    agent_name=node.name,
+                    vote=vote,
+                    reasoning=reasoning,
+                    tool_observations=reviewer_context
+                )
             except Exception as e:
                 logger.error(f"[Consensus] Failed to parse vote from {node.name}: {e}. Defaulting to VETO for safety.")
-                vote = "VETO"
-                reasoning = f"Parse error or bad format: {raw_response[:100]}"
-                
-            # Grab tool context used by reviewer
-            reviewer_context = {}
-            for msg in result_map["history"]:
-                if msg.get("role") == "tool":
-                    reviewer_context[msg.get("name")] = msg.get("content")
-                    
-            votes.append(VoteResult(
-                agent_name=node.name,
-                vote=vote,
-                reasoning=reasoning,
-                tool_observations=reviewer_context
-            ))
-            
-            # Delay for rate limit
-            await asyncio.sleep(3.0)
+                return VoteResult(
+                    agent_name=node.name,
+                    vote="VETO",
+                    reasoning=f"Agent exception/Parse error: {e}",
+                    tool_observations={}
+                )
+
+        tasks = [run_vote(node) for node in quorum]
+        results = await asyncio.gather(*tasks)
+        
+        for res in results:
+            if res:
+                votes.append(res)
             
         vetoes = [v for v in votes if v.vote == "VETO"]
         

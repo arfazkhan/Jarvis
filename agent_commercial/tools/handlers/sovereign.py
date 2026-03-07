@@ -18,7 +18,6 @@ class SovereignHandlerMixin:
     def get_handlers(cls, instance) -> dict:
         """Return dict of tool name -> handler method."""
         return {
-            "think": instance._handle_think,
             "query_skillbook": instance._handle_query_skillbook,
             "add_to_skillbook": instance._handle_add_to_skillbook,
             "compare_to_fleet": instance._handle_compare_to_fleet,
@@ -26,39 +25,7 @@ class SovereignHandlerMixin:
             "correlate_events": instance._handle_correlate_events,
         }
     
-    async def _handle_think(self, args: Dict) -> Dict:
-        """Handle internal reasoning tool - mostly for logging/tracing"""
-        reasoning = args.get("reasoning")
-        if not reasoning:
-            # Try to extract from plan if provided
-            plan = args.get("plan", [])
-            if plan and isinstance(plan, list):
-                reasoning = f"Executing plan with {len(plan)} steps: {', '.join(plan)}"
-            else:
-                reasoning = "Analyzing system state and preparing recommendations."
-        
-        plan = args.get("plan", [])
-        
-        logger.info(f"[Think] {reasoning}")
-        if plan:
-            logger.info(f"[Plan] {plan}")
-            
-        # GLASS BOX: Broadcast reasoning
-        try:
-            from agent_commercial.api.sse_broadcaster import SSEBroadcaster
-            import asyncio
-            asyncio.create_task(SSEBroadcaster().broadcast("think", {
-                "content": reasoning,
-                "plan": plan
-            }))
-        except ImportError:
-            pass
-            
-        return {
-            "status": "acknowledged",
-            "reasoning": reasoning,
-            "plan_step_count": len(plan)
-        }
+
     
     async def _handle_query_skillbook(self, args: Dict) -> Dict:
         """Query the building's institutional memory"""

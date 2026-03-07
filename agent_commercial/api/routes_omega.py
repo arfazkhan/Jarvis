@@ -19,6 +19,8 @@ from typing import Dict, Any, List, Optional
 import asyncio
 import json
 import logging
+import uuid
+from datetime import datetime
 
 from agent_commercial.api.sse_broadcaster import SSEBroadcaster
 
@@ -31,6 +33,7 @@ class ConfigSetupRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     query: str
+    session_id: Optional[str] = Field(default=None, description="Optional UUID to resume a conversation")
 
 class EquipmentOverrideRequest(BaseModel):
     equipment_id: str
@@ -55,13 +58,32 @@ async def stream_thoughts(request: Request):
     """
     Stream live AI thought process (K2 Think blocks), plans, and tool usage.
     """
+    from fastapi.responses import StreamingResponse
+    
     async def event_generator():
         async for data in broadcaster.subscribe():
             if await request.is_disconnected():
                 break
-            yield data
+            
+            # Extract event and data from broadcaster message
+            event = data.get("event", "message")
+            payload = data.get("data", "{}")
+            
+            # Format as SSE event
+            yield f"event: {event}\ndata: {payload}\n\n"
 
-    return EventSourceResponse(event_generator())
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "X-ARVIS-KEY, Authorization, Content-Type",
+            "Access-Control-Allow-Methods": "GET, OPTIONS"
+        }
+    )
 
 # ═══════════════════════════════════════════════════════════════════════════
 # ADVISORIES (Terminal & Integrity)
@@ -268,16 +290,74 @@ async def interactive_chat(payload: ChatRequest, request: Request):
     if not agent:
         raise HTTPException(503, "LLM Agent not initialized")
     
+    # Session Persistence
+    session_id = payload.session_id
+    state = getattr(request.app.state, "bms_state", None)
+    db = getattr(state, "db", None)
+    
+    history_ctx = []
+    if db:
+        if not session_id:
+            session_id = str(uuid.uuid4())
+            title = "Session " + session_id[:8]
+            if len(payload.query) > 5:
+                title = payload.query[:30] + ("..." if len(payload.query) > 30 else "")
+            await db.create_chat_session(session_id, title)
+        else:
+            raw_hist = await db.get_chat_history(session_id, limit=20)
+            for row in raw_hist:
+                history_ctx.append({"role": row["role"], "content": row["content"]})
+        
+        # Log User Query
+        await db.add_chat_message(session_id, str(uuid.uuid4()), "user", payload.query)
+        
+    # Inject context
+    chat_context = {"user_id": "INTERACTIVE_USER", "source": "glass_box_ui"}
+    if history_ctx:
+        chat_context["chat_history"] = history_ctx[-10:]
+    
     response = await agent.chat(
         query=payload.query,
-        context={"user_id": "INTERACTIVE_USER", "source": "glass_box_ui"}
+        context=chat_context
     )
+    
+    if db and session_id and response:
+        await db.add_chat_message(session_id, str(uuid.uuid4()), "assistant", response.text)
     
     return {
         "response": response.text if response else "Error: No response generated",
         "confidence": getattr(response, 'confidence', 0.9),
-        "tool_calls": getattr(response, 'tool_calls', [])
+        "tool_calls": getattr(response, 'tool_calls', []),
+        "session_id": session_id
     }
+
+@router.get("/chat/sessions")
+async def get_chat_sessions(request: Request, limit: int = 50):
+    """Get all past chat sessions for the sidebar."""
+    state = getattr(request.app.state, "bms_state", None)
+    db = getattr(state, "db", None)
+    if not db:
+        return []
+    
+    try:
+        return await db.get_chat_sessions(limit=limit)
+    except Exception as e:
+        logger.error(f"Failed to fetch chat sessions: {e}")
+        raise HTTPException(500, "Database unavailable")
+
+@router.get("/chat/sessions/{session_id}/history")
+async def get_chat_session_history(session_id: str, request: Request):
+    """Retrieve history array for a specific chat session."""
+    state = getattr(request.app.state, "bms_state", None)
+    db = getattr(state, "db", None)
+    if not db:
+        return []
+        
+    try:
+        return await db.get_chat_history(session_id)
+    except Exception as e:
+        logger.error(f"Failed to fetch chat history: {e}")
+        raise HTTPException(500, "Database unavailable")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # INTERACTIVE DEMO MODE (Human-in-the-Loop)
@@ -296,7 +376,7 @@ class AdvisoryResponseRequest(BaseModel):
 
 class DemoControlRequest(BaseModel):
     action: str = Field(..., description="START, STOP, PAUSE, RESUME, SET_SPEED")
-    speed: Optional[int] = Field(None, description="Sim-minutes per real-second tick (1-120)")
+    speed: Optional[int] = Field(None, description="Sim-minutes per real-second tick (1-10000)")
 
 @router.post("/demo/control")
 async def control_demo(payload: DemoControlRequest, request: Request):
@@ -314,6 +394,8 @@ async def control_demo(payload: DemoControlRequest, request: Request):
     action = payload.action.upper()
     
     if action == "START":
+        if payload.speed:
+            demo.set_speed(payload.speed)
         return await demo.start()
     elif action == "STOP":
         return await demo.stop()
@@ -392,3 +474,28 @@ async def initialize_building(payload: Dict[str, Any], request: Request):
         request.app.state.demo_orchestrator = demo
     
     return await demo.initialize_building(payload)
+
+@router.get("/demo/equipment/details")
+async def get_equipment_details(request: Request):
+    """Get real-time details of all initialized equipment."""
+    bms_state = getattr(request.app.state, "bms_state", None)
+    if not bms_state:
+        raise HTTPException(503, "BMS State not initialized")
+    
+    snapshot = await bms_state.get_snapshot()
+    equipment = await bms_state.get_all_equipment()
+    
+    details = []
+    current_values = snapshot.get("current_values", {})
+    for eq in equipment:
+        eq_data = eq.to_dict()
+        eq_points = {}
+        for point_id in eq.data_points:
+            if point_id in current_values:
+                # Remove equipment_id prefix from point name for cleaner display
+                param_name = point_id.replace(f"{eq.equipment_id}_", "")
+                eq_points[param_name] = current_values[point_id]
+        eq_data["realtime_data"] = eq_points
+        details.append(eq_data)
+        
+    return {"equipment": details, "total": len(details)}

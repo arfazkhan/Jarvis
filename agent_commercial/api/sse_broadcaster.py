@@ -2,6 +2,7 @@ import asyncio
 import logging
 from typing import Dict, Any, List, AsyncGenerator
 import json
+from datetime import datetime
 
 logger = logging.getLogger("arvis.api.sse")
 
@@ -33,6 +34,27 @@ class SSEBroadcaster:
         """
         if not self._queues:
             return
+
+        # --- Inject User-Friendly Formatting ---
+        try:
+            from agent_commercial.api.formatters import format_agent_name, format_tool_name
+            if isinstance(data, dict):
+                # Alias Agent names in thoughts
+                if event_type == "thought" and "node" in data:
+                    data["node"] = format_agent_name(data["node"])
+                # Alias Tool names in tool_use
+                elif event_type == "tool_use" and "tool" in data:
+                    data["tool"] = format_tool_name(data["tool"])
+                # Alias Task names if they contain agent names
+                elif event_type == "task_list" and "tasks" in data:
+                    for t in data["tasks"]:
+                        if "task" in t:
+                            for raw_node in ["Energy_Agent", "Comfort_Agent", "Strategic_Agent", "Alarm_Agent", "Maintenance_Agent", "Memory_Agent", "Fast_Router"]:
+                                if raw_node in t["task"]:
+                                    t["task"] = t["task"].replace(raw_node, format_agent_name(raw_node))
+        except ImportError:
+            pass
+        # ---------------------------------------
 
         message = {
             "event": event_type,
@@ -73,10 +95,22 @@ class SSEBroadcaster:
         self._loops[q_id] = loop
         
         try:
+            # Yield initial connection event
+            yield {"event": "system", "data": json.dumps({"message": "SSE Stream Connected"})}
+            
             while True:
-                message = await queue.get()
-                yield message
+                try:
+                    # Wait for message with timeout for heartbeat
+                    message = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    yield message
+                except asyncio.TimeoutError:
+                    # Send keep-alive ping
+                    yield {"event": "ping", "data": json.dumps({"timestamp": str(datetime.now())})}
         except asyncio.CancelledError:
             self._queues = [item for item in self._queues if item[0] != q_id]
             self._loops.pop(q_id, None)
             raise
+        except Exception as e:
+            logger.error(f"SSE Subscribe Error: {e}")
+            self._queues = [item for item in self._queues if item[0] != q_id]
+            self._loops.pop(q_id, None)

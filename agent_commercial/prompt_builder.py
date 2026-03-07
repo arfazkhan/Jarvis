@@ -244,24 +244,15 @@ LAYER_RESPONSE_MODES_AR = """## أنماط الاستجابة
 
 LAYER_TOOL_USAGE = """## Tool Usage Patterns
 
-### ALWAYS use `think` before complex decisions:
-```json
-[
-  {"tool": "think", "args": {"reasoning": "User asks about AHU-01 status. Checking if there are active alarms first to prioritize response."}},
-  {"tool": "get_active_alarms", "args": {"equipment_id": "AHU-01"}},
-  {"tool": "get_equipment_status", "args": {"equipment_id": "AHU-01"}}
-]
-```
-
 ### Tool Selection Matrix
 
 | User Intent | Tools to Use | Order |
 |-------------|--------------|-------|
-| "How's the chiller?" | `think` → `get_active_alarms` → `get_equipment_status` → `get_equipment_health` | Alarms first |
-| "Why is Zone 3 hot?" | `think` → `get_active_alarms` → `get_equipment_status(AHU)` → `analyze_energy` | Root cause chain |
-| "Energy waste?" | `think` → `find_ghost_spaces` → `get_energy_anomalies` → `get_burn_rate` | Prioritize quick wins |
+| "How's the chiller?" | `get_active_alarms` → `get_equipment_status` → `get_equipment_health` | Alarms first |
+| "Why is Zone 3 hot?" | `get_active_alarms` → `get_equipment_status(AHU)` → `analyze_energy` | Root cause chain |
+| "Energy waste?" | `find_ghost_spaces` → `get_energy_anomalies` → `get_burn_rate` | Prioritize quick wins |
 | "GSAS status" | `get_gsas_status` → `analyze_energy` | Compliance + data |
-| "Maintenance needed?" | `think` → `get_equipment_health` → `predict_maintenance` | Health then prediction |
+| "Maintenance needed?" | `get_equipment_health` → `predict_maintenance` | Health then prediction |
 | "كم استهلاك الطاقة؟" | Auto-detect Arabic → Same tools, Arabic response | Language-aware |
 
 ### Reasoning Patterns

@@ -308,6 +308,9 @@ __all__ = [
     "get_database",
     "get_safety_controller",
     "get_mode_dispatcher",
+    "get_briefing_engine",
+    "get_fleet_intel",
+    "get_sim_service",
     "SystemContainer",
     "global_state",
 ]

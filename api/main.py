@@ -12,7 +12,7 @@ from api.routers import (
     bms_energy, maintenance, personality, sensors,
     automations, llm, firmware,
     core, conversation, planning, infrastructure,
-    voice, learning,
+    voice, learning, auth, compatibility,
     # We will import others as we create them
 )
 
@@ -49,6 +49,11 @@ elif ARVIS_VERTICAL == "COMMERCIAL":
     from agent_unified.engines.real_bms import RealBMS # Used as adapter
     from agent_commercial.api.routes_omega import router as omega_router
     from agent_commercial.api.sim_service import SimServiceMaster
+    from agent_commercial.bms_state_engine import BMSStateEngine
+    from agent_commercial.learning.learning_engine import BMSLearningEngine
+    from agent_advisory.briefing_scheduler import BriefingScheduler
+    from agent_advisory.goal_generator import GoalGenerator
+    from agent_commercial.fleet_intelligence import FleetIntelligence
     # Commercial explicitly does NOT load Matter, AutomationEngine, etc.
 
 
@@ -117,26 +122,37 @@ async def lifespan(app: FastAPI):
 
     elif ARVIS_VERTICAL == "COMMERCIAL":
         logger.info("🏢 Initializing COMMERCIAL Stack...")
-        # Commercial Stack
         
-        # Initialize BMS Adapter
+        # 1. BMS State Engine (The digital twin)
+        from agent_commercial.database import BMSDatabase
+        global_state.bms_state = BMSStateEngine()
+        global_state.bms_state.set_database(BMSDatabase())
+        app.state.bms_state = global_state.bms_state
+        
+        # 2. BMS Adapter
         global_state.real_bms = RealBMS(config={"bacnet": {"device_id": 9999}})
-        # await global_state.real_bms.connect() # Optional auto-connect
         
-        # Initialize Commercial Agent
-        global_state.bms_agent = BMSLLMAgent(
-            # Pass verified engines if needed, or let it init defaults
-        )
-        # Map to llm_agent generic slot for API compatibility if needed
-        # global_state.llm_agent = global_state.bms_agent 
-        # (Only if BMSLLMAgent interface matches LLMAgent exactly, otherwise keep separate)
-
-        logger.info("✅ Commercial BMS Agent Active")
-
-        # Initialize background simulation service
+        # 3. Commercial Agent (Cognitive Layer)
+        global_state.bms_agent = BMSLLMAgent(bms_state=global_state.bms_state)
+        global_state.llm_agent = global_state.bms_agent # Alias for compatibility
+        app.state.llm_agent = global_state.bms_agent
+        
+        # 4. Learning Engine
+        global_state.learning_engine = BMSLearningEngine(llm_agent=global_state.bms_agent)
+        await global_state.learning_engine.start()
+        
+        # 5. Simulation Service
         global_state.sim_service = SimServiceMaster()
         app.state.sim_service = global_state.sim_service
-        logger.info("✅ Omega Simulation Service Active")
+        global_state.sim_controller = global_state.sim_service.sim_controller
+        app.state.sim_controller = global_state.sim_controller
+        
+        # 6. Briefing & Fleet Intelligence
+        global_state.fleet_intel = FleetIntelligence(building_ids=["DOHA-TOWER-001"])
+        global_state.goal_generator = GoalGenerator(fleet_intelligence=global_state.fleet_intel)
+        global_state.briefing_engine = BriefingScheduler(goal_generator=global_state.goal_generator)
+        
+        logger.info("✅ Commercial BMS Stack Active (State + Agent + Sim + Briefing + Fleet)")
 
     logger.info("✅ System Fully Initialized.")
     yield
@@ -182,6 +198,7 @@ elif ARVIS_VERTICAL == "COMMERCIAL":
     app.include_router(advisory.router, prefix="/api/v1/advisory", tags=["Advisory"])
     app.include_router(knowledge.router, prefix="/api/v1/knowledge", tags=["Knowledge"])
     app.include_router(sensors.router, prefix="/api/v1/sensors", tags=["Sensors"])
+    app.include_router(learning.router, prefix="/api/v1/learning", tags=["Learning"])
     app.include_router(omega_router)
 
 # Shared / Admin
@@ -189,6 +206,8 @@ app.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin"])
 app.include_router(infrastructure.router, prefix="/api/v1/infrastructure", tags=["Infrastructure"])
 app.include_router(firmware.router, prefix="/api/v1/firmware", tags=["Firmware"])
 app.include_router(core.router, prefix="/api/v1/core", tags=["Core"])
+app.include_router(auth.router, prefix="/api/v1/auth", tags=["Auth"])
+app.include_router(compatibility.router, prefix="/api/v1", tags=["Compatibility"])
 
 @app.get("/")
 async def root():

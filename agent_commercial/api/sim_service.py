@@ -116,6 +116,22 @@ class SimServiceMaster:
         await asyncio.sleep(0.5) 
         return {"status": "success", "message": "Simulation aborted."}
 
+    @property
+    def sim_controller(self):
+        """Bridge property to provide SimController-like interface for legacy routes."""
+        class SimBridge:
+            def __init__(self, master):
+                self.master = master
+            def pause(self): return asyncio.run_coroutine_threadsafe(self.master.stop_simulation(), asyncio.get_event_loop())
+            def resume(self): return asyncio.run_coroutine_threadsafe(self.master.start_simulation(), asyncio.get_event_loop())
+            def set_speed(self, s): 
+                if self.master.config: self.master.config.time_scale = s
+            def get_status(self): return self.master.get_status().dict()
+            @property
+            def pilot_day(self): return self.master.get_status().current_day
+            
+        return SimBridge(self)
+
     def get_status(self) -> SimStatus:
         curr_day = 0
         tot_days = 0

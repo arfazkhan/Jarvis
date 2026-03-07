@@ -63,6 +63,7 @@ class BMSDatabase:
         """Get or create asynchronous database connection with WAL mode enabled"""
         async with self._lock:
             if self._async_conn is None:
+                logger.info(f"Establishing NEW async connection to: {self.db_path}")
                 self._async_conn = await aiosqlite.connect(str(self.db_path))
                 self._async_conn.row_factory = aiosqlite.Row
                 
@@ -71,10 +72,226 @@ class BMSDatabase:
                     await self._async_conn.execute("PRAGMA journal_mode=WAL")
                     await self._async_conn.execute("PRAGMA synchronous=NORMAL")
                     await self._async_conn.execute("PRAGMA cache_size=-64000") # 64MB cache
+                    
+                    # Ensure schema exists (Automatic Initialization)
+                    await self._init_schema(self._async_conn)
+                    
                 except Exception as e:
-                    logger.warning(f"Failed to enable WAL mode in async: {e}")
+                    logger.error(f"❌ Failed to initialize database in async: {e}")
+                    # If init fails, reset connection so next call tries again
+                    try:
+                        await self._async_conn.close()
+                    except:
+                        pass
+                    self._async_conn = None
+                    raise e # Propagate error
                     
             return self._async_conn
+
+    async def _init_schema(self, conn: aiosqlite.Connection) -> None:
+        """Initialize database tables if they don't exist"""
+        logger.info("🛠️ Verifying database schema...")
+        # Get list of existing tables
+        async with conn.execute("SELECT name FROM sqlite_master WHERE type='table'") as cursor:
+            rows = await cursor.fetchall()
+            existing_tables = [row[0] for row in rows]
+            logger.info(f"Existing tables: {existing_tables}")
+
+        # 1. Equipment table
+        if 'equipment' not in existing_tables:
+            logger.info("Creating table: equipment")
+            await conn.execute("""
+            CREATE TABLE equipment (
+                equipment_id TEXT PRIMARY KEY,
+                name TEXT,
+                equipment_type TEXT,
+                status TEXT DEFAULT 'unknown',
+                location TEXT,
+                runtime_hours REAL DEFAULT 0,
+                efficiency REAL,
+                last_maintenance TEXT,
+                parent_equipment_id TEXT,
+                metadata TEXT,
+                updated_at TEXT
+            )
+            """)
+        
+        # 2. Data Points table
+        if 'data_points' not in existing_tables:
+            logger.info("Creating table: data_points")
+            await conn.execute("""
+            CREATE TABLE data_points (
+                point_id TEXT,
+                equipment_id TEXT,
+                value REAL,
+                unit TEXT,
+                quality TEXT DEFAULT 'good',
+                timestamp TEXT,
+                PRIMARY KEY (point_id, timestamp)
+            )
+            """)
+        
+        # 3. Alarms table
+        if 'alarms' not in existing_tables:
+            logger.info("Creating table: alarms")
+            await conn.execute("""
+            CREATE TABLE alarms (
+                alarm_id TEXT PRIMARY KEY,
+                equipment_id TEXT,
+                source_point_id TEXT,
+                message TEXT,
+                severity TEXT,
+                state TEXT DEFAULT 'active',
+                triggered_at TEXT,
+                acknowledged_at TEXT,
+                acknowledged_by TEXT,
+                resolved_at TEXT,
+                cluster_id TEXT,
+                metadata TEXT
+            )
+            """)
+        
+        # 4. Energy Readings table
+        if 'energy_readings' not in existing_tables:
+            logger.info("Creating table: energy_readings")
+            await conn.execute("""
+            CREATE TABLE energy_readings (
+                meter_id TEXT,
+                value REAL,
+                unit TEXT DEFAULT 'kW',
+                outdoor_temp REAL,
+                occupancy REAL,
+                timestamp TEXT,
+                PRIMARY KEY (meter_id, timestamp)
+            )
+            """)
+        
+        # 5. Zones table
+        if 'zones' not in existing_tables:
+            logger.info("Creating table: zones")
+            await conn.execute("""
+            CREATE TABLE zones (
+                zone_id TEXT PRIMARY KEY,
+                name TEXT,
+                floor TEXT,
+                building TEXT,
+                co2_point_id TEXT,
+                vav_point_id TEXT,
+                lighting_point_id TEXT,
+                return_air_point_id TEXT,
+                schedule_id TEXT,
+                load_kw REAL DEFAULT 2.0,
+                metadata TEXT
+            )
+            """)
+        
+        # 6. Work Orders table
+        if 'work_orders' not in existing_tables:
+            logger.info("Creating table: work_orders")
+            await conn.execute("""
+            CREATE TABLE work_orders (
+                work_order_id TEXT PRIMARY KEY,
+                equipment_id TEXT,
+                task_type TEXT,
+                status TEXT DEFAULT 'open',
+                pre_snapshot TEXT,
+                post_snapshot TEXT,
+                opened_at TEXT,
+                closed_at TEXT,
+                verification_result TEXT
+            )
+            """)
+        
+        # 7. GSAS Scores table
+        if 'gsas_scores' not in existing_tables:
+            logger.info("Creating table: gsas_scores")
+            await conn.execute("""
+            CREATE TABLE gsas_scores (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                building_id TEXT,
+                overall_score REAL,
+                certification_level TEXT,
+                category_scores TEXT,
+                timestamp TEXT
+            )
+            """)
+        
+        # 8. Audit Logs table
+        if 'audit_logs' not in existing_tables:
+            logger.info("Creating table: audit_logs")
+            await conn.execute("""
+            CREATE TABLE audit_logs (
+                timestamp REAL,
+                method TEXT,
+                path TEXT,
+                status INTEGER,
+                user TEXT,
+                ip TEXT,
+                latency_ms REAL
+            )
+            """)
+
+        # 9. Fleet Metrics
+        if 'fleet_metrics' not in existing_tables:
+            logger.info("Creating table: fleet_metrics")
+            await conn.execute("""
+            CREATE TABLE fleet_metrics (
+                building_id TEXT NOT NULL,
+                metric_name TEXT NOT NULL,
+                metric_value REAL,
+                timestamp TEXT,
+                PRIMARY KEY (building_id, metric_name)
+            )
+            """)
+
+        # 10. Fleet Insights
+        if 'fleet_insights' not in existing_tables:
+            logger.info("Creating table: fleet_insights")
+            await conn.execute("""
+            CREATE TABLE fleet_insights (
+                insight_id TEXT PRIMARY KEY,
+                building_id TEXT NOT NULL,
+                category TEXT NOT NULL,
+                content TEXT NOT NULL,
+                confidence REAL,
+                status TEXT DEFAULT 'active',
+                timestamp TEXT
+            )
+            """)
+
+        # 11. Chat Sessions
+        if 'chat_sessions' not in existing_tables:
+            logger.info("Creating table: chat_sessions")
+            await conn.execute("""
+            CREATE TABLE chat_sessions (
+                session_id TEXT PRIMARY KEY,
+                title TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )
+            """)
+
+        # 12. Chat Messages
+        if 'chat_messages' not in existing_tables:
+            logger.info("Creating table: chat_messages")
+            await conn.execute("""
+            CREATE TABLE chat_messages (
+                message_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp TEXT,
+                FOREIGN KEY (session_id) REFERENCES chat_sessions (session_id)
+            )
+            """)
+            
+            # Create indexes for fast message lookup by session
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_msg_session ON chat_messages(session_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_sess_updated ON chat_sessions(updated_at DESC)")
+
+        
+        await conn.commit()
+        logger.info("✅ Database schema verification complete.")
             
     
     # ═══════════════════════════════════════════════════════════════════════════
@@ -206,7 +423,7 @@ class BMSDatabase:
         """, (point_id,)) as cursor:
             row = await cursor.fetchone()
             return dict(row) if row else None
-    
+            
     async def get_latest_values_batch(self, point_ids: List[str]) -> Dict[str, float]:
         """Get latest values for multiple points (Async)"""
         result = {}
@@ -215,6 +432,69 @@ class BMSDatabase:
             if latest:
                 result[point_id] = latest["value"]
         return result
+
+    async def get_fleet_insights(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Get the latest insights generated across the fleet"""
+        query = "SELECT * FROM fleet_insights ORDER BY timestamp DESC LIMIT ?"
+        rows = await self.fetch_all(query, (limit,))
+        return rows
+        
+    # ═══════════════════════════════════════════════════════════════════════
+    # CHAT HISTORY COMMANDS
+    # ═══════════════════════════════════════════════════════════════════════
+    
+    async def create_chat_session(self, session_id: str, title: str = "New Conversation") -> Optional[str]:
+        """Create a new chat session."""
+        now = datetime.now().isoformat()
+        conn = await self._get_async_connection()
+        query = "INSERT INTO chat_sessions (session_id, title, created_at, updated_at) VALUES (?, ?, ?, ?)"
+        try:
+            await conn.execute(query, (session_id, title, now, now))
+            await conn.commit()
+            return session_id
+        except Exception as e:
+            logger.error(f"Failed to create chat session: {e}")
+            return None
+            
+    async def update_chat_session_timestamp(self, session_id: str) -> None:
+        """Update the last activity timestamp for a chat session."""
+        now = datetime.now().isoformat()
+        conn = await self._get_async_connection()
+        try:
+            await conn.execute("UPDATE chat_sessions SET updated_at = ? WHERE session_id = ?", (now, session_id))
+            await conn.commit()
+        except Exception as e:
+            logger.error(f"Failed to update chat session timestamp: {e}")
+
+    async def add_chat_message(self, session_id: str, message_id: str, role: str, content: str) -> bool:
+        """Add a message to a specific chat session."""
+        now = datetime.now().isoformat()
+        conn = await self._get_async_connection()
+        query = "INSERT INTO chat_messages (message_id, session_id, role, content, timestamp) VALUES (?, ?, ?, ?, ?)"
+        try:
+            await conn.execute(query, (message_id, session_id, role, content, now))
+            await conn.commit()
+            await self.update_chat_session_timestamp(session_id)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to add chat message: {e}")
+            return False
+
+    async def get_chat_sessions(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Retrieve a list of recent chat sessions."""
+        conn = await self._get_async_connection()
+        query = "SELECT * FROM chat_sessions ORDER BY updated_at DESC LIMIT ?"
+        async with conn.execute(query, (limit,)) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def get_chat_history(self, session_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """Retrieve messages for a specific session ordered by timestamp."""
+        conn = await self._get_async_connection()
+        query = "SELECT * FROM chat_messages WHERE session_id = ? ORDER BY timestamp ASC LIMIT ?"
+        async with conn.execute(query, (session_id, limit)) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
     
     # ═══════════════════════════════════════════════════════════════════════════
     # ALARM OPERATIONS

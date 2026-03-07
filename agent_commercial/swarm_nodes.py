@@ -94,6 +94,7 @@ def get_alarm_agent() -> SwarmNode:
             "CONSTRAINTS:\n"
             "- NEVER acknowledge or dismiss a critical safety alarm autonomously\n"
             "- Always distinguish between sensor noise and genuine equipment faults\n"
+            "- CRITICAL THERMAL SAFETY: During Qatar summer (Jun-Sep), any AHU Supply Air Temp (SAT) > 25°C is a HIGH priority fault. If SAT > 30°C, it is an EMERGENCY.\n"
             "- When another agent proposes an action, verify the target equipment isn't currently faulting\n"
             "- Prioritize: Life Safety > Equipment Protection > Comfort > Energy"
         ),
@@ -165,6 +166,7 @@ def get_comfort_agent() -> SwarmNode:
             "CONSTRAINTS:\n"
             "- You have VETO POWER over any energy savings that would breach comfort limits\n"
             "- Server rooms: MUST stay below 24°C (ASHRAE TC 9.9)\n"
+            "- AHU OPERATION: If Supply Air Temp (SAT) exceeds 25.5°C, VETO any energy saving mode and advocate for immediate high-stage cooling.\n"
             "- target 22-24°C ±1°C (Qatar GSAS IEQ requirement)\n"
             "- If a zone is unoccupied (CO2 < 450ppm), energy savings can be more aggressive\n"
             "- VIP MARKER PROTOCOL: If any 'Executive' or 'VIP' override is detected, clearly flag this event in your findings using the marker '[VIP_OVERRIDE_DETECTED]'.\n"
@@ -215,12 +217,12 @@ def get_strategic_agent() -> SwarmNode:
     """
     🧠 Strategic Agent — Cross-system reasoning, what-if, trust metrics.
     
-    Tools: think, simulate_change, correlate_events, compare_to_fleet,
+    Tools: simulate_change, correlate_events, compare_to_fleet,
            get_advisory_recommendations, check_goals, get_trust_metrics
     """
     tools = [
         t for t in SOVEREIGN_TOOLS 
-        if t["name"] in ("think", "simulate_change", "correlate_events", "compare_to_fleet")
+        if t["name"] in ("simulate_change", "correlate_events", "compare_to_fleet")
     ] + [
         t for t in ADVISORY_TOOLS 
         if t["name"] in ("get_advisory_recommendations", "check_goals", "get_trust_metrics")
@@ -237,7 +239,7 @@ def get_strategic_agent() -> SwarmNode:
             "4. Track operator trust drift — adjust confidence when FM stops following advice\n"
             "5. Generate proactive goals based on risk, waste, and compliance analysis\n\n"
             "CONSTRAINTS:\n"
-            "- Always use the 'think' tool to log your reasoning chain before conclusions\n"
+            "- Always output your reasoning in <think> tags before conclusions\n"
             "- STRATEGIC GROUNDING: You must bridge the gap between Perception (Energy/Alarm) and Action. Never suggest an action without citing the specific tool result (e.g., 'Energy_Agent_analyze_energy shows 450kWh waste').\n"
             "- COUNTERFACTUAL ANALYSIS: For every recommendation, explain what would happen if NO action was taken and set 'counterfactual_check': true.\n"
             "- MUST include economic impact (QAR) provided by the Energy Agent in every advisory\n"
@@ -255,11 +257,11 @@ def get_planning_agent() -> SwarmNode:
     """
     📋 Planning Agent — Multi-step action plans with safety validation.
     
-    Tools: think, simulate_change, get_advisory_recommendations
+    Tools: simulate_change, get_advisory_recommendations
     """
     tools = [
         t for t in SOVEREIGN_TOOLS 
-        if t["name"] in ("think", "simulate_change")
+        if t["name"] in ("simulate_change",)
     ] + [
         t for t in ADVISORY_TOOLS if t["name"] == "get_advisory_recommendations"
     ]
@@ -417,10 +419,10 @@ def get_mission_agent() -> SwarmNode:
     """
     🎯 Mission Agent — Autonomous multi-step task execution with monitoring.
     
-    Tools: think, simulate_change, get_equipment_status
+    Tools: simulate_change, get_equipment_status
     """
     tools = [
-        t for t in SOVEREIGN_TOOLS if t["name"] in ("think", "simulate_change")
+        t for t in SOVEREIGN_TOOLS if t["name"] in ("simulate_change",)
     ] + [
         t for t in EQUIPMENT_TOOLS if t["name"] == "get_equipment_status"
     ]
@@ -439,7 +441,7 @@ def get_mission_agent() -> SwarmNode:
             "- CANNOT execute safety-critical actions without explicit FM approval\n"
             "- Must verify equipment status before and after each step\n"
             "- Maximum autonomous execution time: 30 minutes (then escalate)\n"
-            "- Always log the reasoning for each step via the 'think' tool"
+            "- Always output the reasoning for each step inside <think> tags"
         ),
         tools=tools
     )

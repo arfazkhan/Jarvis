@@ -18,29 +18,82 @@ _REASONING_AGENT = None  # K2 Think (Reasoning Layer)
 _TOOL_AGENT = None       # Primary Execution Layer (Configurable)
 _FALLBACK_TOOL_AGENT = None # Groq Fallback Layer
 
-def _extract_k2_answer(content: str) -> str:
+def _robust_extract(content: str) -> tuple[List[str], str]:
     """
-    Centralized K2 Think output parser.
-    K2 Think wraps output in <think>...</think> and <answer>...</answer> tags.
-    This extracts the <answer> content if present, otherwise strips <think> tags.
-    Must be called on ALL raw LLM responses before returning to callers.
+    Ultra-robust multi-tag extractor for modern LLMs.
+    Handles:
+    1. Multi-variation tags (<think>, <thinking>, <final_proposal>)
+    2. Stray tags (closing tags without openers)
+    3. Conversational babble before/after structured blocks
+    4. Fallback to last JSON block if tags are totally missing
     """
     if not content:
-        return content
+        return [], ""
     
-    # 1. Extract <answer> block if present (preferred)
-    answer_match = re.search(r'<answer>(.*?)</answer>', content, re.DOTALL)
-    if answer_match:
-        content = answer_match.group(1).strip()
+    import re
+    thoughts = []
     
-    # 2. Extract content between first { or [ and last } or ] if tags fail
-    # This is a safety layer for mixed content
+    # 1. Primary Extraction: All tagged reasoning blocks
+    thought_tags = ["think", "thinking", "thought", "reasoning", "process", "internal_monologue", "tool_call", "call"]
+    working_content = content
     
-    # 3. Strip <think> blocks (model reasoned but didn't use <answer> tags or used them incorrectly)
-    content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
-    content = re.sub(r'</?think>', '', content)
-    content = re.sub(r'</?answer>', '', content)
-    return content.strip()
+    for tag in thought_tags:
+        pattern = rf"<{tag}>(.*?)</{tag}>"
+        matches = re.finditer(pattern, working_content, re.DOTALL | re.IGNORECASE)
+        for m in matches:
+            thoughts.append(m.group(1).strip())
+        working_content = re.sub(pattern, " ", working_content, flags=re.DOTALL | re.IGNORECASE)
+    
+    # 2. Secondary Extraction: Known answer/proposal tags
+    answer_tags = ["answer", "final_proposal", "conclusion", "response", "output"]
+    final_answer = ""
+    for tag in answer_tags:
+        pattern = rf"<{tag}>(.*?)</{tag}>"
+        match = re.search(pattern, working_content, re.DOTALL | re.IGNORECASE)
+        if match:
+            final_answer = match.group(1).strip()
+            # Post-extraction: move everything else to thoughts to keep message clean
+            babble = re.sub(pattern, " ", working_content, flags=re.DOTALL | re.IGNORECASE).strip()
+            if babble:
+                # Clean stray XML from babble
+                babble = re.sub(r"</?.*?>", "", babble).strip()
+                if babble:
+                    thoughts.append(babble)
+            working_content = ""
+            break
+            
+    # 3. Tertiary Extraction: Fallback for un-tagged or broken-tag responses
+    if not final_answer:
+        # Check if response ends with a JSON block (common for agents)
+        # We look for the LAST JSON object in the string
+        json_blocks = re.findall(r'(\{.*\})', working_content, re.DOTALL)
+        if json_blocks:
+            final_answer = json_blocks[-1].strip()
+            # Treat everything BEFORE the main JSON block as babble/thoughts
+            pre_babble_idx = working_content.find(json_blocks[-1])
+            pre_babble = working_content[:pre_babble_idx].strip()
+            if pre_babble:
+                pre_babble = re.sub(r"</?.*?>", "", pre_babble).strip()
+                if pre_babble:
+                    thoughts.append(pre_babble)
+        else:
+            # Absolute fallback: just strip tags and return
+            final_answer = re.sub(r"</?.*?>", "", working_content).strip()
+            
+    # Final cleanup of stray tags in thoughts/answer
+    final_answer = re.sub(r"</?.*?>", "", final_answer).strip()
+    clean_thoughts = []
+    for t in thoughts:
+        t_clean = re.sub(r"</?.*?>", "", str(t)).strip()
+        if t_clean:
+            clean_thoughts.append(t_clean)
+            
+    return clean_thoughts, final_answer
+
+def _extract_k2_answer(content: str) -> str:
+    """Legacy wrapper for _robust_extract."""
+    _, answer = _robust_extract(content)
+    return answer
 
 class DummyBus:
     def subscribe(self, *args, **kwargs): pass
@@ -145,7 +198,8 @@ class UnifiedLLM(BaseModel):
         tools: Optional[List[Dict]] = None,
         tool_choice: str = "auto",
         override_model: Optional[str] = None,
-        max_tokens: Optional[int] = None
+        max_tokens: Optional[int] = None,
+        stream_as: str = "message"
     ) -> Message:
         """
         Send a request to the Reasoning Engine (K2 Think).
@@ -162,7 +216,7 @@ class UnifiedLLM(BaseModel):
         # But if user insists on tools here, we pass them.
         
         # User requested: NO FALLBACK to Groq. If K2 fails,
-        response = await self._ask_provider(_REASONING_AGENT, full_system_prompt, messages, tools, tool_choice, override_model, max_tokens=max_tokens)
+        response = await self._ask_provider(_REASONING_AGENT, full_system_prompt, messages, tools, tool_choice, override_model, max_tokens=max_tokens, stream_as=stream_as)
         if response.content and "LLM Error" in response.content:
             raise RuntimeError(response.content)
         return response
@@ -171,7 +225,7 @@ class UnifiedLLM(BaseModel):
         """Alias for ask() to maintain compatibility with other interfaces."""
         return await self.ask(messages, **kwargs)
 
-    async def ask_tool(self, messages, system_msgs, tools, tool_choice) -> Message:
+    async def ask_tool(self, messages, system_msgs, tools, tool_choice, stream_as="think") -> Message:
         """
         Send a request to the Execution Engine (Groq).
         Note: Groq/Llama-3 is optimized for function calling and JSON.
@@ -182,13 +236,13 @@ class UnifiedLLM(BaseModel):
             
         # Route to TOOL AGENT
         try:
-            return await self._ask_provider(_TOOL_AGENT, full_system_prompt, messages, tools, tool_choice)
+            return await self._ask_provider(_TOOL_AGENT, full_system_prompt, messages, tools, tool_choice, stream_as=stream_as)
         except Exception as e:
             # 🛡️ Groq Fallback safety net
             if _FALLBACK_TOOL_AGENT and _FALLBACK_TOOL_AGENT != _TOOL_AGENT:
                 logger.warning(f"[UnifiedLLM] ⚠️ Primary Tool Agent failed: {e}. Retrying with Groq Fallback...")
                 try:
-                    return await self._ask_provider(_FALLBACK_TOOL_AGENT, full_system_prompt, messages, tools, tool_choice)
+                    return await self._ask_provider(_FALLBACK_TOOL_AGENT, full_system_prompt, messages, tools, tool_choice, stream_as=stream_as)
                 except Exception as fallback_err:
                     logger.error(f"[UnifiedLLM] ❌ Both Primary and Fallback Tool Agents failed: {fallback_err}")
                     raise fallback_err
@@ -208,7 +262,8 @@ class UnifiedLLM(BaseModel):
         self, 
         messages: List[Dict[str, str]], 
         retries: int = 2,
-        system_msgs: Optional[List[Dict[str, str]]] = None
+        system_msgs: Optional[List[Dict[str, str]]] = None,
+        stream_as: str = "think"
     ) -> Dict[str, Any]:
         """
         Ask LLM and enforce JSON output with Robust Extraction and Self-Repair Loop.
@@ -220,7 +275,7 @@ class UnifiedLLM(BaseModel):
         
         while attempts <= retries:
             try:
-                response = await self.ask(current_messages, system_msgs=system_msgs)
+                response = await self.ask(current_messages, system_msgs=system_msgs, stream_as=stream_as)
                 content = response.content or "{}"
                 
                 # 1. Clean Markdown and Tags
@@ -295,17 +350,17 @@ class UnifiedLLM(BaseModel):
     # ADAPTERS
     # ═══════════════════════════════════════════════════════════
 
-    async def _ask_provider(self, agent, system_prompt, messages, tools, tool_choice, override_model=None, max_tokens=None):
+    async def _ask_provider(self, agent, system_prompt, messages, tools, tool_choice, override_model=None, max_tokens=None, stream_as="message"):
         # Dispatch to appropriate adapter based on agent configuration
         if agent.provider == "gemini":
             return await self._ask_gemini(agent, system_prompt, messages, tools)
         elif agent.provider == "nvidia":
-            return await self._ask_nvidia(agent, system_prompt, messages, tools, tool_choice, override_model, max_tokens)
+            return await self._ask_nvidia(agent, system_prompt, messages, tools, tool_choice, override_model, max_tokens, stream_as=stream_as)
         elif agent.client:
-            return await self._ask_openai_compat(agent, system_prompt, messages, tools, tool_choice, override_model, max_tokens=max_tokens)
+            return await self._ask_openai_compat(agent, system_prompt, messages, tools, tool_choice, override_model, max_tokens=max_tokens, stream_as=stream_as)
         return Message.assistant_message(f"Error: Provider {agent.provider} not supported in hybrid adapter")
 
-    async def _ask_openai_compat(self, agent, system_prompt, messages, tools, tool_choice, override_model=None, max_tokens=None):
+    async def _ask_openai_compat(self, agent, system_prompt, messages, tools, tool_choice, override_model=None, max_tokens=None, stream_as="message"):
         import asyncio
         
         # Build full message list
@@ -444,21 +499,53 @@ class UnifiedLLM(BaseModel):
             # Universal Parsing: extract <think>...<answer> using centralized parser
             if content:
                 import re
-                # Log thought process for Glass Box UI before stripping
-                think_match = re.search(r"<think>(.*?)</think>", content, re.DOTALL)
-                if think_match:
-                    thought_process = think_match.group(1).strip()
-                    try:
-                        from agent_commercial.api.sse_broadcaster import SSEBroadcaster
-                        import asyncio
-                        loop = asyncio.get_event_loop()
-                        if loop.is_running():
-                             loop.create_task(SSEBroadcaster().broadcast("think", {"content": thought_process}))
-                    except Exception as e:
-                        logger.warning(f"Failed to broadcast thought: {e}")
+                try:
+                    from agent_commercial.api.sse_broadcaster import SSEBroadcaster
+                    broadcaster = SSEBroadcaster()
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    is_running = loop.is_running()
+                except ImportError:
+                    is_running = False
+                    
+                # Advanced Multi-Tag Processing for Glass Box
+                thoughts, clean_content = _robust_extract(content)
                 
-                # Extract clean answer content
-                content = _extract_k2_answer(content)
+                def redact(text):
+                    import re
+                    patterns = [
+                        r"(?i)(you are|act as) an? (expert|ai|assistant|agent|system).+?(?=\n\n|\Z)",
+                        r"(?i)(here are your|available|these are the) tools:?[\s\S]*?(?=\n\n(?:I will|Let's|Thinking)|$)",
+                        r"(?i)your (goal|task) is to.+?(?=\n\n|\Z)",
+                        r"(?i)(guidelines|constraints|rules):[\s\S]*?(?=\n\n|$)",
+                        r"(?i)use the following tools?:[\s\S]*?(?=\n\n|$)"
+                    ]
+                    redacted = text
+                    for p in patterns:
+                        redacted = re.sub(p, "\n[SYSTEM RULE REDACTED]\n", redacted)
+                    return re.sub(r'\n{3,}', '\n\n', redacted).strip()
+
+                if is_running:
+                    # 1. Broadcast all extracted thoughts/reasoning tags
+                    for t in thoughts:
+                        try:
+                            safe_thought = redact(t)
+                            if safe_thought:
+                                loop.create_task(broadcaster.broadcast("think", {"content": safe_thought}))
+                        except Exception as e:
+                            logger.debug(f"Failed to broadcast thought part: {e}")
+                
+                content = clean_content
+                
+                # Broadcast the actual response
+                if content and is_running:
+                    try:
+                         # Apply IP redaction to internal thoughts too
+                         if stream_as == "think":
+                             content = redact(content)
+                         loop.create_task(broadcaster.broadcast(stream_as, {"content": content}))
+                    except Exception as e:
+                        logger.debug(f"Failed to broadcast {stream_as}: {e}")
             
             return Message.assistant_message(content=content, tool_calls=tool_calls if tool_calls else None)
             

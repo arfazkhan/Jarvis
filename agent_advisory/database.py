@@ -43,7 +43,11 @@ class AdvisoryDatabase:
     
     async def _ensure_initialized(self):
         """Ensure database schema is created"""
+        if self._initialized:
+            return
+            
         async with self._lock:
+            # Re-check after acquiring lock
             if not self._initialized:
                 await self._init_database()
                 self._initialized = True
@@ -51,7 +55,11 @@ class AdvisoryDatabase:
     async def _init_database(self):
         """Create tables if they don't exist (Async)"""
         
-        async with self.get_async_connection() as conn:
+        # Use a local connection to avoid recursive lock in get_async_connection
+        async with aiosqlite.connect(self.db_path) as conn:
+            await conn.execute("PRAGMA journal_mode=WAL")
+            await conn.execute("PRAGMA synchronous=NORMAL")
+            
             # Recommendations table
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS recommendations (
@@ -135,55 +143,33 @@ class AdvisoryDatabase:
             """)
             
             # Create indices for performance
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_econ_query 
-                ON economy_trajectories(query)
-            """)
-            
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_rec_status 
-                ON recommendations(status)
-            """)
-            
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_rec_operator 
-                ON recommendations(operator_id)
-            """)
-            
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_rec_building 
-                ON recommendations(building_id)
-            """)
-            
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_pref_operator 
-                ON operator_preferences(operator_id)
-            """)
-            
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_pref_context 
-                ON operator_preferences(context_type)
-            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_econ_query ON economy_trajectories(query)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_rec_status ON recommendations(status)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_rec_operator ON recommendations(operator_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_rec_building ON recommendations(building_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_pref_operator ON operator_preferences(operator_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_pref_context ON operator_preferences(context_type)")
             
             await conn.commit()
             logger.info("Advisory database schema initialized successfully")
     
     @asynccontextmanager
     async def get_async_connection(self):
-        """Context manager for asynchronous database connection with WAL mode enabled"""
-        async with self._lock:
-            if self._async_conn is None:
-                self._async_conn = await aiosqlite.connect(self.db_path)
-                self._async_conn.row_factory = aiosqlite.Row
-                
-                # Enable WAL mode for high concurrency
-                try:
-                    await self._async_conn.execute("PRAGMA journal_mode=WAL")
-                    await self._async_conn.execute("PRAGMA synchronous=NORMAL")
-                except Exception as e:
-                    logger.warning(f"Failed to enable WAL mode in Advisory async: {e}")
-            
-            yield self._async_conn
+        """Context manager for a short-lived per-operation database connection.
+        
+        Uses WAL mode for concurrent reads/writes instead of a mutex lock.
+        Each operation opens, uses, and closes its own connection to prevent
+        lock contention between the simulation write loop and API read requests.
+        """
+        conn = await aiosqlite.connect(self.db_path)
+        conn.row_factory = aiosqlite.Row
+        try:
+            await conn.execute("PRAGMA journal_mode=WAL")
+            await conn.execute("PRAGMA synchronous=NORMAL")
+            await conn.execute("PRAGMA busy_timeout=5000")  # 5 second timeout instead of hang
+            yield conn
+        finally:
+            await conn.close()
 
     async def execute(self, query: str, params: tuple = ()):
         """Execute a single query (Async)"""
@@ -233,8 +219,11 @@ class AdvisoryDatabase:
             }
 
     async def close(self):
-        """Close database connections (Async)"""
-        async with self._lock:
-            if self._async_conn:
+        """Close database connections (Async) - no-op in per-connection model"""
+        # WAL mode allows multiple concurrent connections, no shared conn to close
+        if self._async_conn:
+            try:
                 await self._async_conn.close()
-                self._async_conn = None
+            except Exception:
+                pass
+            self._async_conn = None

@@ -7,25 +7,7 @@ simulation, and cross-system correlation.
 """
 
 SOVEREIGN_TOOLS = [
-    {
-        "name": "think",
-        "description": "Log internal reasoning, hypotheses, or a plan before taking action. Use this to clarify complex investigative steps.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "reasoning": {
-                    "type": "string",
-                    "description": "The internal monologue or plan"
-                },
-                "plan": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Optional list of steps for the next phase"
-                }
-            },
-            "required": ["reasoning"]
-        }
-    },
+
     {
         "name": "query_skillbook",
         "description": "Query the building's institutional memory (Skillbook). Returns learned knowledge about equipment quirks, patterns, past optimizations, and contractor notes. The Skillbook captures knowledge that would otherwise be lost when staff changes.",

@@ -150,9 +150,16 @@ class FleetIntelligence:
         
         logger.info(f"FleetIntelligence initialized with {len(building_ids)} buildings")
     
+    def _get_conn(self):
+        """Helper to get a thread-safe connection with timeout and WAL mode."""
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        return conn
+
     def _init_database(self) -> None:
         """Initialize fleet database tables."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_conn() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS fleet_metrics (
                     building_id TEXT NOT NULL,
@@ -209,7 +216,7 @@ class FleetIntelligence:
             if (datetime.now() - cache.timestamp).total_seconds() < 3600:
                 return cache
         
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_conn() as conn:
             cursor = conn.execute("""
                 SELECT metric_name, metric_value 
                 FROM fleet_metrics 
@@ -400,7 +407,7 @@ class FleetIntelligence:
     
     def _save_insight(self, insight: SharedInsight) -> None:
         """Save insight to database."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_conn() as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO fleet_insights
                 (insight_id, source_building, insight_type, title, description,
@@ -422,7 +429,7 @@ class FleetIntelligence:
     
     def get_insights_for_building(self, building_id: str) -> List[SharedInsight]:
         """Get insights applicable to a specific building."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_conn() as conn:
             cursor = conn.execute("""
                 SELECT * FROM fleet_insights
                 WHERE applicable_buildings LIKE ?

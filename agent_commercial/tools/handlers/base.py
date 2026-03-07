@@ -189,6 +189,22 @@ class BMSToolHandler(
         
         # 2. Observability Logging
         duration_ms = (time.perf_counter() - start_time) * 1000
+        
+        # 3. GLASS BOX: Broadcast tool execution to frontend
+        try:
+            from agent_commercial.api.sse_broadcaster import SSEBroadcaster
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running() and tool_name not in ("task_boundary",):
+                loop.create_task(SSEBroadcaster().broadcast("tool_use", {
+                    "tool": tool_name,
+                    "args": args,
+                    "success": success,
+                    "duration_ms": round(duration_ms, 2)
+                }))
+        except Exception as e:
+            logger.debug(f"[ToolHandler] Failed to broadcast tool_use: {e}")
+            
         if self.knowledge_base and hasattr(self.knowledge_base, "log_tool_usage"):
             try:
                 await self.knowledge_base.log_tool_usage(

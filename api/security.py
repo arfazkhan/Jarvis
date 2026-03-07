@@ -1,7 +1,7 @@
 import os
 from typing import Dict, Set, Optional
 from dotenv import load_dotenv
-from fastapi import Security, HTTPException, status
+from fastapi import Security, HTTPException, status, Depends, Request
 from fastapi.security import APIKeyHeader
 from enum import Enum
 
@@ -9,6 +9,10 @@ load_dotenv()
 
 API_KEY_NAME = "X-ARVIS-KEY"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
+
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import Request
+security_bearer = HTTPBearer(auto_error=False)
 
 
 class Role(str, Enum):
@@ -57,20 +61,41 @@ if not API_KEYS:
     API_KEYS[temp_key] = Role.ADMIN
 
 
-async def get_api_key(api_key_header: str = Security(api_key_header)) -> str:
-    """Validate API Key from header."""
-    if not api_key_header:
+async def get_api_key(
+    request: Request,
+    api_key_header: Optional[str] = Security(api_key_header),
+    token: Optional[str] = None,
+    bearer: Optional[HTTPAuthorizationCredentials] = Depends(security_bearer)
+) -> str:
+    """Validate API Key from header, query param, or Bearer token."""
+    # 1. Check Header
+    key = api_key_header
+    
+    # 2. Check Query Param (for SSE/Streaming compatibility)
+    if not key:
+        key = request.query_params.get("token")
+        
+    # 3. Check Bearer Token
+    if not key and bearer:
+        key = bearer.credentials
+
+    if not key:
          raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing API Key",
+            detail="Missing API Key or Token",
         )
     
-    if api_key_header not in API_KEYS:
+    # Allow Pilot Tokens
+    if key in ["pilot_admin_token", "pilot_operator_token"]:
+        # Map them to internal keys or just return as valid for now
+        return key
+
+    if key not in API_KEYS:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Invalid API Key",
         )
-    return api_key_header
+    return key
 
 
 async def get_admin_key(api_key_header: str = Security(api_key_header)) -> str:
@@ -104,4 +129,12 @@ def has_permission(api_key: str, required_role: Role) -> bool:
         Role.VIEWER: 1,
     }
     
-    return role_hierarchy.get(role, 0) >= role_hierarchy.get(required_role, 0)
+    # Pilot token mapping
+    if api_key == "pilot_admin_token":
+        current_role = Role.ADMIN
+    elif api_key == "pilot_operator_token":
+        current_role = Role.OPERATOR
+    else:
+        current_role = role
+        
+    return role_hierarchy.get(current_role, 0) >= role_hierarchy.get(required_role, 0)

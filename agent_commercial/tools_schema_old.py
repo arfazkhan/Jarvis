@@ -208,25 +208,7 @@ BMS_TOOLS = [
             "required": ["point_id"]
         }
     },
-    {
-        "name": "think",
-        "description": "Log internal reasoning, hypotheses, or a plan before taking action. Use this to clarify complex investigative steps.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "reasoning": {
-                    "type": "string",
-                    "description": "The internal monologue or plan"
-                },
-                "plan": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Optional list of steps for the next phase"
-                }
-            },
-            "required": ["reasoning"]
-        }
-    },
+
     {
         "name": "acknowledge_alarm",
         "description": "Acknowledge an alarm to indicate it has been seen and is being addressed.",

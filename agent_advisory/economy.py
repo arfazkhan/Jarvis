@@ -108,14 +108,12 @@ class ToolEconomyPolicy:
                  # Expand candidates for high urgency
                  candidates.update(self._get_safety_candidates())
             
-            # Always allow think for transparency
-            candidates.add("think")
+
             return candidates
             
         logger.info(f"[EconomyPolicy] Inferred surgical set ({site_type}, urgency={urgency}) Utility: {best_utility:.2f}: {best_tools}")
         
-        # Always inject 'think' if transparency is requested
-        best_tools.add("think")
+
         return best_tools
 
     def _get_category_candidates(self, query: str) -> List[str]:
@@ -151,8 +149,7 @@ class ToolEconomyPolicy:
         if any(w in query for w in ["life", "rul", "remaining", "wear"]):
             candidates.extend(["predict_remaining_life"])
 
-        # ALWAYS allow think tool for agentic transparency
-        candidates.append("think")
+
 
         return list(set(candidates))
 

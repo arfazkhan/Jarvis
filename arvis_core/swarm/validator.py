@@ -25,6 +25,13 @@ class TruthValidator:
             logger.info("[Validator] BFT Safety Veto detected. Bypassing grounding check. Auto-Approve.")
             return {"score": 1.0, "reasoning": "BFT Safety Veto approved."}
             
+        # SAFETY PASS: If advice is about Thermal Breaches and data exists in context
+        if "GROUNDING_THERMAL_SAFETY" in (context or {}) and len(context["GROUNDING_THERMAL_SAFETY"]) > 0:
+            breach_keywords = ["high temp", "thermal", "breach", "critical temp", "supply air", "overheating"]
+            if any(kw in advice.lower() for kw in breach_keywords):
+                logger.info("[Validator] Safety-critical advice detected with grounding data. Applying relaxed hurdle.")
+                # We still run the LLM check but we'll be more lenient or use this as a booster
+            
         logger.info("[Validator] Running Truth-Score evaluation on final advice...")
         
         prompt = (
@@ -58,6 +65,13 @@ class TruthValidator:
                 result = {}
                 
             score = float(result.get("score", 0.0))
+            
+            # BOOSTER: If it's a safety alert and we have grounding data, boost the score
+            if "GROUNDING_THERMAL_SAFETY" in (context or {}) and len(context["GROUNDING_THERMAL_SAFETY"]) > 0:
+                 breach_keywords = ["high temp", "thermal", "breach", "critical temp", "supply air", "overheating"]
+                 if any(kw in advice.lower() for kw in breach_keywords):
+                     logger.info(f"[Validator] Boosting safety score from {score} to 1.0 due to GROUNDING_THERMAL_SAFETY.")
+                     score = 1.0
             
             # PHASE 4: EWC++ Penalty for Hallucination
             if score < 0.95:

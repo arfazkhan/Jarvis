@@ -180,6 +180,7 @@ class BuildingSkillbook:
         self.db_path = db_path
         self._async_conn: Optional[aiosqlite.Connection] = None
         self._lock = asyncio.Lock()
+        self._initialized = False
         
         logger.info(f"BuildingSkillbook initialized for {building_id}")
     
@@ -206,14 +207,26 @@ class BuildingSkillbook:
     
     async def ensure_initialized(self) -> None:
         """Initialize database tables for skillbook (Async)."""
-        await self._init_database()
-        # Load existing skills into semantic matcher for immediate recall
-        if self.matcher.is_available:
-            await self._load_skills_to_matcher()
+        if self._initialized:
+            return
+            
+        async with self._lock:
+            # Re-check after acquiring lock
+            if not self._initialized:
+                await self._init_database()
+                # Load existing skills into semantic matcher for immediate recall
+                if self.matcher.is_available:
+                    await self._load_skills_to_matcher()
+                self._initialized = True
     
     async def _init_database(self) -> None:
         """Initialize database tables for skillbook (Async)."""
-        async with self.get_db() as conn:
+        # Connect directly to avoid recursive lock in get_db
+        async with aiosqlite.connect(self.db_path) as conn:
+            # Enable WAL mode for high concurrency
+            await conn.execute("PRAGMA journal_mode=WAL")
+            await conn.execute("PRAGMA synchronous=NORMAL")
+            
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS skills (
                     skill_id TEXT PRIMARY KEY,
@@ -238,19 +251,15 @@ class BuildingSkillbook:
                 )
             """)
             
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_skills_building 
-                ON skills(building_id)
-            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_skills_building ON skills(building_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_skills_equipment ON skills(equipment_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_skills_type ON skills(skill_type)")
             
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_skills_equipment 
-                ON skills(equipment_id)
-            """)
-            
+            # Unified Decisions Table
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS decisions (
                     decision_id TEXT PRIMARY KEY,
+                    building_id TEXT NOT NULL,
                     timestamp TEXT NOT NULL,
                     context TEXT,
                     chosen_action TEXT NOT NULL,
@@ -264,40 +273,8 @@ class BuildingSkillbook:
                 )
             """)
             
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_decisions_timestamp 
-                ON decisions(timestamp DESC)
-            """)
-            
-            # Log initialization
-            logger.info("Database schema initialized")
-            
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_skills_type 
-                ON skills(skill_type)
-            """)
-    
-            # Meta-Cognition: Decisions Table
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS decisions (
-                    decision_id TEXT PRIMARY KEY,
-                    building_id TEXT NOT NULL,
-                    timestamp TEXT NOT NULL,
-                    context TEXT,
-                    chosen_action TEXT,
-                    alternatives TEXT,
-                    confidence REAL,
-                    reasoning TEXT,
-                    outcome TEXT,
-                    outcome_quality TEXT,
-                    event_id TEXT
-                )
-            """)
-            
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_decisions_time 
-                ON decisions(timestamp)
-            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_decisions_timestamp ON decisions(timestamp DESC)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_decisions_building ON decisions(building_id)")
     
             # Tool Observability: Usage Table
             await conn.execute("""
@@ -315,17 +292,17 @@ class BuildingSkillbook:
                 )
             """)
     
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_tool_usage_name
-                ON tool_usage(tool_name)
-            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_usage_name ON tool_usage(tool_name)")
             
             await conn.commit()
+            logger.info("Database schema initialized")
 
     async def _load_skills_to_matcher(self) -> None:
         """Load all skills from database into the semantic matcher (Async)."""
         try:
-            async with self.get_db() as conn:
+            # Connect directly to avoid recursive lock in get_db
+            async with aiosqlite.connect(self.db_path) as conn:
+                conn.row_factory = aiosqlite.Row
                 async with conn.execute(
                     "SELECT skill_id, title, description FROM skills WHERE building_id = ?",
                     (self.building_id,)
