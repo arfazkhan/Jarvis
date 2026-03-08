@@ -749,8 +749,20 @@ class BMSLLMAgent:
             from agent_commercial.api.sse_broadcaster import SSEBroadcaster
             import asyncio
             broadcaster = SSEBroadcaster()
-            asyncio.create_task(broadcaster.broadcast("progress", {"content": "The ARVIS Queen is routing your query to specialized Swarm Nodes..."}))
-            asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": [{"id": "swarm", "task": "Multi-Agent Debate & Consensus", "status": "in_progress"}]}))
+            
+            # Define standard task pipeline for UI to render as a To-Do list
+            tasks_state = [
+                {"id": "task_grounding", "task": "Synthesizing real-time grounding context", "status": "pending"},
+                {"id": "task_intent", "task": "Analyzing query intent and complexity", "status": "pending"},
+                {"id": "task_execution", "task": "Executing Swarm Resolution (BFT / Fast-Path)", "status": "pending"},
+                {"id": "task_validation", "task": "Validating output against safety constraints", "status": "pending"}
+            ]
+            
+            asyncio.create_task(broadcaster.broadcast("progress", {"content": "The ARVIS Swarm is initializing..."}))
+            
+            # 1. Update and broadcast grounding
+            tasks_state[0]["status"] = "in_progress"
+            asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": tasks_state}))
             
             # 1. GROUNDING INJECTION: Fast concurrent fetch
             try:
@@ -785,6 +797,9 @@ class BMSLLMAgent:
                 logger.error(f"Grounding injection failed: {e}")
                 
             # 2. DELEGATE TO SWARM
+            tasks_state[0]["status"] = "completed"
+            tasks_state[1]["status"] = "in_progress"
+            asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": tasks_state}))
             swarm_payload = await self.queen.execute_swarm(query, context)
             
             # Swarm now returns a dict with the consensus AND the raw tool context discovered by nodes
@@ -807,6 +822,11 @@ class BMSLLMAgent:
                     llm=self.llm
                 )
                 
+                tasks_state[1]["status"] = "completed"
+                tasks_state[2]["task"] = "Executing Agentic Fast-Path Route"
+                tasks_state[2]["status"] = "in_progress"
+                asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": tasks_state}))
+                
                 try:
                     fast_result = await fast_node.process(query, context)
                     fast_text = fast_result["response"].content
@@ -814,7 +834,9 @@ class BMSLLMAgent:
                     logger.error(f"Fast-Path failed: {e}")
                     fast_text = "Fast-Path routing failed."
                     
-                asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": [{"id": "swarm", "task": "Fast-Path Resolved", "status": "completed"}]}))
+                tasks_state[2]["status"] = "completed"
+                tasks_state[3]["status"] = "completed" # Bypass validation for fast path
+                asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": tasks_state}))
                 return ChatResponse(
                     text=fast_text,
                     tool_calls=[],
@@ -827,7 +849,15 @@ class BMSLLMAgent:
             # Merge the facts discovered by Swarm Nodes into the ground truth context for the Validator
             full_context = {**(context or {}), **swarm_context}
             
+            # Transition from Debate -> Validation
+            tasks_state[1]["status"] = "completed"
+            tasks_state[2]["task"] = "Multi-Agent BFT Consensus Reached"
+            tasks_state[2]["status"] = "completed"
+            tasks_state[3]["status"] = "in_progress"
+            
             # VALIDATE TRUTH SCORE (Non-blocking Soft-Fail)
+            asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": tasks_state}))
+            
             try:
                 from arvis_core.swarm.validator import TruthValidator
                 validator = TruthValidator()
@@ -844,7 +874,8 @@ class BMSLLMAgent:
                 logger.error(f"Validator failure: {e}")
                 val_score = 0.5
             
-            asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": [{"id": "swarm", "task": "Consensus Verified", "status": "completed"}]}))
+            tasks_state[3]["status"] = "completed"
+            asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": tasks_state}))
             
             return ChatResponse(
                 text=final_advice,
