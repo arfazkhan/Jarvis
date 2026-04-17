@@ -199,7 +199,8 @@ class UnifiedLLM(BaseModel):
         tool_choice: str = "auto",
         override_model: Optional[str] = None,
         max_tokens: Optional[int] = None,
-        stream_as: str = "message"
+        stream_as: str = "message",
+        channel: str = "chat"
     ) -> Message:
         """
         Send a request to the Reasoning Engine (K2 Think).
@@ -216,7 +217,7 @@ class UnifiedLLM(BaseModel):
         # But if user insists on tools here, we pass them.
         
         # User requested: NO FALLBACK to Groq. If K2 fails,
-        response = await self._ask_provider(_REASONING_AGENT, full_system_prompt, messages, tools, tool_choice, override_model, max_tokens=max_tokens, stream_as=stream_as)
+        response = await self._ask_provider(_REASONING_AGENT, full_system_prompt, messages, tools, tool_choice, override_model, max_tokens=max_tokens, stream_as=stream_as, channel=channel)
         if response.content and "LLM Error" in response.content:
             raise RuntimeError(response.content)
         return response
@@ -225,7 +226,7 @@ class UnifiedLLM(BaseModel):
         """Alias for ask() to maintain compatibility with other interfaces."""
         return await self.ask(messages, **kwargs)
 
-    async def ask_tool(self, messages, system_msgs, tools, tool_choice, stream_as="think") -> Message:
+    async def ask_tool(self, messages, system_msgs, tools, tool_choice, stream_as="think", channel="chat") -> Message:
         """
         Send a request to the Execution Engine (Groq).
         Note: Groq/Llama-3 is optimized for function calling and JSON.
@@ -236,7 +237,7 @@ class UnifiedLLM(BaseModel):
             
         # Route to TOOL AGENT
         try:
-            return await self._ask_provider(_TOOL_AGENT, full_system_prompt, messages, tools, tool_choice, stream_as=stream_as)
+            return await self._ask_provider(_TOOL_AGENT, full_system_prompt, messages, tools, tool_choice, stream_as=stream_as, channel=channel)
         except Exception as e:
             # 🛡️ Groq Fallback safety net
             if _FALLBACK_TOOL_AGENT and _FALLBACK_TOOL_AGENT != _TOOL_AGENT:
@@ -254,7 +255,7 @@ class UnifiedLLM(BaseModel):
         """Streaming generator (Phase 6 support)"""
         # Placeholder for streaming implementation
         # For now, just non-streaming fallback yielded
-        response = await self.ask(messages, system_msgs)
+        response = await self.ask(messages, system_msgs, channel="chat")
         if response.content:
             yield response.content
 
@@ -263,7 +264,8 @@ class UnifiedLLM(BaseModel):
         messages: List[Dict[str, str]], 
         retries: int = 2,
         system_msgs: Optional[List[Dict[str, str]]] = None,
-        stream_as: str = "think"
+        stream_as: str = "think",
+        channel: str = "chat"
     ) -> Dict[str, Any]:
         """
         Ask LLM and enforce JSON output with Robust Extraction and Self-Repair Loop.
@@ -275,7 +277,7 @@ class UnifiedLLM(BaseModel):
         
         while attempts <= retries:
             try:
-                response = await self.ask(current_messages, system_msgs=system_msgs, stream_as=stream_as)
+                response = await self.ask(current_messages, system_msgs=system_msgs, stream_as=stream_as, channel=channel)
                 content = response.content or "{}"
                 
                 # 1. Clean Markdown and Tags
@@ -350,17 +352,17 @@ class UnifiedLLM(BaseModel):
     # ADAPTERS
     # ═══════════════════════════════════════════════════════════
 
-    async def _ask_provider(self, agent, system_prompt, messages, tools, tool_choice, override_model=None, max_tokens=None, stream_as="message"):
+    async def _ask_provider(self, agent, system_prompt, messages, tools, tool_choice, override_model=None, max_tokens=None, stream_as="message", channel="chat"):
         # Dispatch to appropriate adapter based on agent configuration
         if agent.provider == "gemini":
-            return await self._ask_gemini(agent, system_prompt, messages, tools)
+            return await self._ask_gemini(agent, system_prompt, messages, tools, channel=channel)
         elif agent.provider == "nvidia":
-            return await self._ask_nvidia(agent, system_prompt, messages, tools, tool_choice, override_model, max_tokens, stream_as=stream_as)
+            return await self._ask_nvidia(agent, system_prompt, messages, tools, tool_choice, override_model, max_tokens, stream_as=stream_as, channel=channel)
         elif agent.client:
-            return await self._ask_openai_compat(agent, system_prompt, messages, tools, tool_choice, override_model, max_tokens=max_tokens, stream_as=stream_as)
+            return await self._ask_openai_compat(agent, system_prompt, messages, tools, tool_choice, override_model, max_tokens=max_tokens, stream_as=stream_as, channel=channel)
         return Message.assistant_message(f"Error: Provider {agent.provider} not supported in hybrid adapter")
 
-    async def _ask_openai_compat(self, agent, system_prompt, messages, tools, tool_choice, override_model=None, max_tokens=None, stream_as="message"):
+    async def _ask_openai_compat(self, agent, system_prompt, messages, tools, tool_choice, override_model=None, max_tokens=None, stream_as="message", channel="chat"):
         import asyncio
         
         # Build full message list
@@ -531,7 +533,7 @@ class UnifiedLLM(BaseModel):
                         try:
                             safe_thought = redact(t)
                             if safe_thought:
-                                loop.create_task(broadcaster.broadcast("think", {"content": safe_thought}))
+                                loop.create_task(broadcaster.broadcast("think", {"content": safe_thought}, channel=channel))
                         except Exception as e:
                             logger.debug(f"Failed to broadcast thought part: {e}")
                 
@@ -543,7 +545,7 @@ class UnifiedLLM(BaseModel):
                          # Apply IP redaction to internal thoughts too
                          if stream_as == "think":
                              content = redact(content)
-                         loop.create_task(broadcaster.broadcast(stream_as, {"content": content}))
+                         loop.create_task(broadcaster.broadcast(stream_as, {"content": content}, channel=channel))
                     except Exception as e:
                         logger.debug(f"Failed to broadcast {stream_as}: {e}")
             
@@ -631,7 +633,7 @@ class UnifiedLLM(BaseModel):
             
             return Message.assistant_message(f"LLM Error: {error_str}")
 
-    async def _ask_nvidia(self, agent, system_prompt, messages, tools, tool_choice, override_model=None, max_tokens=16384):
+    async def _ask_nvidia(self, agent, system_prompt, messages, tools, tool_choice, override_model=None, max_tokens=16384, stream_as="message", channel="chat"):
         """
         Adapter for NVIDIA NIM/Moonshot API
         """
@@ -678,7 +680,7 @@ class UnifiedLLM(BaseModel):
             print(f"[UnifiedLLM] ⚠️ NVIDIA Native Tool Call requested (Model: {model_name}). Bridging to Tool Agent (Groq) via Hybrid Adapter...")
             # We must ensure we don't infinitely recurse if tool agent is also nvidia (misconfiguration)
             if _TOOL_AGENT and _TOOL_AGENT.provider != "nvidia":
-                 return await self._ask_provider(_TOOL_AGENT, system_prompt, messages, tools, tool_choice)
+                 return await self._ask_provider(_TOOL_AGENT, system_prompt, messages, tools, tool_choice, channel=channel)
             else:
                  print(f"[UnifiedLLM] ❌ Cannot bridge: Tool Agent is missing or also NVIDIA. Attempting native (likely to fail).")
 
@@ -745,7 +747,7 @@ class UnifiedLLM(BaseModel):
                 traceback.print_exc()
                 return Message.assistant_message(f"NVIDIA API Error: {str(e)}")
 
-    async def _ask_gemini(self, agent, system_prompt, messages, tools):
+    async def _ask_gemini(self, agent, system_prompt, messages, tools, channel="chat"):
         # Gemini adapter implementation ...
         # For brevity in this turn, assuming OpenAI compatible preference logic which handles Groq/OpenAI/Synthetic
         # If Gemini needed, we'd enable this.

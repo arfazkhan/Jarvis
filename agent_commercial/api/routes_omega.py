@@ -56,20 +56,39 @@ broadcaster = SSEBroadcaster()
 @router.get("/stream/thoughts")
 async def stream_thoughts(request: Request):
     """
-    Stream live AI thought process (K2 Think blocks), plans, and tool usage.
+    LEGACY: Backwards-compatible alias for /stream/monitor.
+    Subscribes to the 'monitor' channel (background building intelligence).
     """
+    return await _sse_response(request, channel="monitor")
+
+@router.get("/stream/chat")
+async def stream_chat(request: Request):
+    """
+    SSE stream for active chat interactions only.
+    Receives: task_list, tool_use, thought, progress events triggered by POST /api/v1/chat.
+    """
+    return await _sse_response(request, channel="chat")
+
+@router.get("/stream/monitor")
+async def stream_monitor(request: Request):
+    """
+    SSE stream for background building intelligence.
+    Receives: telemetry, ambient thoughts, swarm_event, system, advisory events from the DemoOrchestrator.
+    """
+    return await _sse_response(request, channel="monitor")
+
+async def _sse_response(request: Request, channel: str):
+    """Shared SSE response generator for a given channel."""
     from fastapi.responses import StreamingResponse
     
     async def event_generator():
-        async for data in broadcaster.subscribe():
+        async for data in broadcaster.subscribe(channel=channel):
             if await request.is_disconnected():
                 break
             
-            # Extract event and data from broadcaster message
             event = data.get("event", "message")
             payload = data.get("data", "{}")
             
-            # Format as SSE event
             yield f"event: {event}\ndata: {payload}\n\n"
 
     return StreamingResponse(

@@ -726,7 +726,7 @@ class BMSLLMAgent:
             logger.debug(f"Summary generation fallback: {e}")
             return "Final advisory delivered and verified."
 
-    async def chat(self, query: str, context: Dict[str, Any] = None) -> ChatResponse:
+    async def chat(self, query: str, context: Dict[str, Any] = None, channel: str = "chat") -> ChatResponse:
         """
         Process a natural language query about BMS using the ARVIS Swarm.
         Replaces the monolithic ReAct loop with a decentralized, BFT-debated Swarm response based on Ruflow architecture.
@@ -758,11 +758,11 @@ class BMSLLMAgent:
                 {"id": "task_validation", "task": "Validating output against safety constraints", "status": "pending"}
             ]
             
-            asyncio.create_task(broadcaster.broadcast("progress", {"content": "The ARVIS Swarm is initializing..."}))
+            asyncio.create_task(broadcaster.broadcast("progress", {"content": "The ARVIS Swarm is initializing..."}, channel=channel))
             
             # 1. Update and broadcast grounding
             tasks_state[0]["status"] = "in_progress"
-            asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": tasks_state}))
+            asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": tasks_state}, channel=channel))
             
             # 1. GROUNDING INJECTION: Fast concurrent fetch
             try:
@@ -799,8 +799,8 @@ class BMSLLMAgent:
             # 2. DELEGATE TO SWARM
             tasks_state[0]["status"] = "completed"
             tasks_state[1]["status"] = "in_progress"
-            asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": tasks_state}))
-            swarm_payload = await self.queen.execute_swarm(query, context)
+            asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": tasks_state}, channel=channel))
+            swarm_payload = await self.queen.execute_swarm(query, context, channel=channel)
             
             # Swarm now returns a dict with the consensus AND the raw tool context discovered by nodes
             if isinstance(swarm_payload, dict):
@@ -825,10 +825,10 @@ class BMSLLMAgent:
                 tasks_state[1]["status"] = "completed"
                 tasks_state[2]["task"] = "Executing Agentic Fast-Path Route"
                 tasks_state[2]["status"] = "in_progress"
-                asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": tasks_state}))
+                asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": tasks_state}, channel=channel))
                 
                 try:
-                    fast_result = await fast_node.process(query, context)
+                    fast_result = await fast_node.process(query, context, channel=channel)
                     fast_text = fast_result["response"].content
                 except Exception as e:
                     logger.error(f"Fast-Path failed: {e}")
@@ -836,7 +836,7 @@ class BMSLLMAgent:
                     
                 tasks_state[2]["status"] = "completed"
                 tasks_state[3]["status"] = "completed" # Bypass validation for fast path
-                asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": tasks_state}))
+                asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": tasks_state}, channel=channel))
                 return ChatResponse(
                     text=fast_text,
                     tool_calls=[],
@@ -856,7 +856,7 @@ class BMSLLMAgent:
             tasks_state[3]["status"] = "in_progress"
             
             # VALIDATE TRUTH SCORE (Non-blocking Soft-Fail)
-            asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": tasks_state}))
+            asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": tasks_state}, channel=channel))
             
             try:
                 from arvis_core.swarm.validator import TruthValidator
@@ -875,7 +875,7 @@ class BMSLLMAgent:
                 val_score = 0.5
             
             tasks_state[3]["status"] = "completed"
-            asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": tasks_state}))
+            asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": tasks_state}, channel=channel))
             
             return ChatResponse(
                 text=final_advice,

@@ -32,7 +32,7 @@ class SwarmNode(BaseModel):
         if not self.llm:
             self.llm = UnifiedLLM()
 
-    async def process(self, query: str, context: Optional[Dict[str, Any]] = None, history: Optional[List[Dict]] = None) -> Dict[str, Any]:
+    async def process(self, query: str, context: Optional[Dict[str, Any]] = None, history: Optional[List[Dict]] = None, channel: str = "chat") -> Dict[str, Any]:
         """
         Processes a query within the agent's specific domain using a ReAct loop.
         Returns a dict with 'response' (Message) and 'history' (evidence list).
@@ -72,12 +72,14 @@ class SwarmNode(BaseModel):
                         messages=messages,
                         system_msgs=system_msgs,
                         tools=tools_def,
-                        tool_choice="auto"
+                        tool_choice="auto",
+                        channel=channel
                     )
                 else:
                     response = await self.llm.ask(
                         messages=messages,
-                        system_msgs=system_msgs
+                        system_msgs=system_msgs,
+                        channel=channel
                     )
                     
                 # If no tool calls, this is the final answer
@@ -123,5 +125,5 @@ class SwarmNode(BaseModel):
         logger.warning(f"[Node: {self.name}] Max Agent turns ({max_turns}) reached.")
         # Force a final plain answer via generic ask to summarize
         messages.append({"role": "user", "content": "Please synthesize a final proposal based on your observations so far."})
-        final_response = await self.llm.ask(messages=messages, system_msgs=system_msgs)
+        final_response = await self.llm.ask(messages=messages, system_msgs=system_msgs, channel=channel)
         return {"response": final_response, "history": messages}

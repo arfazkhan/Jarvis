@@ -109,7 +109,7 @@ class QueenCoordinator(BaseModel):
         logger.info(f"[Queen] Routing query to {len(selected_nodes)} nodes: {[n.name for n in selected_nodes]}")
         return selected_nodes
 
-    async def execute_swarm(self, query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def execute_swarm(self, query: str, context: Optional[Dict[str, Any]] = None, channel: str = "chat") -> Dict[str, Any]:
         """
         Main entry point for dealing with the swarm.
         Returns a dict: {"advice": str, "context": Dict}
@@ -148,7 +148,8 @@ class QueenCoordinator(BaseModel):
         try:
             intent_result = await self.llm.ask_json(
                 messages=[{"role": "user", "content": query}],
-                system_msgs=[{"role": "system", "content": intent_prompt}]
+                system_msgs=[{"role": "system", "content": intent_prompt}],
+                channel=channel
             )
             is_actionable = bool(intent_result.get("is_actionable", False))
         except Exception:
@@ -176,7 +177,7 @@ class QueenCoordinator(BaseModel):
                 "CRITICAL: You MUST include your quantitative findings in a 'GROUNDING_DATA' block at the START of your response.\n"
                 "Ensure your proposed savings/costs are logically derived from your tool history to avoid BFT vetoes."
             )
-            proposer_result = await proposer.process(proposer_prompt, context)
+            proposer_result = await proposer.process(proposer_prompt, context, channel=channel)
             
             proposal_text = proposer_result["response"].content
             proposals[proposer.name] = proposal_text
@@ -191,7 +192,7 @@ class QueenCoordinator(BaseModel):
                 context=context or {}
             )
             
-            debate_result = await engine.run_debate(round_obj, quorum)
+            debate_result = await engine.run_debate(round_obj, quorum, channel=channel)
             
             for v_data in debate_result["votes"]:
                 proposals[v_data["agent_name"]] = f"VOTE: {v_data['vote']} - Reasoning: {v_data['reasoning']}"
@@ -227,7 +228,7 @@ class QueenCoordinator(BaseModel):
             # Execute all nodes in parallel to reduce latency
             async def run_node(node):
                 try:
-                    result = await node.process(query, context)
+                    result = await node.process(query, context, channel=channel)
                     return node.name, result, None
                 except Exception as e:
                     logger.error(f"[Queen] Node {node.name} failed: {e}")

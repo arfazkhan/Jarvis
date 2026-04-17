@@ -682,6 +682,7 @@ class DemoOrchestrator:
             response = await self.llm_agent.chat(
                 query="Analyze current building conditions and provide advisories if needed.",
                 context=context,
+                channel="monitor"
             )
             
             advice_text = response.text if hasattr(response, 'text') else str(response)

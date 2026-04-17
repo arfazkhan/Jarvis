@@ -31,7 +31,7 @@ class ConsensusEngine:
     def __init__(self):
         self.llm = UnifiedLLM()
         
-    async def run_debate(self, round_data: VotingRound, quorum: List[SwarmNode]) -> Dict[str, Any]:
+    async def run_debate(self, round_data: VotingRound, quorum: List[SwarmNode], channel: str = "chat") -> Dict[str, Any]:
         """
         Executes parallel Review phases against the proposed action.
         """
@@ -56,7 +56,7 @@ class ConsensusEngine:
             )
             
             try:
-                result_map = await node.process(query=prompt, context=round_data.context)
+                result_map = await node.process(query=prompt, context=round_data.context, channel=channel)
                 raw_response = result_map["response"].content
                 
                 # Find JSON payload
