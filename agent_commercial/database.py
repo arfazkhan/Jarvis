@@ -289,6 +289,98 @@ class BMSDatabase:
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_msg_session ON chat_messages(session_id)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_sess_updated ON chat_sessions(updated_at DESC)")
 
+        # 13. Operator Feedback (Learning Signal)
+        if 'operator_feedback' not in existing_tables:
+            logger.info("Creating table: operator_feedback")
+            await conn.execute("""
+            CREATE TABLE operator_feedback (
+                feedback_id TEXT PRIMARY KEY,
+                session_id TEXT,
+                equipment_id TEXT,
+                recommendation_id TEXT,
+                feedback_type TEXT,
+                rating INTEGER,
+                comment TEXT,
+                timestamp TEXT,
+                metadata TEXT
+            )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_equipment ON operator_feedback(equipment_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_feedback_timestamp ON operator_feedback(timestamp DESC)")
+
+        # 14. Trust Metrics
+        if 'trust_metrics' not in existing_tables:
+            logger.info("Creating table: trust_metrics")
+            await conn.execute("""
+            CREATE TABLE trust_metrics (
+                metric_id TEXT PRIMARY KEY,
+                operator_id TEXT NOT NULL,
+                building_id TEXT,
+                follow_through_rate REAL DEFAULT 0.0,
+                avg_response_time_seconds REAL,
+                total_recommendations INTEGER DEFAULT 0,
+                accepted_recommendations INTEGER DEFAULT 0,
+                rejected_recommendations INTEGER DEFAULT 0,
+                silence_rate REAL DEFAULT 0.0,
+                last_updated TEXT,
+                metadata TEXT
+            )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_trust_operator ON trust_metrics(operator_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_trust_building ON trust_metrics(building_id)")
+
+        # 15. Recommendations
+        if 'recommendations' not in existing_tables:
+            logger.info("Creating table: recommendations")
+            await conn.execute("""
+            CREATE TABLE recommendations (
+                recommendation_id TEXT PRIMARY KEY,
+                equipment_id TEXT,
+                domain TEXT,
+                recommendation_type TEXT,
+                priority TEXT,
+                title TEXT,
+                description TEXT,
+                confidence REAL,
+                evidence TEXT,
+                action TEXT,
+                created_at TEXT,
+                accepted_at TEXT,
+                rejected_at TEXT,
+                operator_id TEXT,
+                status TEXT DEFAULT 'pending',
+                metadata TEXT
+            )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_rec_equipment ON recommendations(equipment_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_rec_status ON recommendations(status)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_rec_created ON recommendations(created_at DESC)")
+
+        # 16. Briefings
+        if 'briefings' not in existing_tables:
+            logger.info("Creating table: briefings")
+            await conn.execute("""
+            CREATE TABLE briefings (
+                briefing_id TEXT PRIMARY KEY,
+                period TEXT,
+                building_id TEXT,
+                title TEXT,
+                critical_items TEXT,
+                attention_items TEXT,
+                info_items TEXT,
+                wins_items TEXT,
+                generated_at TEXT,
+                operator_id TEXT,
+                operator_response TEXT,
+                responded_at TEXT,
+                status TEXT DEFAULT 'pending',
+                metadata TEXT
+            )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_brief_building ON briefings(building_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_brief_period ON briefings(period)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_brief_generated ON briefings(generated_at DESC)")
+
         
         await conn.commit()
         logger.info("✅ Database schema verification complete.")
@@ -439,9 +531,9 @@ class BMSDatabase:
         rows = await self.fetch_all(query, (limit,))
         return rows
         
-    # ═══════════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════════════════════
     # CHAT HISTORY COMMANDS
-    # ═══════════════════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════════════════════
     
     async def create_chat_session(self, session_id: str, title: str = "New Conversation") -> Optional[str]:
         """Create a new chat session."""
@@ -905,6 +997,414 @@ class BMSDatabase:
             if self._async_conn:
                 await self._async_conn.close()
                 self._async_conn = None
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # ALARM STATE OPERATIONS (for bms_state_engine)
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    async def update_alarm_state(
+        self,
+        alarm_id: str,
+        state: str = None,
+        acknowledged_by: str = None,
+        acknowledged_at: datetime = None,
+        resolved_at: datetime = None
+    ) -> None:
+        """Update alarm state fields (Async)"""
+        conn = await self._get_async_connection()
+        
+        fields = []
+        params = []
+        if state is not None:
+            fields.append("state = ?")
+            params.append(state.value if hasattr(state, 'value') else state)
+        if acknowledged_by is not None:
+            fields.append("acknowledged_by = ?")
+            params.append(acknowledged_by)
+        if acknowledged_at is not None:
+            fields.append("acknowledged_at = ?")
+            params.append(acknowledged_at.isoformat() if hasattr(acknowledged_at, 'isoformat') else acknowledged_at)
+        if resolved_at is not None:
+            fields.append("resolved_at = ?")
+            params.append(resolved_at.isoformat() if hasattr(resolved_at, 'isoformat') else resolved_at)
+        
+        if not fields:
+            return
+        
+        params.append(alarm_id)
+        query = f"UPDATE alarms SET {', '.join(fields)} WHERE alarm_id = ?"
+        await conn.execute(query, params)
+        await conn.commit()
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # OPERATOR FEEDBACK (for trust calibration + learning)
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    async def save_operator_feedback(self, feedback: Dict[str, Any]) -> None:
+        """Save operator feedback on a recommendation (Async)"""
+        conn = await self._get_async_connection()
+        
+        await conn.execute("""
+            INSERT OR REPLACE INTO operator_feedback 
+            (feedback_id, session_id, equipment_id, recommendation_id, feedback_type, 
+             rating, comment, timestamp, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            feedback.get("feedback_id"),
+            feedback.get("session_id"),
+            feedback.get("equipment_id"),
+            feedback.get("recommendation_id"),
+            feedback.get("feedback_type"),
+            feedback.get("rating"),
+            feedback.get("comment"),
+            datetime.now().isoformat(),
+            json.dumps(feedback.get("metadata", {})),
+        ))
+        await conn.commit()
+
+    async def get_operator_feedback(
+        self,
+        equipment_id: str = None,
+        limit: int = 50
+    ) -> List[Dict]:
+        """Get operator feedback history (Async)"""
+        conn = await self._get_async_connection()
+        
+        if equipment_id:
+            query = """
+                SELECT * FROM operator_feedback 
+                WHERE equipment_id = ?
+                ORDER BY timestamp DESC LIMIT ?
+            """
+            params = (equipment_id, limit)
+        else:
+            query = "SELECT * FROM operator_feedback ORDER BY timestamp DESC LIMIT ?"
+            params = (limit,)
+        
+        async with conn.execute(query, params) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # TRUST METRICS (for trust calibrator)
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    async def save_trust_metrics(self, metrics: Dict[str, Any]) -> None:
+        """Save or update trust metrics for an operator (Async)"""
+        conn = await self._get_async_connection()
+        
+        await conn.execute("""
+            INSERT OR REPLACE INTO trust_metrics 
+            (metric_id, operator_id, building_id, follow_through_rate, avg_response_time_seconds,
+             total_recommendations, accepted_recommendations, rejected_recommendations, 
+             silence_rate, last_updated, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            metrics.get("metric_id"),
+            metrics.get("operator_id"),
+            metrics.get("building_id"),
+            metrics.get("follow_through_rate", 0.0),
+            metrics.get("avg_response_time_seconds"),
+            metrics.get("total_recommendations", 0),
+            metrics.get("accepted_recommendations", 0),
+            metrics.get("rejected_recommendations", 0),
+            metrics.get("silence_rate", 0.0),
+            datetime.now().isoformat(),
+            json.dumps(metrics.get("metadata", {})),
+        ))
+        await conn.commit()
+
+    async def get_trust_metrics(
+        self,
+        operator_id: str,
+        building_id: str = None
+    ) -> Optional[Dict]:
+        """Get trust metrics for an operator (Async)"""
+        conn = await self._get_async_connection()
+        
+        if building_id:
+            query = """
+                SELECT * FROM trust_metrics 
+                WHERE operator_id = ? AND building_id = ?
+                LIMIT 1
+            """
+            params = (operator_id, building_id)
+        else:
+            query = """
+                SELECT * FROM trust_metrics 
+                WHERE operator_id = ?
+                ORDER BY last_updated DESC LIMIT 1
+            """
+            params = (operator_id,)
+        
+        async with conn.execute(query, params) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def update_trust_after_feedback(
+        self,
+        operator_id: str,
+        recommendation_id: str,
+        accepted: bool,
+        response_time_seconds: float = None
+    ) -> None:
+        """Increment trust counters after feedback (Async)"""
+        conn = await self._get_async_connection()
+        
+        # Get existing
+        existing = await self.get_trust_metrics(operator_id)
+        
+        total = (existing.get("total_recommendations", 0) or 0) + 1
+        accepted_count = (existing.get("accepted_recommendations", 0) or 0) + (1 if accepted else 0)
+        rejected_count = (existing.get("rejected_recommendations", 0) or 0) + (0 if accepted else 1)
+        follow_rate = accepted_count / total if total > 0 else 0.0
+        
+        # Update avg response time
+        avg_rt = existing.get("avg_response_time_seconds") or 0
+        if response_time_seconds is not None:
+            prev_count = total - 1
+            if prev_count > 0:
+                avg_rt = (avg_rt * prev_count + response_time_seconds) / total
+            else:
+                avg_rt = response_time_seconds
+        
+        await conn.execute("""
+            UPDATE trust_metrics SET
+                total_recommendations = ?,
+                accepted_recommendations = ?,
+                rejected_recommendations = ?,
+                follow_through_rate = ?,
+                avg_response_time_seconds = ?,
+                last_updated = ?
+            WHERE operator_id = ?
+        """, (
+            total, accepted_count, rejected_count, follow_rate, avg_rt,
+            datetime.now().isoformat(), operator_id
+        ))
+        await conn.commit()
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # RECOMMENDATIONS (for advisory engine)
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    async def save_recommendation(self, rec: Dict[str, Any]) -> None:
+        """Save an AI recommendation (Async)"""
+        conn = await self._get_async_connection()
+        
+        await conn.execute("""
+            INSERT OR REPLACE INTO recommendations 
+            (recommendation_id, equipment_id, domain, recommendation_type, priority,
+             title, description, confidence, evidence, action, created_at, 
+             accepted_at, rejected_at, operator_id, status, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            rec.get("recommendation_id"),
+            rec.get("equipment_id"),
+            rec.get("domain"),
+            rec.get("recommendation_type"),
+            rec.get("priority", "medium"),
+            rec.get("title"),
+            rec.get("description"),
+            rec.get("confidence", 0.5),
+            json.dumps(rec.get("evidence", [])),
+            rec.get("action"),
+            datetime.now().isoformat(),
+            rec.get("accepted_at"),
+            rec.get("rejected_at"),
+            rec.get("operator_id"),
+            rec.get("status", "pending"),
+            json.dumps(rec.get("metadata", {})),
+        ))
+        await conn.commit()
+
+    async def get_recommendation(self, recommendation_id: str) -> Optional[Dict]:
+        """Get a recommendation by ID (Async)"""
+        conn = await self._get_async_connection()
+        
+        async with conn.execute(
+            "SELECT * FROM recommendations WHERE recommendation_id = ?",
+            (recommendation_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                result = dict(row)
+                result["evidence"] = json.loads(result.get("evidence") or "[]")
+                return result
+        return None
+
+    async def get_recommendations_by_equipment(
+        self,
+        equipment_id: str,
+        status: str = None,
+        limit: int = 20
+    ) -> List[Dict]:
+        """Get recommendations for an equipment (Async)"""
+        conn = await self._get_async_connection()
+        
+        if status:
+            query = """
+                SELECT * FROM recommendations 
+                WHERE equipment_id = ? AND status = ?
+                ORDER BY created_at DESC LIMIT ?
+            """
+            params = (equipment_id, status, limit)
+        else:
+            query = """
+                SELECT * FROM recommendations 
+                WHERE equipment_id = ?
+                ORDER BY created_at DESC LIMIT ?
+            """
+            params = (equipment_id, limit)
+        
+        async with conn.execute(query, params) as cursor:
+            rows = await cursor.fetchall()
+            result = []
+            for row in rows:
+                r = dict(row)
+                r["evidence"] = json.loads(r.get("evidence") or "[]")
+                result.append(r)
+            return result
+
+    async def update_recommendation_status(
+        self,
+        recommendation_id: str,
+        status: str,
+        operator_id: str = None,
+        accepted_at: datetime = None,
+        rejected_at: datetime = None
+    ) -> None:
+        """Update recommendation status (accepted/rejected/pending) (Async)"""
+        conn = await self._get_async_connection()
+        
+        now = datetime.now().isoformat()
+        
+        if status == "accepted":
+            await conn.execute("""
+                UPDATE recommendations SET 
+                    status = 'accepted', 
+                    operator_id = ?,
+                    accepted_at = ?
+                WHERE recommendation_id = ?
+            """, (operator_id, now, recommendation_id))
+        elif status == "rejected":
+            await conn.execute("""
+                UPDATE recommendations SET 
+                    status = 'rejected', 
+                    operator_id = ?,
+                    rejected_at = ?
+                WHERE recommendation_id = ?
+            """, (operator_id, now, recommendation_id))
+        else:
+            await conn.execute("""
+                UPDATE recommendations SET status = ? WHERE recommendation_id = ?
+            """, (status, recommendation_id))
+        
+        await conn.commit()
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # BRIEFINGS (for briefing engine)
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    async def save_briefing(self, briefing: Dict[str, Any]) -> None:
+        """Save a generated briefing (Async)"""
+        conn = await self._get_async_connection()
+        
+        await conn.execute("""
+            INSERT OR REPLACE INTO briefings 
+            (briefing_id, period, building_id, title, critical_items, attention_items,
+             info_items, wins_items, generated_at, operator_id, operator_response,
+             responded_at, status, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            briefing.get("briefing_id"),
+            briefing.get("period"),
+            briefing.get("building_id"),
+            briefing.get("title"),
+            json.dumps(briefing.get("critical_items", [])),
+            json.dumps(briefing.get("attention_items", [])),
+            json.dumps(briefing.get("info_items", [])),
+            json.dumps(briefing.get("wins_items", [])),
+            datetime.now().isoformat(),
+            briefing.get("operator_id"),
+            briefing.get("operator_response"),
+            briefing.get("responded_at"),
+            briefing.get("status", "pending"),
+            json.dumps(briefing.get("metadata", {})),
+        ))
+        await conn.commit()
+
+    async def get_briefing(self, briefing_id: str) -> Optional[Dict]:
+        """Get a briefing by ID (Async)"""
+        conn = await self._get_async_connection()
+        
+        async with conn.execute(
+            "SELECT * FROM briefings WHERE briefing_id = ?",
+            (briefing_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            if row:
+                result = dict(row)
+                for key in ["critical_items", "attention_items", "info_items", "wins_items"]:
+                    result[key] = json.loads(result.get(key) or "[]")
+                return result
+        return None
+
+    async def get_briefings_by_period(
+        self,
+        period: str,
+        building_id: str = None,
+        limit: int = 10
+    ) -> List[Dict]:
+        """Get briefings by period (Async)"""
+        conn = await self._get_async_connection()
+        
+        if building_id:
+            query = """
+                SELECT * FROM briefings 
+                WHERE period = ? AND building_id = ?
+                ORDER BY generated_at DESC LIMIT ?
+            """
+            params = (period, building_id, limit)
+        else:
+            query = """
+                SELECT * FROM briefings 
+                WHERE period = ?
+                ORDER BY generated_at DESC LIMIT ?
+            """
+            params = (period, limit)
+        
+        async with conn.execute(query, params) as cursor:
+            rows = await cursor.fetchall()
+            result = []
+            for row in rows:
+                r = dict(row)
+                for key in ["critical_items", "attention_items", "info_items", "wins_items"]:
+                    r[key] = json.loads(r.get(key) or "[]")
+                result.append(r)
+            return result
+
+    async def update_briefing_response(
+        self,
+        briefing_id: str,
+        operator_response: str,
+        status: str = "responded"
+    ) -> None:
+        """Record operator response to a briefing (Async)"""
+        conn = await self._get_async_connection()
+        
+        await conn.execute("""
+            UPDATE briefings SET 
+                operator_response = ?,
+                responded_at = ?,
+                status = ?
+            WHERE briefing_id = ?
+        """, (
+            operator_response,
+            datetime.now().isoformat(),
+            status,
+            briefing_id,
+        ))
+        await conn.commit()
 
 
 # ═══════════════════════════════════════════════════════════════════════════

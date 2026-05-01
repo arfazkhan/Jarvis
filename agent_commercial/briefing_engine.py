@@ -303,7 +303,8 @@ class BriefingGenerator:
                  bms_state=None,
                  alarm_engine=None,
                  energy_analyzer=None,
-                 skillbook=None):
+                 skillbook=None,
+                 database=None):
         """
         Initialize the Briefing Generator.
         
@@ -313,12 +314,14 @@ class BriefingGenerator:
             alarm_engine: AlarmEngine for alarm data
             energy_analyzer: EnergyAnalyzer for energy data
             skillbook: BuildingSkillbook for optimization history
+            database: BMSDatabase for persistence
         """
         self.building_id = building_id
         self.bms_state = bms_state
         self.alarm_engine = alarm_engine
         self.energy_analyzer = energy_analyzer
         self.skillbook = skillbook
+        self.database = database
         
         self.weather_service = WeatherService()
         
@@ -374,7 +377,7 @@ class BriefingGenerator:
         if self.llm_provider:
              narrative = await self._generate_narrative(context, critical, attention, wins)
 
-        return Briefing(
+        briefing = Briefing(
             building_id=self.building_id,
             period=period_enum,
             greeting=greeting,
@@ -384,9 +387,38 @@ class BriefingGenerator:
             wins=wins,
             context=context,
             recommendations=recommendations,
-            narrative=narrative, # New field
+            narrative=narrative,
         )
-
+        
+        await self._persist_briefing(briefing)
+        
+        return briefing
+    
+    async def _persist_briefing(self, briefing: Briefing) -> None:
+        """Save briefing to database for history."""
+        if not self.database:
+            return
+        try:
+            briefing_dict = briefing.to_dict()
+            # Use period string as id prefix + timestamp
+            import uuid
+            briefing_id = f"{briefing.period.value}_{uuid.uuid4().hex[:8]}"
+            await self.database.save_briefing({
+                "briefing_id": briefing_id,
+                "period": briefing.period.value,
+                "building_id": briefing.building_id,
+                "title": briefing.narrative or briefing._generate_summary(),
+                "critical_items": briefing_dict.get("critical", []),
+                "attention_items": briefing_dict.get("attention", []),
+                "info_items": briefing_dict.get("info", []),
+                "wins_items": briefing_dict.get("wins", []),
+                "operator_id": briefing.user_name,
+                "status": "pending",
+            })
+            logger.debug(f"Briefing {briefing_id} persisted to DB")
+        except Exception as e:
+            logger.error(f"Failed to persist briefing: {e}")
+    
     async def _generate_narrative(self, context: TodayContext, critical: List[BriefingItem], attention: List[BriefingItem], wins: List[BriefingItem]) -> str:
         """Generate a cohesive narrative summary using LLM."""
         if not self.llm_provider:

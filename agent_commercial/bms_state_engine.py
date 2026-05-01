@@ -376,6 +376,17 @@ class BMSStateEngine:
                     if alarm_id in eq.active_alarm_ids:
                         eq.active_alarm_ids.remove(alarm_id)
                 
+                # Persist to database if available
+                if self.db:
+                    try:
+                        await self.db.update_alarm_state(
+                            alarm_id=alarm_id,
+                            state=AlarmState.RESOLVED,
+                            resolved_at=alarm.resolved_at
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to persist alarm resolution: {e}")
+                
                 return True
             return False
     

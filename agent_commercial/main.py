@@ -40,6 +40,7 @@ from agent_commercial.predictive_maintenance import PredictiveMaintenanceEngine
 from agent_commercial.bacnet_adapter import BACnetAdapter, BACnetSimulatorAdapter, BACnetPoint
 from agent_commercial.api.routes import create_api
 from agent_commercial.tools_schema import BMSToolHandler, get_bms_tools, get_ops_copilot_prompt
+from agent_commercial.briefing_engine import BriefingGenerator
 
 # Configure logging
 logging.basicConfig(
@@ -578,6 +579,14 @@ class OpsCopilot:
             llm_agent=self.llm_agent,  # CONNECTED: The Mind is now attached to the API
             advisor=self.advisor,  # Feedback loop
             trust_calibrator=self.trust_calibrator,  # Trust metrics
+            briefing_engine=BriefingGenerator(
+                building_id="default",
+                bms_state=self.state_engine,
+                alarm_engine=self.alarm_engine,
+                energy_analyzer=self.energy_analyzer,
+                skillbook=self.skillbook if hasattr(self, 'skillbook') else None,
+                database=self.database,
+            ),
         )
         
         config = uvicorn.Config(
