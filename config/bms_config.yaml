@@ -6,107 +6,160 @@
 # =============================================================================
 bacnet:
   enabled: true
+  local_address: "0.0.0.0"
+  port: 47809  # ARVIS BACnet Simulator (scripts/bacnet_simulator.py)
+  device_id: 999
+  discovery_timeout: 10
 
-  # Network settings
-  local_address: "0.0.0.0" # Listen on all interfaces (or specific IP)
-  port: 47809 # Use different port than YABE (47808)
+  # Points — match bacnet_simulator.py POINTS registry
+  points:
+    # ── Chiller 1 ──────────────────────────────────────
+    - point_id: "CH-01/CHWST"
+      device_id: 260001
+      object_type: "analogInput"
+      object_instance: 1
+      name: "Chilled Water Supply Temp"
+      equipment_id: "CH-01"
+      unit: "°C"
 
-  # Discovery settings
-  discovery_timeout: 30 # Seconds to wait for device discovery
+    - point_id: "CH-01/CHWRT"
+      device_id: 260001
+      object_type: "analogInput"
+      object_instance: 2
+      name: "Chilled Water Return Temp"
+      equipment_id: "CH-01"
+      unit: "°C"
 
-  # Devices to poll (can also be auto-discovered)
-  devices:
-    # Chiller Plant Controller (YABE simulated device)
-    - device_id: 1001
-      name: "Chiller Plant Controller"
-      address: "127.0.0.1" # For local YABE simulation
-      poll_interval: 30 # Seconds between polls
+    - point_id: "CH-01/KW"
+      device_id: 260001
+      object_type: "analogInput"
+      object_instance: 3
+      name: "Chiller Power"
+      equipment_id: "CH-01"
+      unit: "kW"
 
-    # Add more devices as needed:
-    # - device_id: 2001
-    #   name: "AHU-01 Controller"
-    #   poll_interval: 60
+    - point_id: "CH-01/LOAD"
+      device_id: 260001
+      object_type: "analogInput"
+      object_instance: 4
+      name: "Chiller Load"
+      equipment_id: "CH-01"
+      unit: "%"
 
-# =============================================================================
-# Point Definitions - Maps BACnet objects to equipment
-# =============================================================================
-points:
-  # ─────────────────────────────────────────────────────────────────────────
-  # Chiller 1 (CH-01)
-  # ─────────────────────────────────────────────────────────────────────────
-  - point_id: "CH-01/CHWST"
-    device_id: 1001
-    object_type: "analogInput"
-    object_instance: 1
-    name: "Chilled Water Supply Temperature"
-    equipment_id: "CH-01"
-    unit: "°C"
+    - point_id: "CH-01/STATUS"
+      device_id: 260001
+      object_type: "binaryInput"
+      object_instance: 1
+      name: "Chiller Running Status"
+      equipment_id: "CH-01"
 
-  - point_id: "CH-01/CHWRT"
-    device_id: 1001
-    object_type: "analogInput"
-    object_instance: 2
-    name: "Chilled Water Return Temperature"
-    equipment_id: "CH-01"
-    unit: "°C"
+    # ── Chiller 2 ──────────────────────────────────────
+    - point_id: "CH-02/CHWST"
+      device_id: 260001
+      object_type: "analogInput"
+      object_instance: 5
+      name: "Chiller 2 Supply Temp"
+      equipment_id: "CH-02"
+      unit: "°C"
 
-  - point_id: "CH-01/KW"
-    device_id: 1001
-    object_type: "analogInput"
-    object_instance: 3
-    name: "Chiller Power"
-    equipment_id: "CH-01"
-    unit: "kW"
+    - point_id: "CH-02/CHWRT"
+      device_id: 260001
+      object_type: "analogInput"
+      object_instance: 6
+      name: "Chiller 2 Return Temp"
+      equipment_id: "CH-02"
+      unit: "°C"
 
-  - point_id: "CH-01/LOAD"
-    device_id: 1001
-    object_type: "analogInput"
-    object_instance: 4
-    name: "Chiller Load"
-    equipment_id: "CH-01"
-    unit: "%"
+    - point_id: "CH-02/KW"
+      device_id: 260001
+      object_type: "analogInput"
+      object_instance: 7
+      name: "Chiller 2 Power"
+      equipment_id: "CH-02"
+      unit: "kW"
 
-  - point_id: "CH-01/STATUS"
-    device_id: 1001
-    object_type: "binaryInput"
-    object_instance: 1
-    name: "Chiller Running Status"
-    equipment_id: "CH-01"
+    # ── AHU-01 ───────────────────────────────────────
+    - point_id: "AHU-01/SAT"
+      device_id: 260001
+      object_type: "analogInput"
+      object_instance: 10
+      name: "Supply Air Temp"
+      equipment_id: "AHU-01"
+      unit: "°C"
 
-  # ─────────────────────────────────────────────────────────────────────────
-  # AHU-01
-  # ─────────────────────────────────────────────────────────────────────────
-  - point_id: "AHU-01/SAT"
-    device_id: 2001
-    object_type: "analogInput"
-    object_instance: 1
-    name: "Supply Air Temperature"
-    equipment_id: "AHU-01"
-    unit: "°C"
+    - point_id: "AHU-01/RAT"
+      device_id: 260001
+      object_type: "analogInput"
+      object_instance: 11
+      name: "Return Air Temp"
+      equipment_id: "AHU-01"
+      unit: "°C"
 
-  - point_id: "AHU-01/RAT"
-    device_id: 2001
-    object_type: "analogInput"
-    object_instance: 2
-    name: "Return Air Temperature"
-    equipment_id: "AHU-01"
-    unit: "°C"
+    - point_id: "AHU-01/OAT"
+      device_id: 260001
+      object_type: "analogInput"
+      object_instance: 12
+      name: "Outdoor Air Temp"
+      equipment_id: "AHU-01"
+      unit: "°C"
 
-  - point_id: "AHU-01/SF_SPD"
-    device_id: 2001
-    object_type: "analogOutput"
-    object_instance: 1
-    name: "Supply Fan Speed"
-    equipment_id: "AHU-01"
-    unit: "%"
+    - point_id: "AHU-01/ZONE_TMP"
+      device_id: 260001
+      object_type: "analogInput"
+      object_instance: 15
+      name: "Zone Temperature"
+      equipment_id: "AHU-01"
+      unit: "°C"
 
-  - point_id: "AHU-01/OA_DMPR"
-    device_id: 2001
-    object_type: "analogOutput"
-    object_instance: 2
-    name: "Outdoor Air Damper"
-    equipment_id: "AHU-01"
-    unit: "%"
+    - point_id: "AHU-01/SF_SPD"
+      device_id: 260001
+      object_type: "analogInput"
+      object_instance: 13
+      name: "Supply Fan Speed"
+      equipment_id: "AHU-01"
+      unit: "%"
+
+    - point_id: "AHU-01/FILTER_DP"
+      device_id: 260001
+      object_type: "analogInput"
+      object_instance: 14
+      name: "Filter Differential Pressure"
+      equipment_id: "AHU-01"
+      unit: "Pa"
+
+    # ── AHU-02 ───────────────────────────────────────
+    - point_id: "AHU-02/SAT"
+      device_id: 260001
+      object_type: "analogInput"
+      object_instance: 20
+      name: "Supply Air Temp"
+      equipment_id: "AHU-02"
+      unit: "°C"
+
+    - point_id: "AHU-02/ZONE_TMP"
+      device_id: 260001
+      object_type: "analogInput"
+      object_instance: 25
+      name: "Zone Temperature"
+      equipment_id: "AHU-02"
+      unit: "°C"
+
+    # ── Energy Meter ────────────────────────────────
+    - point_id: "METER/KW"
+      device_id: 260001
+      object_type: "analogInput"
+      object_instance: 50
+      name: "Building Power"
+      equipment_id: "MAIN-METER"
+      unit: "kW"
+
+    - point_id: "METER/KWH"
+      device_id: 260001
+      object_type: "analogInput"
+      object_instance: 51
+      name: "Cumulative Energy"
+      equipment_id: "MAIN-METER"
+      unit: "kWh"
 
 # =============================================================================
 # Equipment Topology
