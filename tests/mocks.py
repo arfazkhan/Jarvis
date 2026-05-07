@@ -27,6 +27,47 @@ logger = logging.getLogger("arvis.tests.mocks")
 
 
 # ============================================================================
+# MOCK DATA CLASS HELPERS
+# ============================================================================
+
+class MockEquipment:
+    """Mock equipment object with to_dict() method."""
+    
+    def __init__(self, data: Dict[str, Any]):
+        self._data = data
+        # Set attributes
+        for key, value in data.items():
+            setattr(self, key, value)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return self._data
+
+
+class MockDataPoint:
+    """Mock data point object with to_dict() method."""
+    
+    def __init__(self, data: Dict[str, Any]):
+        self._data = data
+        for key, value in data.items():
+            setattr(self, key, value)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return self._data
+
+
+class MockAlarm:
+    """Mock alarm object with to_dict() method."""
+    
+    def __init__(self, data: Dict[str, Any]):
+        self._data = data
+        for key, value in data.items():
+            setattr(self, key, value)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return self._data
+
+
+# ============================================================================
 # MOCK LLM
 # ============================================================================
 
@@ -324,13 +365,14 @@ class MockBMSStateEngine:
         if eq_id:
             self._equipment[eq_id] = equipment
     
-    def get_equipment(self, equipment_id: str) -> Optional[Dict[str, Any]]:
+    async def get_equipment(self, equipment_id: str) -> Optional[Dict[str, Any]]:
         """Get equipment by ID."""
-        return self._equipment.get(equipment_id)
+        data = self._equipment.get(equipment_id)
+        return MockEquipment(data) if data else None
     
-    def get_all_equipment(self) -> List[Dict[str, Any]]:
+    async def get_all_equipment(self) -> List[Dict[str, Any]]:
         """Get all equipment."""
-        return list(self._equipment.values())
+        return [MockEquipment(data) for data in self._equipment.values()]
     
     # --- Points ---
     
@@ -361,18 +403,18 @@ class MockBMSStateEngine:
             except Exception as e:
                 logger.warning(f"Callback error: {e}")
     
-    def get_point(self, point_id: str) -> Optional[Dict[str, Any]]:
+    async def get_point(self, point_id: str) -> Optional[Dict[str, Any]]:
         """Get a point's current value."""
         return self._points.get(point_id)
     
-    def get_points_by_equipment(self, equipment_id: str) -> List[Dict[str, Any]]:
+    async def get_points_by_equipment(self, equipment_id: str) -> List[Dict[str, Any]]:
         """Get all points for equipment."""
         return [
             p for p in self._points.values()
             if p.get("equipment_id") == equipment_id
         ]
     
-    def get_point_history(
+    async def get_point_history(
         self,
         point_id: str,
         hours: int = 24,
@@ -393,11 +435,11 @@ class MockBMSStateEngine:
         alarm.setdefault("timestamp", datetime.now().isoformat())
         self._alarms.append(alarm)
     
-    def get_active_alarms(self) -> List[Dict[str, Any]]:
+    async def get_active_alarms(self) -> List[Dict[str, Any]]:
         """Get active alarms."""
         return [a for a in self._alarms if a.get("status") != "acknowledged"]
     
-    def acknowledge_alarm(self, alarm_id: str) -> bool:
+    async def acknowledge_alarm(self, alarm_id: str) -> bool:
         """Acknowledge an alarm."""
         for alarm in self._alarms:
             if alarm.get("alarm_id") == alarm_id:
@@ -1250,3 +1292,423 @@ class MockKnowledgeBase:
     def get_call_counts(self) -> Dict[str, int]:
         """Return call counts for assertions."""
         return dict(self._call_counts)
+
+
+# ============================================================================
+# MOCK ENGINES
+# ============================================================================
+
+class MockAlarmEngine:
+    """Mock alarm engine for testing."""
+    
+    def __init__(self, alarms=None):
+        self._alarms = alarms or []
+        self._clusters = []
+    
+    def add_alarm(self, alarm):
+        self._alarms.append(alarm)
+    
+    def get_active_alarms(self, priority_filter=None):
+        if priority_filter:
+            return [a for a in self._alarms if a.get("severity") == priority_filter]
+        return self._alarms
+    
+    def acknowledge_alarm(self, alarm_id, user="test", note=""):
+        for alarm in self._alarms:
+            if alarm.get("alarm_id") == alarm_id:
+                alarm["status"] = "acknowledged"
+                return True
+        return False
+    
+    def cluster_alarms(self):
+        return self._clusters
+    
+    def get_stats(self):
+        return {
+            "active_alarms": len(self._alarms),
+            "clusters": len(self._clusters),
+        }
+
+
+class MockBriefingScheduler:
+    """Mock briefing scheduler for testing."""
+    
+    def __init__(self):
+        self._briefings = []
+    
+    async def generate_briefing(self, briefing_type="daily_morning", focus_area=None):
+        return {
+            "briefing_type": briefing_type,
+            "generated_at": datetime.now().isoformat(),
+            "sections": {
+                "critical_items": [],
+                "overnight_anomalies": [],
+                "optimization_wins": [],
+                "recommendations": [],
+            },
+        }
+    
+    def get_stats(self):
+        return {"briefings_generated": len(self._briefings)}
+
+
+class MockGoalGenerator:
+    """Mock goal generator for testing."""
+    
+    def __init__(self):
+        self._goals = []
+    
+    def add_goal(self, goal):
+        self._goals.append(goal)
+    
+    def get_active_goals(self, category=None):
+        if category:
+            return [g for g in self._goals if g.get("category") == category]
+        return self._goals
+
+
+class MockFeedbackLoop:
+    """Mock feedback loop for testing."""
+    
+    def __init__(self):
+        self._feedback = []
+    
+    async def submit_feedback(self, feedback_type, target, content, rating=None):
+        self._feedback.append({
+            "type": feedback_type,
+            "target": target,
+            "content": content,
+            "rating": rating,
+        })
+        return {"status": "recorded"}
+
+
+class MockTrustCalibrator:
+    """Mock trust calibrator for testing."""
+    
+    async def calculate_trust_metrics(self, window_days=30):
+        return {
+            "trust_score": 0.85,
+            "adoption_rate": 0.72,
+            "accuracy": 0.88,
+        }
+
+
+class MockPredictiveEngine:
+    """Mock predictive engine for testing."""
+    
+    async def predict_maintenance(self, equipment_id):
+        return {
+            "equipment_id": equipment_id,
+            "failure_probability": 0.15,
+            "rul_days": 45,
+            "health_score": 85,
+        }
+    
+    async def predict_rul(self, equipment_id, forecast_days):
+        return {
+            "equipment_id": equipment_id,
+            "days_until_predicted_failure": 60,
+            "health_score": 82,
+            "failure_probability": {
+                "30_days": 0.08,
+                "60_days": 0.18,
+                "90_days": 0.32,
+            },
+        }
+    
+    async def detect_faults(self, equipment_id, fault_type=None):
+        return {
+            "equipment_id": equipment_id,
+            "faults_detected": [],
+            "status": "normal",
+            "confidence": 0.85,
+        }
+    
+    async def forecast_energy(self, hours=24, building_id=None, include_confidence=True):
+        import random
+        forecast = []
+        for hour in range(hours):
+            forecast.append({
+                "hour": hour,
+                "predicted_kw": 400 + random.uniform(-20, 20),
+            })
+        return {
+            "forecast": forecast,
+            "peak_demand": 450,
+        }
+
+
+class MockGSASReporter:
+    """Mock GSAS reporter for testing."""
+    
+    def __init__(self, building_id="TEST-001", target_rating=4):
+        self.building_id = building_id
+        self.target_rating = target_rating
+        self._score = 2.5
+    
+    def get_status(self):
+        return {
+            "overall_score": self._score,
+            "certification_level": "3-Star",
+            "categories": {
+                "energy": 75,
+                "water": 70,
+                "indoor_environment": 80,
+            },
+        }
+    
+    def target_score(self):
+        return self.target_rating * 0.75
+    
+    def get_improvement_priorities(self):
+        return [
+            {"action": "Optimize Chiller Sequencing", "impact": 1.5, "category": "Energy"},
+            {"action": "Install Low-Flow Fixtures", "impact": 0.8, "category": "Water"},
+        ]
+    
+    def optimize_recommendations_for_targets(self, recommendations, limit=10):
+        # Return top recommendations sorted by GSAS impact
+        sorted_recs = sorted(recommendations, key=lambda r: r.get("gsas_impact", 0), reverse=True)
+        return sorted_recs[:limit]
+
+
+class MockWorldModel:
+    """Mock world model for testing."""
+    
+    async def analyze_root_cause(self, alarm_ids, depth=3):
+        return {
+            "alarm_ids": alarm_ids,
+            "root_causes": [{"cause": "Unknown", "probability": 0.5}],
+        }
+    
+    async def simulate_with_uncertainty(self, **kwargs):
+        return {
+            "energy_impact_pct": -2.5,
+            "risk_assessment": {"probability_negative": 0.1},
+        }
+    
+    def benchmark_building(self, building_id, scope="local_fleet"):
+        return {
+            "archetype": "Large Office Cooling-Dominated",
+            "percentile_rankings": {"energy_eui": 65},
+        }
+
+
+class MockKnowledgeBase:
+    """Mock knowledge base for testing."""
+    
+    async def query_specs(self, query, equipment_id=None, limit=5):
+        return [
+            {"content": "Sample manual content", "metadata": {"source": "manual.pdf"}},
+        ]
+    
+    async def find_similar_skills(self, query, top_k=5, equipment_type=None):
+        return {"results": [], "query": query}
+
+
+class MockTracker:
+    """Mock feedback tracker for testing."""
+    
+    def __init__(self):
+        self._feedback = []
+    
+    def record_feedback(self, target, feedback_type, content):
+        self._feedback.append({"target": target, "type": feedback_type, "content": content})
+
+
+class MockAdvisor:
+    """Mock advisor for testing."""
+    
+    async def get_recommendations(self, context, equipment_id=None, alarm_id=None, top_k=3):
+        return {
+            "context": context,
+            "recommendations": [
+                {"id": "rec-001", "title": "Monitor", "confidence": 0.7},
+            ],
+        }
+
+
+class MockOnlineLearner:
+    """Mock online learner for testing."""
+    
+    def __init__(self):
+        self._observations = []
+    
+    def log_observation(self, prediction, actual):
+        self._observations.append({"prediction": prediction, "actual": actual})
+    
+    def get_performance_summary(self):
+        return {
+            "current_rmse": 0.15,
+            "drift_ratio": 1.0,
+            "sample_count": len(self._observations),
+        }
+
+
+class MockPredictiveMaintenanceEngine:
+    """Mock predictive maintenance engine."""
+    
+    async def predict_maintenance(self, equipment_id):
+        return {
+            "equipment_id": equipment_id,
+            "failure_probability": 0.12,
+            "rul_days": 90,
+            "health_score": 88,
+            "recommendation": "Continue monitoring",
+        }
+    
+    async def predict_rul(self, equipment_id, forecast_days=90):
+        return {
+            "equipment_id": equipment_id,
+            "days_until_predicted_failure": 180,
+            "health_score": 85,
+        }
+    
+    def detect_faults(self, equipment_id, fault_type=None):
+        return {
+            "equipment_id": equipment_id,
+            "faults_detected": [],
+        }
+
+
+# ============================================================================
+# UPDATED MOCK BMS STATE ENGINE (with all required methods)
+# ============================================================================
+
+class MockBMSStateEngineV2:
+    """
+    Enhanced mock BMS state engine matching real interface.
+    Returns objects with .to_dict() methods instead of raw dicts.
+    """
+    
+    def __init__(self):
+        self._equipment: Dict[str, Any] = {}
+        self._points: Dict[str, Any] = {}
+        self._point_history: Dict[str, List] = defaultdict(list)
+        self._alarms: List[Any] = []
+        self._callbacks: List[Callable] = []
+    
+    def add_equipment(self, equipment: Dict[str, Any]) -> None:
+        eq_id = equipment.get("equipment_id")
+        if eq_id:
+            # Wrap in object with to_dict
+            self._equipment[eq_id] = MockEquipment(equipment)
+    
+    def get_equipment(self, equipment_id: str):
+        return self._equipment.get(equipment_id)
+    
+    def get_all_equipment(self) -> List:
+        return list(self._equipment.values())
+    
+    def update_point(self, point_id: str, value: float, unit: str = "", equipment_id: str = "", timestamp=None):
+        ts = timestamp or datetime.now()
+        point = MockDataPoint({
+            "point_id": point_id,
+            "value": value,
+            "unit": unit,
+            "equipment_id": equipment_id,
+            "timestamp": ts,
+        })
+        self._points[point_id] = point
+        self._point_history[point_id].append((ts, value))
+    
+    def get_point(self, point_id: str):
+        return self._points.get(point_id)
+    
+    def get_points_by_equipment(self, equipment_id: str) -> List:
+        return [p for p in self._points.values() if p.equipment_id == equipment_id]
+    
+    def get_point_history(self, point_id: str, hours: int = 24):
+        cutoff = datetime.now() - timedelta(hours=hours)
+        history = self._point_history.get(point_id, [])
+        return [(t, v) for t, v in history if t >= cutoff]
+    
+    def add_alarm(self, alarm: Dict[str, Any]) -> None:
+        alarm.setdefault("alarm_id", f"ALM-{len(self._alarms) + 1}")
+        alarm.setdefault("timestamp", datetime.now().isoformat())
+        self._alarms.append(MockAlarm(alarm))
+    
+    def get_active_alarms(self) -> List:
+        return [a for a in self._alarms if a.status != "acknowledged"]
+    
+    def acknowledge_alarm(self, alarm_id: str) -> bool:
+        for alarm in self._alarms:
+            if alarm.alarm_id == alarm_id:
+                alarm.status = "acknowledged"
+                return True
+        return False
+    
+    async def get_snapshot(self):
+        """Return current state snapshot."""
+        return {
+            "equipment_count": len(self._equipment),
+            "point_count": len(self._points),
+            "active_alarms": len(self.get_active_alarms()),
+        }
+    
+    def on_point_update(self, callback: Callable) -> None:
+        self._callbacks.append(callback)
+    
+    def clear(self) -> None:
+        self._equipment.clear()
+        self._points.clear()
+        self._point_history.clear()
+        self._alarms.clear()
+
+
+class MockEquipment:
+    """Mock equipment object with to_dict method."""
+    
+    def __init__(self, data: Dict[str, Any]):
+        self.equipment_id = data.get("equipment_id")
+        self.name = data.get("name")
+        self.equipment_type = MockEnum(data.get("equipment_type", "unknown"))
+        self.status = MockEnum(data.get("status", "running"))
+        self.location = data.get("location", "")
+        self.efficiency = data.get("efficiency", 0.85)
+        self._data = data
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return self._data
+
+
+class MockDataPoint:
+    """Mock data point object with to_dict method."""
+    
+    def __init__(self, data: Dict[str, Any]):
+        self.point_id = data.get("point_id")
+        self.name = data.get("name", data.get("point_id"))
+        self.value = data.get("value")
+        self.unit = data.get("unit", "")
+        self.equipment_id = data.get("equipment_id", "")
+        self.timestamp = data.get("timestamp")
+        self._data = data
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return self._data
+
+
+class MockAlarm:
+    """Mock alarm object with properties."""
+    
+    def __init__(self, data: Dict[str, Any]):
+        self.alarm_id = data.get("alarm_id")
+        self.message = data.get("message", "")
+        self.severity = data.get("severity", "medium")
+        self.status = data.get("status", "active")
+        self.timestamp = data.get("timestamp")
+        self._data = data
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return self._data
+
+
+class MockEnum:
+    """Mock enum with .value property."""
+    
+    def __init__(self, value: str):
+        self.value = value
+    
+    def __str__(self):
+        return self.value

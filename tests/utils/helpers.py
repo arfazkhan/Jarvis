@@ -452,3 +452,50 @@ def create_test_context(
 
 # Import random here to avoid issues
 import random
+
+
+def assert_forecast_format(forecast_data):
+    """Validate forecast data format."""
+    assert isinstance(forecast_data, dict)
+    assert "forecast" in forecast_data
+    forecast = forecast_data["forecast"]
+    assert isinstance(forecast, list)
+    for item in forecast:
+        assert "hour" in item or "timestamp" in item
+        assert "predicted_kw" in item or "predicted_kwh" in item
+
+
+def assert_energy_anomaly_format(anomaly_data):
+    """Validate energy anomaly format."""
+    assert isinstance(anomaly_data, dict)
+    assert "anomalies" in anomaly_data or "patterns" in anomaly_data
+
+
+def assert_maintenance_prediction_format(prediction_data):
+    """Validate maintenance prediction format."""
+    assert isinstance(prediction_data, dict)
+    assert "equipment_id" in prediction_data
+    if "failure_probability" in prediction_data:
+        assert 0 <= prediction_data["failure_probability"] <= 1
+    if "health_score" in prediction_data:
+        assert 0 <= prediction_data["health_score"] <= 100
+
+
+def assert_briefing_format(briefing_data):
+    """Validate briefing format."""
+    assert isinstance(briefing_data, dict)
+    assert "briefing_type" in briefing_data
+    assert "sections" in briefing_data or "recommendations" in briefing_data
+
+
+def compare_equipment_states(state1, state2):
+    """Compare two equipment states and return differences."""
+    differences = {}
+    all_keys = set(state1.keys()) | set(state2.keys())
+    for key in all_keys:
+        if state1.get(key) != state2.get(key):
+            differences[key] = {
+                "before": state1.get(key),
+                "after": state2.get(key),
+            }
+    return differences

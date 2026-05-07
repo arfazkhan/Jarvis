@@ -166,18 +166,30 @@ class FaultDetection:
 # VAE CUSTOM LAYERS
 # =============================================================================
 
-class Sampling(layers.Layer):
-    """Uses (z_mean, z_log_var) to sample z, the vector encoding a digit."""
-    def call(self, inputs):
-        z_mean, z_log_var = inputs
-        from tensorflow.keras import backend as K
-        batch = K.shape(z_mean)[0]
-        dim = K.int_shape(z_mean)[1]
-        epsilon = K.random_normal(shape=(batch, dim))
-        return z_mean + K.exp(0.5 * z_log_var) * epsilon
+if TF_AVAILABLE:
+    class Sampling(layers.Layer):
+        """Uses (z_mean, z_log_var) to sample z, the vector encoding a digit."""
+        def call(self, inputs):
+            z_mean, z_log_var = inputs
+            from tensorflow.keras import backend as K
+            batch = K.shape(z_mean)[0]
+            dim = K.int_shape(z_mean)[1]
+            epsilon = K.random_normal(shape=(batch, dim))
+            return z_mean + K.exp(0.5 * z_log_var) * epsilon
+else:
+    class Sampling:
+        """Dummy Sampling layer when TensorFlow not available."""
+        pass
 
-class KLLossLayer(layers.Layer):
-    """Adds KL divergence to model loss."""
+if TF_AVAILABLE:
+    class KLLossLayer(layers.Layer):
+        """Adds KL divergence to model loss."""
+else:
+    class KLLossLayer:
+        """Dummy KL loss layer when TensorFlow not available."""
+        pass
+
+if TF_AVAILABLE:
     def call(self, inputs):
         z_mean, z_log_var = inputs
         from tensorflow.keras import backend as K
