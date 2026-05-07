@@ -916,3 +916,337 @@ class MockTracker:
     
     def get_records(self) -> List[Dict[str, Any]]:
         return self._records
+
+
+# ============================================================================
+# MOCK PREDICTIVE ENGINE (ML)
+# ============================================================================
+
+class MockPredictiveEngine:
+    """
+    Mock predictive engine with ML forecasting.
+    
+    Usage:
+        engine = MockPredictiveEngine()
+        engine.set_forecast([{"hour": 0, "predicted_kw": 400}])
+        engine.add_fault({"equipment_id": "CH-01", "fault_type": "sensor_drift"})
+        
+        forecast = await engine.forecast_energy(hours=24)
+        faults = await engine.detect_faults(equipment_id="CH-01")
+    """
+    
+    def __init__(self):
+        self._forecasts: List[Dict[str, Any]] = []
+        self._faults: List[Dict[str, Any]] = []
+        self._rul_predictions: Dict[str, Dict[str, Any]] = {}
+        self._call_counts: Dict[str, int] = defaultdict(int)
+    
+    # --- Forecasting ---
+    
+    def set_forecast(self, forecast: List[Dict[str, Any]]) -> None:
+        """Set mock forecast data."""
+        self._forecasts = forecast
+    
+    async def forecast_energy(
+        self,
+        hours: int = 24,
+        building_id: Optional[str] = None,
+        include_confidence: bool = True,
+    ) -> Dict[str, Any]:
+        """Return mock energy forecast."""
+        self._call_counts["forecast_energy"] += 1
+        
+        if self._forecasts:
+            return {
+                "building_id": building_id or "default",
+                "forecast_hours": hours,
+                "forecast": self._forecasts[:hours],
+                "model": "mock_prophet_lightgbm",
+            }
+        
+        # Generate default forecast
+        import random
+        forecast = []
+        base_load = 400
+        
+        for hour in range(hours):
+            hour_of_day = hour % 24
+            load_factor = 1.3 if 6 <= hour_of_day < 18 else 0.7
+            predicted = base_load * load_factor * (1 + random.uniform(-0.05, 0.05))
+            
+            forecast.append({
+                "hour": hour,
+                "predicted_kw": round(predicted, 1),
+                "confidence_low": round(predicted * 0.9, 1) if include_confidence else None,
+                "confidence_high": round(predicted * 1.1, 1) if include_confidence else None,
+            })
+        
+        return {
+            "building_id": building_id or "default",
+            "forecast_hours": hours,
+            "forecast": forecast,
+            "model": "mock_default",
+        }
+    
+    # --- Fault Detection ---
+    
+    def add_fault(self, fault: Dict[str, Any]) -> None:
+        """Add mock fault."""
+        self._faults.append(fault)
+    
+    def clear_faults(self) -> None:
+        """Clear all faults."""
+        self._faults.clear()
+    
+    async def detect_faults(
+        self,
+        equipment_id: str,
+        fault_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Return mock fault detection results."""
+        self._call_counts["detect_faults"] += 1
+        
+        faults = [
+            f for f in self._faults
+            if f.get("equipment_id") == equipment_id
+        ]
+        
+        if fault_type:
+            faults = [f for f in faults if f.get("fault_type") == fault_type]
+        
+        return {
+            "equipment_id": equipment_id,
+            "faults_detected": faults,
+            "status": "fault" if faults else "normal",
+            "confidence": 0.92 if faults else 0.85,
+        }
+    
+    # --- RUL ---
+    
+    def set_rul_prediction(self, equipment_id: str, prediction: Dict[str, Any]) -> None:
+        """Set RUL prediction for equipment."""
+        self._rul_predictions[equipment_id] = prediction
+    
+    async def predict_rul(
+        self,
+        equipment_id: str,
+        forecast_days: int = 90,
+    ) -> Dict[str, Any]:
+        """Return mock RUL prediction."""
+        self._call_counts["predict_rul"] += 1
+        
+        if equipment_id in self._rul_predictions:
+            return self._rul_predictions[equipment_id]
+        
+        return {
+            "equipment_id": equipment_id,
+            "health_score": 85,
+            "days_until_predicted_failure": 180,
+            "failure_probability": {
+                "30_days": 0.05,
+                "60_days": 0.12,
+                "90_days": 0.25,
+            },
+            "degradation_indicators": ["Normal wear"],
+            "recommendation": "Continue monitoring",
+        }
+    
+    # --- Maintenance ---
+    
+    async def predict_maintenance(self, equipment_id: str = "all") -> Dict[str, Any]:
+        """Return mock maintenance prediction."""
+        self._call_counts["predict_maintenance"] += 1
+        
+        if equipment_id == "all":
+            return [
+                {
+                    "equipment_id": "CH-01",
+                    "next_maintenance": "2026-06-15",
+                    "health_score": 82,
+                    "priority": "medium",
+                }
+            ]
+        
+        return {
+            "equipment_id": equipment_id,
+            "next_maintenance": "2026-06-15",
+            "health_score": 82,
+            "priority": "medium",
+        }
+    
+    def get_call_counts(self) -> Dict[str, int]:
+        """Return call counts for assertions."""
+        return dict(self._call_counts)
+
+
+# ============================================================================
+# MOCK WORLD MODEL (Bayesian / Simulation)
+# ============================================================================
+
+class MockWorldModel:
+    """
+    Mock world model for Bayesian root cause and simulation.
+    
+    Usage:
+        model = MockWorldModel()
+        model.add_root_cause({"cause": "CH-01 trip", "probability": 0.85})
+        model.set_simulation_result({"energy_impact_pct": -5.2})
+        
+        root_cause = await model.analyze_root_cause(alarm_ids=["ALM-1"])
+        sim = await model.simulate_with_uncertainty(...)
+    """
+    
+    def __init__(self):
+        self._root_causes: List[Dict[str, Any]] = []
+        self._simulation_result: Dict[str, Any] = {}
+        self._benchmark: Dict[str, Any] = {}
+        self._call_counts: Dict[str, int] = defaultdict(int)
+    
+    # --- Root Cause ---
+    
+    def add_root_cause(self, cause: Dict[str, Any]) -> None:
+        """Add mock root cause."""
+        self._root_causes.append(cause)
+    
+    async def analyze_root_cause(
+        self,
+        alarm_ids: List[str],
+        depth: int = 3,
+    ) -> Dict[str, Any]:
+        """Return mock root cause analysis."""
+        self._call_counts["analyze_root_cause"] += 1
+        
+        return {
+            "alarm_ids": alarm_ids,
+            "root_causes": self._root_causes if self._root_causes else [
+                {"cause": "Unknown", "probability": 0.5, "evidence": []}
+            ],
+            "cascade_prediction": None,
+            "analysis_depth": depth,
+        }
+    
+    # --- Simulation ---
+    
+    def set_simulation_result(self, result: Dict[str, Any]) -> None:
+        """Set mock simulation result."""
+        self._simulation_result = result
+    
+    async def simulate_with_uncertainty(
+        self,
+        change_type: str,
+        current_value: float,
+        proposed_value: float,
+        equipment_id: Optional[str] = None,
+        zone_id: Optional[str] = None,
+        samples: int = 1000,
+    ) -> Dict[str, Any]:
+        """Return mock simulation with uncertainty."""
+        self._call_counts["simulate_with_uncertainty"] += 1
+        
+        if self._simulation_result:
+            return self._simulation_result
+        
+        delta = proposed_value - current_value
+        energy_impact = -delta * 2.5
+        
+        return {
+            "change_type": change_type,
+            "current_value": current_value,
+            "proposed_value": proposed_value,
+            "energy_impact_pct": round(energy_impact, 1),
+            "energy_impact_kwh": round(abs(delta) * 10, 1),
+            "comfort_impact": "minimal" if abs(delta) <= 1 else "moderate",
+            "risk_assessment": {
+                "worst_case": round(energy_impact * 1.5, 1),
+                "best_case": round(energy_impact * 0.5, 1),
+                "probability_negative": 0.1 if delta > 0 else 0.3,
+            },
+            "monte_carlo_samples": samples,
+        }
+    
+    # --- Benchmark ---
+    
+    def set_benchmark(self, benchmark: Dict[str, Any]) -> None:
+        """Set mock benchmark data."""
+        self._benchmark = benchmark
+    
+    async def benchmark_building(
+        self,
+        building_id: Optional[str] = None,
+        scope: str = "local_fleet",
+    ) -> Dict[str, Any]:
+        """Return mock building benchmark."""
+        self._call_counts["benchmark_building"] += 1
+        
+        if self._benchmark:
+            return self._benchmark
+        
+        return {
+            "building_id": building_id or "default",
+            "archetype": "Large Office Cooling-Dominated",
+            "percentile_rankings": {
+                "energy_eui": 65,
+                "gsas_score": 72,
+                "maintenance_cost": 58,
+            },
+            "comparison_scope": scope,
+            "improvement_opportunities": [
+                {"area": "Cooling efficiency", "potential_savings_qar": 15000},
+            ],
+        }
+    
+    def get_call_counts(self) -> Dict[str, int]:
+        """Return call counts for assertions."""
+        return dict(self._call_counts)
+
+
+# ============================================================================
+# MOCK KNOWLEDGE BASE (Semantic Search)
+# ============================================================================
+
+class MockKnowledgeBase:
+    """
+    Mock knowledge base for semantic skill search.
+    
+    Usage:
+        kb = MockKnowledgeBase()
+        kb.add_skill({"skill_id": "SK-01", "title": "Chiller optimization", "similarity": 0.92})
+        
+        results = await kb.find_similar_skills(query="chiller not cooling")
+    """
+    
+    def __init__(self):
+        self._skills: List[Dict[str, Any]] = []
+        self._call_counts: Dict[str, int] = defaultdict(int)
+    
+    def add_skill(self, skill: Dict[str, Any]) -> None:
+        """Add mock skill."""
+        self._skills.append(skill)
+    
+    def clear_skills(self) -> None:
+        """Clear all skills."""
+        self._skills.clear()
+    
+    async def find_similar_skills(
+        self,
+        query: str,
+        top_k: int = 5,
+        equipment_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Return mock similar skills."""
+        self._call_counts["find_similar_skills"] += 1
+        
+        skills = self._skills[:top_k]
+        
+        if equipment_type:
+            skills = [s for s in skills if s.get("equipment_type") == equipment_type][:top_k]
+        
+        return {
+            "query": query,
+            "results": skills,
+            "model": "mock_embeddings",
+        }
+    
+    def get_call_counts(self) -> Dict[str, int]:
+        """Return call counts for assertions."""
+        return dict(self._call_counts)
