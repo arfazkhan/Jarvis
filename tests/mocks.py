@@ -734,3 +734,185 @@ class MockGSASReporter:
     def clear_improvements(self) -> None:
         """Clear all improvements."""
         self._improvements.clear()
+
+
+# ============================================================================
+# MOCK ADVISOR
+# ============================================================================
+
+class MockAdvisor:
+    """Mock advisor for testing recommendations."""
+    
+    def __init__(
+        self,
+        recommendations: Optional[List[Dict[str, Any]]] = None,
+    ):
+        self._recommendations = recommendations or []
+        self._call_count = 0
+    
+    async def get_recommendations(
+        self,
+        context: str,
+        equipment_id: Optional[str] = None,
+        alarm_id: Optional[str] = None,
+        top_k: int = 3,
+    ) -> Dict[str, Any]:
+        self._call_count += 1
+        return {
+            "context": context,
+            "recommendations": self._recommendations[:top_k],
+        }
+    
+    def set_recommendations(self, recommendations: List[Dict[str, Any]]) -> None:
+        self._recommendations = recommendations
+
+
+# ============================================================================
+# MOCK GOAL GENERATOR
+# ============================================================================
+
+class MockGoalGenerator:
+    """Mock goal generator for testing."""
+    
+    def __init__(self, goals: Optional[List[Dict[str, Any]]] = None):
+        self._goals = goals or []
+        self._call_count = 0
+    
+    def get_active_goals(self, category: Optional[str] = None) -> List[Dict[str, Any]]:
+        self._call_count += 1
+        if category:
+            return [g for g in self._goals if g.get("category") == category]
+        return self._goals
+    
+    def add_goal(self, goal: Dict[str, Any]) -> None:
+        self._goals.append(goal)
+
+
+# ============================================================================
+# MOCK BRIEFING SCHEDULER
+# ============================================================================
+
+class MockBriefingScheduler:
+    """Mock briefing scheduler for testing."""
+    
+    def __init__(
+        self,
+        briefing: Optional[Dict[str, Any]] = None,
+    ):
+        self._briefing = briefing or {
+            "briefing_type": "daily_morning",
+            "generated_at": datetime.now().isoformat(),
+            "sections": {
+                "critical_items": [],
+                "overnight_anomalies": [],
+                "optimization_wins": [],
+                "today_context": {},
+                "recommendations": [],
+            }
+        }
+        self._call_count = 0
+    
+    async def generate_briefing(
+        self,
+        briefing_type: str = "daily_morning",
+        focus_area: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        self._call_count += 1
+        briefing = self._briefing.copy()
+        briefing["briefing_type"] = briefing_type
+        briefing["focus_area"] = focus_area
+        return briefing
+    
+    def set_briefing(self, briefing: Dict[str, Any]) -> None:
+        self._briefing = briefing
+
+
+# ============================================================================
+# MOCK FEEDBACK LOOP
+# ============================================================================
+
+class MockFeedbackLoop:
+    """Mock feedback loop for testing."""
+    
+    def __init__(self):
+        self._feedback: List[Dict[str, Any]] = []
+        self._call_count = 0
+    
+    async def submit_feedback(
+        self,
+        feedback_type: str,
+        target: str,
+        content: str,
+        rating: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        self._call_count += 1
+        feedback = {
+            "feedback_type": feedback_type,
+            "target": target,
+            "content": content,
+            "rating": rating,
+            "timestamp": datetime.now().isoformat(),
+        }
+        self._feedback.append(feedback)
+        return {
+            "status": "recorded",
+            "feedback_id": f"FB-{len(self._feedback)}",
+        }
+    
+    def get_feedback(self) -> List[Dict[str, Any]]:
+        return self._feedback
+
+
+# ============================================================================
+# MOCK TRUST CALIBRATOR
+# ============================================================================
+
+class MockTrustCalibrator:
+    """Mock trust calibrator for testing."""
+    
+    def __init__(
+        self,
+        trust_score: float = 0.85,
+        adoption_rate: float = 0.92,
+    ):
+        self._trust_score = trust_score
+        self._adoption_rate = adoption_rate
+        self._call_count = 0
+    
+    async def calculate_trust_metrics(self, window_days: int = 30) -> Dict[str, Any]:
+        self._call_count += 1
+        return {
+            "trust_score": self._trust_score,
+            "adoption_rate": self._adoption_rate,
+            "window_days": window_days,
+            "total_recommendations": 150,
+            "followed_recommendations": int(150 * self._adoption_rate),
+        }
+    
+    def set_trust_score(self, trust_score: float) -> None:
+        self._trust_score = trust_score
+    
+    def set_adoption_rate(self, adoption_rate: float) -> None:
+        self._adoption_rate = adoption_rate
+
+
+# ============================================================================
+# MOCK TRACKER
+# ============================================================================
+
+class MockTracker:
+    """Mock tracker for feedback recording."""
+    
+    def __init__(self):
+        self._records: List[Dict[str, Any]] = []
+    
+    def record_feedback(self, target: str, feedback_type: str, content: str) -> None:
+        self._records.append({
+            "target": target,
+            "feedback_type": feedback_type,
+            "content": content,
+            "timestamp": datetime.now().isoformat(),
+        })
+    
+    def get_records(self) -> List[Dict[str, Any]]:
+        return self._records
