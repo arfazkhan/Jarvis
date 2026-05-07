@@ -243,11 +243,13 @@
 
 | Gap | Impact | Location |
 |-----|--------|----------|
-| **Write path to BACnet** | Cannot control equipment | `bacnet_adapter.py` (read-only) |
-| **Write path in tools** | Tools can't execute setpoint changes | `agent_unified/tools/bms/*.py` |
+| ~~**Write path to BACnet**~~ | ~~Cannot control equipment~~ | **INTENTIONALLY DEFERRED** |
+| ~~**Write path in tools**~~ | ~~Tools can't execute setpoint changes~~ | **INTENTIONALLY DEFERRED** |
 | **Auth/auth middleware** | API unsecured | `api/middleware/` (stub) |
 | **Operator feedback loop** | No way to log operator decisions | `verify_loop.py` (needs UI) |
 | **Dashboard state refresh** | Dashboard may show stale data | `dashboard/` (needs SSE) |
+
+**Strategic Note**: Write capability is deferred until ARVIS proves advisory value. This is correct for risk-aware pilot deployment.
 
 ### Stubs (NotImplementedError / pass)
 
@@ -494,10 +496,23 @@ BriefingScheduler (7:00 AM trigger)
 
 | Blocker | Impact | Fix Effort |
 |---------|--------|------------|
-| BACnet write path | Can't control equipment | 2-3 days |
+| ~~BACnet write path~~ | ~~Can't control equipment~~ | ~~2-3 days~~ **DEFERRED** |
 | API auth | Security risk | 1 day |
 | Operator feedback UI | ABI incomplete | 3-5 days |
 | Real hardware testing | Simulator only | 1-2 days |
+
+**Strategic Decision**: BACnet write is intentionally deferred. ARVIS will prove advisory value first before taking equipment control. This is the correct risk-aware approach for pilot.
+
+### Advisory-First Philosophy
+
+ARVIS is **advisory-only** for pilot:
+- ✅ Read BMS data → detect anomalies
+- ✅ Predict failures → recommend maintenance
+- ✅ Detect waste → recommend setpoint changes
+- ✅ Optimize GSAS → recommend actions
+- ❌ No direct equipment control
+
+**Why**: Operators must trust ARVIS before granting control. Trust comes from consistent, accurate advisory value.
 
 ---
 
