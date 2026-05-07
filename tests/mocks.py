@@ -428,6 +428,50 @@ class MockBMSStateEngine:
         self._points.clear()
         self._point_history.clear()
         self._alarms.clear()
+    
+    # --- Zones ---
+    
+    def add_zone(self, zone: Dict[str, Any]) -> None:
+        """Add a zone for ghost detection."""
+        zone_id = zone.get("zone_id")
+        if zone_id:
+            if not hasattr(self, '_zones'):
+                self._zones = {}
+            self._zones[zone_id] = zone
+    
+    def get_all_zones(self) -> List[Dict[str, Any]]:
+        """Get all zones."""
+        return list(getattr(self, '_zones', {}).values())
+    
+    async def get_zone_with_current_values(self, zone_id: str) -> Optional[Dict[str, Any]]:
+        """Get zone with current sensor values."""
+        zones = getattr(self, '_zones', {})
+        zone = zones.get(zone_id)
+        if zone:
+            zone_data = zone.copy()
+            zone_data["co2_ppm"] = zone.get("co2_ppm")
+            zone_data["vav_damper_pct"] = zone.get("vav_damper_pct")
+            zone_data["light_status"] = zone.get("light_status")
+            zone_data["load_kw"] = zone.get("load_kw", 2.0)
+            return zone_data
+        return None
+    
+    # --- Energy ---
+    
+    def add_energy_reading(self, reading: Dict[str, Any]) -> None:
+        """Add an energy reading."""
+        if not hasattr(self, '_energy_readings'):
+            self._energy_readings = []
+        self._energy_readings.append(reading)
+    
+    def get_energy_readings(self, hours: int = 24) -> List[Dict[str, Any]]:
+        """Get energy readings."""
+        readings = getattr(self, '_energy_readings', [])
+        cutoff = datetime.now() - timedelta(hours=hours)
+        return [
+            r for r in readings
+            if datetime.fromisoformat(r.get("timestamp", datetime.now().isoformat())) >= cutoff
+        ]
 
 
 # ============================================================================
@@ -489,6 +533,56 @@ class MockDatabase:
             "total_readings": total_points,
             "is_closed": self._is_closed,
         }
+
+
+# ============================================================================
+# MOCK ENERGY ANALYZER
+# ============================================================================
+
+class MockEnergyAnalyzer:
+    """
+    Mock energy analyzer for testing.
+    
+    Usage:
+        analyzer = MockEnergyAnalyzer(total_kwh=500)
+        analyzer.add_waste_pattern({"pattern_type": "ghost_operation", "estimated_savings_qar": 50})
+        
+        summary = analyzer.get_summary()
+        patterns = analyzer.identify_waste_patterns()
+    """
+    
+    def __init__(
+        self,
+        total_kwh: float = 500.0,
+        cost_qar: float = 75.0,
+        anomalies: Optional[List[Dict[str, Any]]] = None,
+    ):
+        self._total_kwh = total_kwh
+        self._cost_qar = cost_qar
+        self._anomalies = anomalies or []
+        self._waste_patterns: List[Dict[str, Any]] = []
+    
+    def get_summary(self) -> Dict[str, Any]:
+        """Get energy summary."""
+        return {
+            "total_kwh": self._total_kwh,
+            "cost_qar": self._cost_qar,
+            "anomalies": self._anomalies,
+            "baseline_kwh": self._total_kwh * 0.95,
+            "savings_potential_qar": self._cost_qar * 0.1,
+        }
+    
+    def identify_waste_patterns(self) -> List[Dict[str, Any]]:
+        """Get waste patterns."""
+        return self._waste_patterns
+    
+    def add_waste_pattern(self, pattern: Dict[str, Any]) -> None:
+        """Add a waste pattern."""
+        self._waste_patterns.append(pattern)
+    
+    def clear_patterns(self) -> None:
+        """Clear all patterns."""
+        self._waste_patterns.clear()
 
 
 # ============================================================================
