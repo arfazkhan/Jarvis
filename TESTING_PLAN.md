@@ -13,7 +13,7 @@
 ### What Tests Are For
 
 | Purpose | Test Type | Priority |
-|---------|-----------|----------|
+| --- | --- | --- |
 | **Prevent regressions** | Unit tests (fast, isolated) | HIGH |
 | **Verify workflows** | Integration tests (real dependencies) | HIGH |
 | **Find breaking points** | Stress tests (load, timing, failures) | MEDIUM |
@@ -22,7 +22,7 @@
 
 ### What We Test
 
-```
+```markdown
 ┌─────────────────────────────────────────────────────────────┐
 │                        ARVIS TESTING                         │
 ├─────────────────────────────────────────────────────────────┤
@@ -56,7 +56,7 @@
 ### What We Mock
 
 | Component | Mock Strategy | Reason |
-|-----------|---------------|--------|
+| --- | --- | --- |
 | **LLM** | `MockLLM` with predefined responses | Fast, deterministic, free |
 | **BACnet** | `MockBACnetAdapter` with configurable responses | No hardware needed |
 | **BMS State** | `MockBMSStateEngine` with test data | Isolated unit tests |
@@ -66,7 +66,7 @@
 ### What We Don't Mock
 
 | Component | Why Real |
-|-----------|----------|
+| --- | --- |
 | **Tools logic** | That's what we're testing |
 | **Engine logic** | That's what we're testing |
 | **Alarm clustering** | Business logic under test |
@@ -79,7 +79,7 @@
 
 ### Directory Structure
 
-```
+```markdown
 tests/
 ├── conftest.py              # Pytest fixtures, shared across all tests
 ├── factories.py             # Test data factories (equipment, alarms, readings)
@@ -164,7 +164,7 @@ tests/
 
 **Deliverables:**
 
-#### 1.1 `conftest.py` - Shared Fixtures
+#### 1.1 `file conftest.py` - Shared Fixtures
 
 ```python
 # tests/conftest.py
@@ -192,7 +192,6 @@ from tests.factories import (
 )
 from tests.mocks import MockLLM, MockBACnetAdapter, MockBMSStateEngine
 
-
 # ============================================================================
 # EVENT LOOP
 # ============================================================================
@@ -204,7 +203,6 @@ def event_loop():
     yield loop
     loop.close()
 
-
 # ============================================================================
 # MOCKS
 # ============================================================================
@@ -214,12 +212,10 @@ def mock_llm():
     """Mock LLM with configurable responses."""
     return MockLLM()
 
-
 @pytest.fixture
 def mock_bacnet():
     """Mock BACnet adapter with test data."""
     return MockBACnetAdapter()
-
 
 @pytest.fixture
 def mock_bms_state():
@@ -230,7 +226,6 @@ def mock_bms_state():
     state.add_equipment(EquipmentFactory.meter())
     return state
 
-
 # ============================================================================
 # REAL ENGINES (with mocks injected)
 # ============================================================================
@@ -240,18 +235,15 @@ def alarm_engine(mock_bms_state):
     """Real AlarmEngine with mock state."""
     return AlarmEngine(state_engine=mock_bms_state)
 
-
 @pytest.fixture
 def energy_analyzer(mock_bms_state):
     """Real EnergyAnalyzer with mock state."""
     return EnergyAnalyzer(bms_state=mock_bms_state)
 
-
 @pytest.fixture
 def predictive_maintenance(mock_bms_state):
     """Real PredictiveMaintenanceEngine with mock state."""
     return PredictiveMaintenanceEngine(bms_state=mock_bms_state)
-
 
 @pytest.fixture
 def gsas_reporter():
@@ -262,12 +254,10 @@ def gsas_reporter():
         target_rating=4,
     )
 
-
 @pytest.fixture
 def gsas_optimizer(gsas_reporter):
     """Real GSASOptimizer with GSASReporter."""
     return GSASOptimizer(gsas_reporter=gsas_reporter)
-
 
 @pytest.fixture
 def prediction_engine(mock_bms_state, mock_llm):
@@ -277,7 +267,6 @@ def prediction_engine(mock_bms_state, mock_llm):
         llm=mock_llm,
     )
 
-
 @pytest.fixture
 def verify_loop(mock_bms_state, mock_llm):
     """Real VerifyLoop with mocks."""
@@ -286,12 +275,10 @@ def verify_loop(mock_bms_state, mock_llm):
         llm=mock_llm,
     )
 
-
 @pytest.fixture
 def online_learner(mock_llm):
     """Real OnlineLearner with mock LLM."""
     return OnlineLearner(llm=mock_llm)
-
 
 # ============================================================================
 # TEST DATA
@@ -302,7 +289,6 @@ def sample_equipment():
     """Sample equipment for tests."""
     return EquipmentFactory.chiller()
 
-
 @pytest.fixture
 def sample_alarms():
     """Sample alarms for tests."""
@@ -312,12 +298,10 @@ def sample_alarms():
         AlarmFactory.info_zone(),
     ]
 
-
 @pytest.fixture
 def sample_energy_readings():
     """Sample energy readings for tests."""
     return EnergyReadingFactory.last_24_hours()
-
 
 # ============================================================================
 # ASSERTIONS
@@ -332,7 +316,6 @@ def assert_valid_tool_result(result: Dict[str, Any]):
     else:
         assert "error" in result, "Error result must have 'error'"
 
-
 def assert_valid_recommendation(rec: Dict[str, Any]):
     """Assert recommendation has required fields."""
     assert "recommendation_id" in rec
@@ -342,12 +325,11 @@ def assert_valid_recommendation(rec: Dict[str, Any]):
     assert "gsas_aligned" in rec
     assert 0.0 <= rec["confidence"] <= 1.0
 
-
 # Register custom assertions
 pytest.register_assert_rewrite("tests.conftest")
 ```
 
-#### 1.2 `factories.py` - Test Data Generation
+#### 1.2 `file factories.py` - Test Data Generation
 
 ```python
 # tests/factories.py
@@ -364,7 +346,6 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 import random
 import uuid
-
 
 class EquipmentFactory:
     """Generate equipment test data."""
@@ -438,7 +419,6 @@ class EquipmentFactory:
             for i in range(1, count + 1)
         ]
 
-
 class AlarmFactory:
     """Generate alarm test data."""
     
@@ -505,7 +485,6 @@ class AlarmFactory:
                 message=f"Zone temp high due to {root_equipment} trip"
             ))
         return alarms
-
 
 class DataPointFactory:
     """Generate data point test data."""
@@ -578,7 +557,6 @@ class DataPointFactory:
             "quality": "bad",
         }
 
-
 class EnergyReadingFactory:
     """Generate energy reading test data."""
     
@@ -624,7 +602,6 @@ class EnergyReadingFactory:
                 "hvac_kw": round(kw * 0.7, 2),
             })
         return readings
-
 
 class RecommendationFactory:
     """Generate recommendation test data."""
@@ -674,7 +651,7 @@ class RecommendationFactory:
         }
 ```
 
-#### 1.3 `mocks.py` - Mock Classes
+#### 1.3 `file mocks.py` - Mock Classes
 
 ```python
 # tests/mocks.py
@@ -690,7 +667,6 @@ import asyncio
 from typing import Dict, List, Any, Optional, Callable
 from datetime import datetime
 import uuid
-
 
 class MockLLM:
     """
@@ -777,7 +753,6 @@ class MockLLM:
         self.last_prompt = None
         self.prompts = []
 
-
 class MockBACnetAdapter:
     """
     Mock BACnet adapter for testing.
@@ -834,7 +809,6 @@ class MockBACnetAdapter:
             {"point_id": pid, "value": val}
             for pid, val in self.points.items()
         ]
-
 
 class MockBMSStateEngine:
     """
@@ -898,7 +872,7 @@ class MockBMSStateEngine:
         self.alarms.clear()
 ```
 
-#### 1.4 `utils.py` - Test Utilities
+#### 1.4 `file utils.py` - Test Utilities
 
 ```python
 # tests/utils.py
@@ -915,7 +889,6 @@ import asyncio
 from typing import Callable, Any, Dict, List
 import pytest
 
-
 class Timer:
     """Context manager for timing code execution."""
     
@@ -930,18 +903,15 @@ class Timer:
     def __exit__(self, *args):
         self.elapsed = time.time() - self._start
 
-
 async def run_concurrently(tasks: List[Callable], count: int = 10) -> List[Any]:
     """Run multiple copies of a task concurrently."""
     async_tasks = [asyncio.create_task(task()) for _ in range(count) for task in tasks]
     return await asyncio.gather(*async_tasks, return_exceptions=True)
 
-
 def assert_json_structure(data: Dict, required_keys: List[str]):
     """Assert JSON has required keys."""
     for key in required_keys:
         assert key in data, f"Missing required key: {key}"
-
 
 def assert_valid_uuid(value: str):
     """Assert string is valid UUID."""
@@ -951,11 +921,9 @@ def assert_valid_uuid(value: str):
     except ValueError:
         pytest.fail(f"Invalid UUID: {value}")
 
-
 def assert_confidence_range(value: float):
     """Assert confidence is between 0 and 1."""
     assert 0.0 <= value <= 1.0, f"Confidence {value} out of range [0, 1]"
-
 
 def assert_garbage_handled(result: Dict[str, Any]):
     """Assert garbage input was handled gracefully."""
@@ -971,12 +939,12 @@ def assert_garbage_handled(result: Dict[str, Any]):
 **Phase 1 Deliverables Summary:**
 
 | File | Lines | Purpose |
-|------|-------|---------|
-| `conftest.py` | ~200 | Shared fixtures for all tests |
-| `factories.py` | ~300 | Easy test data generation |
-| `mocks.py` | ~200 | Deterministic component mocks |
-| `utils.py` | ~80 | Test helpers and assertions |
-| **Total** | **~780** | Foundation for all tests |
+| --- | --- | --- |
+|  | \~200 | Shared fixtures for all tests |
+|  | \~300 | Easy test data generation |
+|  | \~200 | Deterministic component mocks |
+|  | \~80 | Test helpers and assertions |
+| **Total** | **\~780** | Foundation for all tests |
 
 ---
 
@@ -985,6 +953,7 @@ def assert_garbage_handled(result: Dict[str, Any]):
 **Goal:** Thoroughly test all 30+ tools.
 
 **Approach:** For each tool, test:
+
 - Happy path (normal operation)
 - Edge cases (empty data, missing fields)
 - Failure modes (engine unavailable, garbage input)
@@ -1003,7 +972,6 @@ from agent_commercial.tools.equipment_tools import (
 )
 from tests.factories import EquipmentFactory, DataPointFactory
 from tests.conftest import assert_valid_tool_result
-
 
 class TestGetEquipmentStatus:
     """Test GetEquipmentStatus tool thoroughly."""
@@ -1178,7 +1146,7 @@ class TestGetEquipmentStatus:
 #### 2.2 Tool Test Coverage
 
 | Tool Category | Tools | Tests per Tool | Total Tests |
-|--------------|-------|----------------|-------------|
+| --- | --- | --- | --- |
 | Equipment | 5 | 10 | 50 |
 | Alarms | 6 | 12 | 72 |
 | Energy | 5 | 12 | 60 |
@@ -1186,7 +1154,7 @@ class TestGetEquipmentStatus:
 | GSAS | 4 | 10 | 40 |
 | Advisory | 4 | 12 | 48 |
 | ML | 3 | 15 | 45 |
-| **Total** | **31** | **~10 avg** | **~375** |
+| **Total** | **31** | **\~10 avg** | **\~375** |
 
 ---
 
@@ -1203,7 +1171,6 @@ import pytest
 from agent_commercial.bms_state_engine import BMSStateEngine
 from agent_commercial.alarm_engine import AlarmEngine
 from tests.factories import AlarmFactory, EquipmentFactory
-
 
 class TestAlarmCascadeResponse:
     """
@@ -1282,7 +1249,6 @@ import pytest
 import asyncio
 from agent_commercial.alarm_engine import AlarmEngine
 from tests.factories import AlarmFactory
-
 
 class TestAlarmFlood:
     """What happens when 500 alarms arrive in 10 seconds?"""
@@ -1421,10 +1387,10 @@ pytest tests/smoke/ -m smoke --run-slow
 ## Success Metrics
 
 | Metric | Target | Why |
-|--------|--------|-----|
+| --- | --- | --- |
 | **Total tests** | 385+ | Coverage of all tools, engines, flows |
-| **Test execution time** | <60s for unit tests | Fast feedback loop |
-| **Coverage** | >80% | Confidence in code paths |
+| **Test execution time** | &lt;60s for unit tests | Fast feedback loop |
+| **Coverage** | &gt;80% | Confidence in code paths |
 | **Flaky tests** | 0 | Reliability |
 | **Edge cases covered** | 100% of tools | Production robustness |
 | **Stress scenarios** | 20+ | Know system limits |
@@ -1435,8 +1401,8 @@ pytest tests/smoke/ -m smoke --run-slow
 ## Timeline
 
 | Day | Phase | Deliverable |
-|-----|-------|-------------|
-| **Day 1** | Infrastructure | `conftest.py`, `factories.py`, `mocks.py`, `utils.py` |
+| --- | --- | --- |
+| **Day 1** | Infrastructure | `file conftest.py`, `file factories.py`, `file mocks.py`, `file utils.py` |
 | **Day 2-3** | Tool Tests | 300+ unit tests for all 30+ tools |
 | **Day 4-5** | Integration Tests | 15 integration tests for real workflows |
 | **Day 6** | Stress Tests | 20 stress tests for breaking points |
