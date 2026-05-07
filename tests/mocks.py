@@ -654,3 +654,83 @@ def create_mock_bms_state_with_equipment() -> MockBMSStateEngine:
     state.update_point("METER-01/KW", 450.0, "kW", "METER-01")
     
     return state
+
+
+# ============================================================================
+# MOCK GSAS REPORTER
+# ============================================================================
+
+class MockGSASReporter:
+    """
+    Mock GSAS reporter for testing.
+    
+    Usage:
+        reporter = MockGSASReporter(overall_score=78.5, target_score=85.0)
+        reporter.add_improvement({"action": "Optimize chillers", "impact": 1.5})
+        
+        status = reporter.get_status()
+        priorities = reporter.get_improvement_priorities()
+    """
+    
+    def __init__(
+        self,
+        overall_score: float = 78.5,
+        target_score: float = 85.0,
+        certification_level: str = "3-Star",
+        category_scores: Optional[Dict[str, float]] = None,
+    ):
+        self._overall_score = overall_score
+        self._target_score = target_score
+        self._certification_level = certification_level
+        self._category_scores = category_scores or {
+            "energy": 80.0,
+            "water": 75.0,
+            "indoor_environment": 82.0,
+        }
+        self._improvements: List[Dict[str, Any]] = []
+    
+    def get_status(self) -> Dict[str, Any]:
+        """Get GSAS status."""
+        return {
+            "overall_score": self._overall_score,
+            "certification_level": self._certification_level,
+            "target_score": self._target_score,
+            "gap_to_target": self._target_score - self._overall_score,
+            "categories": self._category_scores,
+        }
+    
+    def target_score(self) -> float:
+        """Get target score."""
+        return self._target_score
+    
+    def get_improvement_priorities(self) -> List[Dict[str, Any]]:
+        """Get improvement priorities."""
+        return self._improvements
+    
+    def add_improvement(self, improvement: Dict[str, Any]) -> None:
+        """Add an improvement action."""
+        self._improvements.append(improvement)
+    
+    def optimize_recommendations_for_targets(
+        self,
+        recommendations: List[Dict[str, Any]],
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Score and rank recommendations by GSAS impact."""
+        scored = []
+        for rec in recommendations:
+            # Score by potential GSAS impact
+            gsas_aligned = rec.get("gsas_aligned", False)
+            impact = rec.get("impact_estimate", {}).get("gsas_points", 0.0)
+            
+            score = impact * 2.0 if gsas_aligned else impact
+            scored.append({**rec, "gsas_score": score})
+        
+        # Sort by GSAS score descending
+        scored.sort(key=lambda x: x.get("gsas_score", 0), reverse=True)
+        
+        return scored[:limit]
+    
+    def clear_improvements(self) -> None:
+        """Clear all improvements."""
+        self._improvements.clear()
