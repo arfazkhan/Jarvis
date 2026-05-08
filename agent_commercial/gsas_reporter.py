@@ -199,6 +199,27 @@ class GSASReport:
         }
 
 
+@dataclass
+class GSASOperationalImpact:
+    """GSAS impact estimate for an operational recommendation."""
+    category: str
+    criteria: List[str]
+    target_delta: float
+    impact_score: float
+    confidence: float
+    evidence: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "category": self.category,
+            "criteria": self.criteria,
+            "target_delta": round(self.target_delta, 3),
+            "impact_score": round(self.impact_score, 3),
+            "confidence": round(self.confidence, 2),
+            "evidence": self.evidence,
+        }
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # GSAS REPORTER
 # ═══════════════════════════════════════════════════════════════════════════
@@ -239,6 +260,35 @@ class GSASReporter:
         (2.5, GSASStarRating.FIVE_STAR),
         (2.75, GSASStarRating.SIX_STAR),
     ]
+
+    OPERATIONAL_RECOMMENDATION_MAP = {
+        GSASCategory.ENERGY: {
+            "criteria": ["E.1", "E.2", "E.3", "E.5", "E.6", "MO.2"],
+            "keywords": [
+                "energy", "kwh", "kw", "tariff", "peak", "chiller", "ahu",
+                "hvac", "schedule", "sequencing", "lighting", "overcooling",
+                "setback", "after-hours", "after hours", "efficiency",
+            ],
+        },
+        GSASCategory.WATER: {
+            "criteria": ["W.1", "W.3"],
+            "keywords": ["water", "m3", "meter", "leak", "flow", "irrigation"],
+        },
+        GSASCategory.INDOOR_ENVIRONMENT: {
+            "criteria": ["IE.1", "IE.2"],
+            "keywords": [
+                "comfort", "temperature", "thermal", "humidity", "co2",
+                "iaq", "ventilation", "occupant", "complaint",
+            ],
+        },
+        GSASCategory.MANAGEMENT_OPERATIONS: {
+            "criteria": ["MO.1", "MO.2", "MO.4"],
+            "keywords": [
+                "maintenance", "pm", "commissioning", "calibration", "fault",
+                "alarm", "documentation", "evidence", "verify", "operator",
+            ],
+        },
+    }
     
     def __init__(
         self,
@@ -584,6 +634,66 @@ class GSASReporter:
                     return self.STAR_THRESHOLDS[idx - 1][1]
                 return GSASStarRating.ONE_STAR
         return GSASStarRating.SIX_STAR
+
+    def target_score(self) -> float:
+        """Minimum overall score needed for the configured target rating."""
+        target_value = self.target_rating.value
+        thresholds = {
+            GSASStarRating.ONE_STAR.value: 0.5,
+            GSASStarRating.TWO_STAR.value: 1.0,
+            GSASStarRating.THREE_STAR.value: 1.5,
+            GSASStarRating.FOUR_STAR.value: 2.0,
+            GSASStarRating.FIVE_STAR.value: 2.5,
+            GSASStarRating.SIX_STAR.value: 2.75,
+        }
+        return thresholds.get(target_value, 1.5)
+
+    def score_operational_recommendation(self, recommendation: Dict[str, Any]) -> GSASOperationalImpact:
+        """
+        Score how much an operational recommendation helps GSAS targets.
+
+        This closes the loop between reporting and operations: advisory goals
+        can now be ranked by compliance impact, not only cost or risk.
+        """
+        category = self._infer_operational_category(recommendation)
+        criteria_ids = self._matching_criteria(category)
+        current_score = self.calculate_overall_score()
+        target_gap = max(0.0, self.target_score() - current_score)
+        weighted_gain = self._estimate_weighted_gain(category, criteria_ids, recommendation)
+        confidence = self._estimate_impact_confidence(recommendation, criteria_ids)
+        evidence = self._build_operational_evidence(category, criteria_ids, recommendation, target_gap)
+
+        return GSASOperationalImpact(
+            category=category.value,
+            criteria=criteria_ids,
+            target_delta=weighted_gain,
+            impact_score=min(1.0, weighted_gain / max(target_gap, 0.15)) if weighted_gain > 0 else 0.0,
+            confidence=confidence,
+            evidence=evidence,
+        )
+
+    def optimize_recommendations_for_targets(
+        self,
+        recommendations: List[Dict[str, Any]],
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Attach GSAS impact to recommendations and rank by target contribution."""
+        optimized = []
+        for rec in recommendations:
+            impact = self.score_operational_recommendation(rec)
+            enriched = dict(rec)
+            enriched["gsas_impact"] = impact.to_dict()
+            optimized.append(enriched)
+
+        optimized.sort(
+            key=lambda r: (
+                r["gsas_impact"]["impact_score"],
+                r["gsas_impact"]["confidence"],
+                r["gsas_impact"]["target_delta"],
+            ),
+            reverse=True,
+        )
+        return optimized[:limit]
     
     def calculate_category_scores(self) -> Dict[str, GSASCategoryScore]:
         """Calculate scores for each category"""
@@ -635,6 +745,100 @@ class GSASReporter:
             )
         
         return scores
+
+    def _infer_operational_category(self, recommendation: Dict[str, Any]) -> GSASCategory:
+        text = " ".join(
+            str(recommendation.get(key, ""))
+            for key in ("title", "description", "goal_type", "source_engine", "recommended_action", "action")
+        )
+        for action in recommendation.get("suggested_actions", []) or []:
+            text += f" {action}"
+        text = text.lower()
+
+        best_category = GSASCategory.MANAGEMENT_OPERATIONS
+        best_hits = 0
+        for category, config in self.OPERATIONAL_RECOMMENDATION_MAP.items():
+            hits = sum(1 for keyword in config["keywords"] if keyword in text)
+            if hits > best_hits:
+                best_hits = hits
+                best_category = category
+        return best_category
+
+    def _matching_criteria(self, category: GSASCategory) -> List[str]:
+        mapped = self.OPERATIONAL_RECOMMENDATION_MAP.get(category, {}).get("criteria", [])
+        return [criterion_id for criterion_id in mapped if criterion_id in self.criteria]
+
+    def _estimate_weighted_gain(
+        self,
+        category: GSASCategory,
+        criteria_ids: List[str],
+        recommendation: Dict[str, Any],
+    ) -> float:
+        if not criteria_ids:
+            return 0.0
+
+        category_weight = self.CATEGORY_WEIGHTS.get(category, 0.1)
+        remaining_gain = 0.0
+        for criterion_id in criteria_ids:
+            criterion = self.criteria.get(criterion_id)
+            if criterion:
+                remaining_gain += max(0.0, criterion.max_points - criterion.current_points)
+
+        max_remaining = sum(self.criteria[c].max_points for c in criteria_ids if c in self.criteria) or 1.0
+        measurable_bonus = 1.15 if any(self.criteria[c].is_bms_measurable for c in criteria_ids if c in self.criteria) else 1.0
+        action_strength = self._estimate_action_strength(recommendation)
+        normalized_gain = min(1.0, remaining_gain / max_remaining)
+
+        return normalized_gain * category_weight * action_strength * measurable_bonus
+
+    def _estimate_action_strength(self, recommendation: Dict[str, Any]) -> float:
+        priority = str(recommendation.get("priority", "")).lower()
+        savings = float(recommendation.get("potential_savings_qar", 0) or 0)
+        goal_type = str(recommendation.get("goal_type", "")).lower()
+
+        strength = 0.45
+        if priority in ("critical", "high"):
+            strength += 0.15
+        if goal_type in ("efficiency", "compliance", "optimization"):
+            strength += 0.15
+        if savings >= 50000:
+            strength += 0.2
+        elif savings >= 10000:
+            strength += 0.1
+        return min(1.0, strength)
+
+    def _estimate_impact_confidence(self, recommendation: Dict[str, Any], criteria_ids: List[str]) -> float:
+        confidence = 0.55
+        if criteria_ids:
+            confidence += 0.15
+        if recommendation.get("equipment_ids"):
+            confidence += 0.1
+        if recommendation.get("source_engine") in ("energy", "predictive", "fleet"):
+            confidence += 0.1
+        if recommendation.get("potential_savings_qar", 0):
+            confidence += 0.05
+        return min(0.95, confidence)
+
+    def _build_operational_evidence(
+        self,
+        category: GSASCategory,
+        criteria_ids: List[str],
+        recommendation: Dict[str, Any],
+        target_gap: float,
+    ) -> List[str]:
+        evidence = [
+            f"Mapped recommendation to GSAS category {category.value}",
+            f"Current target gap: {target_gap:.2f} GSAS score points",
+        ]
+        if criteria_ids:
+            criterion_names = [
+                f"{criterion_id} {self.criteria[criterion_id].name}"
+                for criterion_id in criteria_ids if criterion_id in self.criteria
+            ]
+            evidence.append("Relevant criteria: " + "; ".join(criterion_names))
+        if recommendation.get("source_engine"):
+            evidence.append(f"Source engine: {recommendation['source_engine']}")
+        return evidence
     
     # ═══════════════════════════════════════════════════════════════════════
     # REPORTING
@@ -1310,4 +1514,3 @@ def generate_gsas_report_for_gord(
     reporter.initialize_criteria()
     reporter.update_from_bms(energy_data, water_data, iaq_data)
     return reporter.generate_gord_pdf(output_path)
-

@@ -78,7 +78,9 @@ class BMSToolHandler(
         online_learner=None,
         # Phase 7 & 8: Grounding
         knowledge_base=None,
-        graph_rag=None
+        graph_rag=None,
+        hybrid_rag=None,
+        gsas_reporter=None,
     ):
         self.bms_state = bms_state
         self.alarm_engine = alarm_engine
@@ -100,6 +102,8 @@ class BMSToolHandler(
         # Phase 7 & 8
         self.knowledge_base = knowledge_base
         self.graph_rag = graph_rag
+        self.hybrid_rag = hybrid_rag
+        self.gsas_reporter = gsas_reporter
         
         # Phase 1: Advisory System Components (fallback/direct use)
         if advisor:

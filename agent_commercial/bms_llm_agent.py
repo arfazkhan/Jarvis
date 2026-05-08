@@ -160,6 +160,7 @@ class BMSLLMAgent:
         from agent_advisory.online_learner import OnlineLearner
         from agent_advisory.trust_calibrator import TrustCalibrator
         from agent_advisory.knowledge_base import TechnicalKnowledgeBase, GraphRAGNavigator
+        from agent_advisory.hybrid_rag import TreeKnowledgeBase, HybridRAGRouter
         
         # Phase 5, 6, 7 & 8: Adaptive & Grounded Intelligence
         self.transition_model = StateTransitionModel()
@@ -167,6 +168,11 @@ class BMSLLMAgent:
         self.explainer = ExplanationEngine(self.world_model)
         self.online_learner = OnlineLearner(self.world_model)
         self.knowledge_base = TechnicalKnowledgeBase()
+        self.tree_knowledge_base = TreeKnowledgeBase()
+        self.hybrid_rag = HybridRAGRouter(
+            vector_kb=self.knowledge_base,
+            tree_kb=self.tree_knowledge_base,
+        )
         
         # Phase 8: Graph-RAG initialization
         from agent_cognitive.context_graph import ContextGraph
@@ -183,7 +189,8 @@ class BMSLLMAgent:
             fleet_intelligence=None,
             predictive_engine=predictive_engine,
             energy_analyzer=energy_analyzer,
-            world_model=self.world_model
+            world_model=self.world_model,
+            gsas_reporter=gsas_reporter,
         )
         
         # Initialize Briefing Scheduler
@@ -222,7 +229,9 @@ class BMSLLMAgent:
             trust_calibrator=self.trust_calibrator,
             # Phase 7 & 8: Grounding & Graph-RAG
             knowledge_base=self.knowledge_base,
-            graph_rag=self.graph_rag
+            graph_rag=self.graph_rag,
+            hybrid_rag=self.hybrid_rag,
+            gsas_reporter=gsas_reporter,
         )
         
         # Initialize UnifiedLLM

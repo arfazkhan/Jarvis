@@ -120,6 +120,35 @@ EQUIPMENT_TOOLS = [
         }
     },
     {
+        "name": "hybrid_search_knowledge",
+        "description": "Search technical manuals using hybrid RAG. Automatically routes to tree search for document structure/procedures, vector search for exact semantic facts, or both for specs/tables/performance data.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The technical question or document search query"
+                },
+                "equipment_id": {
+                    "type": "string",
+                    "description": "Optional equipment identifier to filter results"
+                },
+                "strategy": {
+                    "type": "string",
+                    "enum": ["auto", "tree", "vector", "hybrid"],
+                    "description": "Retrieval path. Use auto unless debugging.",
+                    "default": "auto"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum results to return",
+                    "default": 5
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
         "name": "get_dashboard_overview",
         "description": "Get a summary overview of the building's current status including equipment counts, active alarms, energy metrics, and pending insights.",
         "parameters": {

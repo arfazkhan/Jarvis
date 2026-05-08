@@ -499,3 +499,133 @@ def compare_equipment_states(state1, state2):
                 "after": state2.get(key),
             }
     return differences
+
+
+# ============= ADDITIONAL HELPERS =============
+
+def assert_valid_anomaly(anomaly: Dict[str, Any]):
+    """Assert anomaly has required fields."""
+    assert "anomaly_id" in anomaly, "Anomaly must have 'anomaly_id'"
+    assert "anomaly_type" in anomaly, "Anomaly must have 'anomaly_type'"
+    assert "severity" in anomaly, "Anomaly must have 'severity'"
+    assert anomaly["severity"] in ["low", "medium", "high", "critical"], \
+        f"Invalid severity: {anomaly['severity']}"
+
+
+def time_operation(func):
+    """Decorator to time test operations."""
+    import time
+    import functools
+    
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.time()
+        result = func(*args, **kwargs)
+        elapsed = time.time() - start
+        print(f"  ⏱ {func.__name__}: {elapsed:.3f}s")
+        return result
+    
+    return wrapper
+
+
+def assert_valid_recommendation(rec: Dict[str, Any]):
+    """Assert recommendation has required fields."""
+    assert "recommendation_id" in rec, "Recommendation must have 'recommendation_id'"
+    assert "equipment_id" in rec, "Recommendation must have 'equipment_id'"
+    assert "action" in rec, "Recommendation must have 'action'"
+    assert "confidence" in rec, "Recommendation must have 'confidence'"
+    assert "gsas_aligned" in rec, "Recommendation must have 'gsas_aligned'"
+    assert 0.0 <= rec["confidence"] <= 1.0, f"Confidence must be 0-1, got {rec['confidence']}"
+
+
+def assert_valid_briefing(briefing: Dict[str, Any]):
+    """Assert briefing has required fields."""
+    assert "briefing_type" in briefing, "Briefing must have 'briefing_type'"
+    assert "generated_at" in briefing, "Briefing must have 'generated_at'"
+    assert "sections" in briefing, "Briefing must have 'sections'"
+
+
+def assert_valid_goal(goal: Dict[str, Any]):
+    """Assert goal has required fields."""
+    assert "goal_id" in goal, "Goal must have 'goal_id'"
+    assert "title" in goal, "Goal must have 'title'"
+    assert "category" in goal, "Goal must have 'category'"
+
+
+def create_test_equipment(equipment_id: str = "TEST-01", **kwargs) -> Dict[str, Any]:
+    """Create test equipment with defaults."""
+    defaults = {
+        "equipment_id": equipment_id,
+        "name": f"Test Equipment {equipment_id}",
+        "equipment_type": "chiller",
+        "status": "running",
+        "location": "Test Location",
+        "efficiency": 0.85,
+    }
+    defaults.update(kwargs)
+    return defaults
+
+
+def create_test_alarm(alarm_id: str = "ALM-TEST-01", **kwargs) -> Dict[str, Any]:
+    """Create test alarm with defaults."""
+    defaults = {
+        "alarm_id": alarm_id,
+        "message": "Test alarm",
+        "severity": "medium",
+        "status": "active",
+        "equipment_id": "TEST-01",
+    }
+    defaults.update(kwargs)
+    return defaults
+
+
+def create_test_point(point_id: str = "TEST-01/TEST", **kwargs) -> Dict[str, Any]:
+    """Create test data point with defaults."""
+    defaults = {
+        "point_id": point_id,
+        "value": 50.0,
+        "unit": "°C",
+        "equipment_id": "TEST-01",
+        "name": "Test Point",
+    }
+    defaults.update(kwargs)
+    return defaults
+
+
+
+# ============= CONCURRENT TEST HELPERS =============
+
+async def run_concurrently(*coros):
+    """Run multiple coroutines concurrently for testing."""
+    import asyncio
+    return await asyncio.gather(*coros, return_exceptions=True)
+
+
+def assert_tool_result_valid(result: Dict[str, Any]):
+    """Assert tool result has valid structure."""
+    assert "status" in result, "Tool result must have 'status'"
+    assert result["status"] in ["success", "error"], \
+        f"Invalid status: {result['status']}"
+    if result["status"] == "success":
+        assert "data" in result, "Success result must have 'data'"
+    else:
+        assert "error" in result, "Error result must have 'error'"
+
+
+def assert_briefing_has_sections(briefing: Dict[str, Any], required_sections: List[str]):
+    """Assert briefing contains all required sections."""
+    sections = briefing.get("sections", {})
+    for section in required_sections:
+        assert section in sections, f"Briefing missing section: {section}"
+
+
+def create_mock_context() -> Dict[str, Any]:
+    """Create standard mock context for tests."""
+    return {
+        "building_id": "TEST-BUILDING",
+        "timestamp": "2026-05-08T12:00:00",
+        "equipment_status": {},
+        "active_alarms": [],
+        "energy_summary": {},
+    }
+

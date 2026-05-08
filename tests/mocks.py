@@ -367,8 +367,16 @@ class MockBMSStateEngine:
     
     async def get_equipment(self, equipment_id: str) -> Optional[Dict[str, Any]]:
         """Get equipment by ID."""
-        data = self._equipment.get(equipment_id)
-        return MockEquipment(data) if data else None
+        eq = self._equipment.get(equipment_id)
+        if eq:
+            # Return object with to_dict() method
+            class EquipmentObj:
+                def __init__(self, data):
+                    self.__dict__.update(data)
+                def to_dict(self):
+                    return self.__dict__
+            return EquipmentObj(eq)
+        return None
     
     async def get_all_equipment(self) -> List[Dict[str, Any]]:
         """Get all equipment."""
@@ -665,9 +673,9 @@ def create_mock_bacnet_with_equipment(
     return adapter
 
 
-def create_mock_bms_state_with_equipment() -> MockBMSStateEngine:
-    """Create MockBMSStateEngine with sample equipment."""
-    state = MockBMSStateEngine()
+def create_mock_bms_state_with_equipment() -> MockBMSStateEngineV2:
+    """Create MockBMSStateEngineV2 with sample equipment."""
+    state = MockBMSStateEngineV2()
     
     # Add chiller
     state.add_equipment({
@@ -676,6 +684,7 @@ def create_mock_bms_state_with_equipment() -> MockBMSStateEngine:
         "equipment_type": "chiller",
         "status": "running",
         "location": "Central Plant",
+        "efficiency": 0.94,
     })
     
     # Add AHU
@@ -685,6 +694,15 @@ def create_mock_bms_state_with_equipment() -> MockBMSStateEngine:
         "equipment_type": "ahu",
         "status": "running",
         "location": "Floor 1 Core",
+        "efficiency": 0.91,
+    })
+    
+    # Add meter
+    state.add_equipment({
+        "equipment_id": "METER-01",
+        "name": "Main Electric Meter",
+        "equipment_type": "meter",
+        "status": "running",
     })
     
     # Add points
@@ -1579,7 +1597,7 @@ class MockPredictiveMaintenanceEngine:
 class MockBMSStateEngineV2:
     """
     Enhanced mock BMS state engine matching real interface.
-    Returns objects with .to_dict() methods instead of raw dicts.
+    Setup methods are SYNC, query methods are ASYNC.
     """
     
     def __init__(self):
@@ -1589,17 +1607,11 @@ class MockBMSStateEngineV2:
         self._alarms: List[Any] = []
         self._callbacks: List[Callable] = []
     
+    # SYNC setup methods (no await needed)
     def add_equipment(self, equipment: Dict[str, Any]) -> None:
         eq_id = equipment.get("equipment_id")
         if eq_id:
-            # Wrap in object with to_dict
             self._equipment[eq_id] = MockEquipment(equipment)
-    
-    def get_equipment(self, equipment_id: str):
-        return self._equipment.get(equipment_id)
-    
-    def get_all_equipment(self) -> List:
-        return list(self._equipment.values())
     
     def update_point(self, point_id: str, value: float, unit: str = "", equipment_id: str = "", timestamp=None):
         ts = timestamp or datetime.now()
@@ -1613,26 +1625,39 @@ class MockBMSStateEngineV2:
         self._points[point_id] = point
         self._point_history[point_id].append((ts, value))
     
-    def get_point(self, point_id: str):
-        return self._points.get(point_id)
-    
-    def get_points_by_equipment(self, equipment_id: str) -> List:
-        return [p for p in self._points.values() if p.equipment_id == equipment_id]
-    
-    def get_point_history(self, point_id: str, hours: int = 24):
-        cutoff = datetime.now() - timedelta(hours=hours)
-        history = self._point_history.get(point_id, [])
-        return [(t, v) for t, v in history if t >= cutoff]
-    
     def add_alarm(self, alarm: Dict[str, Any]) -> None:
         alarm.setdefault("alarm_id", f"ALM-{len(self._alarms) + 1}")
         alarm.setdefault("timestamp", datetime.now().isoformat())
         self._alarms.append(MockAlarm(alarm))
     
-    def get_active_alarms(self) -> List:
+    def clear(self) -> None:
+        self._equipment.clear()
+        self._points.clear()
+        self._point_history.clear()
+        self._alarms.clear()
+    
+    # ASYNC query methods (match real interface)
+    async def get_equipment(self, equipment_id: str):
+        return self._equipment.get(equipment_id)
+    
+    async def get_all_equipment(self) -> List:
+        return list(self._equipment.values())
+    
+    async def get_point(self, point_id: str):
+        return self._points.get(point_id)
+    
+    async def get_points_by_equipment(self, equipment_id: str) -> List:
+        return [p for p in self._points.values() if p.equipment_id == equipment_id]
+    
+    async def get_point_history(self, point_id: str, hours: int = 24):
+        cutoff = datetime.now() - timedelta(hours=hours)
+        history = self._point_history.get(point_id, [])
+        return [(t, v) for t, v in history if t >= cutoff]
+    
+    async def get_active_alarms(self) -> List:
         return [a for a in self._alarms if a.status != "acknowledged"]
     
-    def acknowledge_alarm(self, alarm_id: str) -> bool:
+    async def acknowledge_alarm(self, alarm_id: str) -> bool:
         for alarm in self._alarms:
             if alarm.alarm_id == alarm_id:
                 alarm.status = "acknowledged"
@@ -1640,21 +1665,14 @@ class MockBMSStateEngineV2:
         return False
     
     async def get_snapshot(self):
-        """Return current state snapshot."""
         return {
             "equipment_count": len(self._equipment),
             "point_count": len(self._points),
-            "active_alarms": len(self.get_active_alarms()),
+            "active_alarms": len([a for a in self._alarms if a.status != "acknowledged"]),
         }
     
     def on_point_update(self, callback: Callable) -> None:
         self._callbacks.append(callback)
-    
-    def clear(self) -> None:
-        self._equipment.clear()
-        self._points.clear()
-        self._point_history.clear()
-        self._alarms.clear()
 
 
 class MockEquipment:
@@ -1712,3 +1730,201 @@ class MockEnum:
     
     def __str__(self):
         return self.value
+
+
+# ============================================================================
+# MOCK BMS STATE ENGINE V2 (Async-compatible)
+# ============================================================================
+
+class MockBMSStateEngineV2:
+    """
+    Async-compatible mock BMS state engine.
+    
+    All methods are async to match the real engine's interface.
+    """
+    
+    def __init__(self):
+        self._equipment: Dict[str, Dict[str, Any]] = {}
+        self._points: Dict[str, Dict[str, Any]] = {}
+        self._point_history: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        self._alarms: List[Dict[str, Any]] = []
+        self._zones: Dict[str, Dict[str, Any]] = {}
+    
+    async def get_equipment(self, equipment_id: str) -> Optional[Dict[str, Any]]:
+        """Get equipment by ID."""
+        return self._equipment.get(equipment_id)
+    
+    async def get_all_equipment(self) -> List[Dict[str, Any]]:
+        """Get all equipment."""
+        return list(self._equipment.values())
+    
+    async def get_points_by_equipment(self, equipment_id: str) -> List[Dict[str, Any]]:
+        """Get points for equipment."""
+        return [
+            p for p in self._points.values()
+            if p.get("equipment_id") == equipment_id
+        ]
+    
+    async def get_point_history(self, point_id: str, hours: int = 24) -> List[Dict[str, Any]]:
+        """Get point history."""
+        return self._point_history.get(point_id, [])
+    
+    async def get_active_alarms(self) -> List[Dict[str, Any]]:
+        """Get active alarms."""
+        return [a for a in self._alarms if a.get("status") != "acknowledged"]
+    
+    def add_equipment(self, equipment: Dict[str, Any]) -> None:
+        """Add equipment."""
+        eq_id = equipment.get("equipment_id")
+        if eq_id:
+            self._equipment[eq_id] = equipment
+    
+    def update_point(self, point_id: str, value: float, unit: str = "", equipment_id: str = "") -> None:
+        """Add/update a point."""
+        self._points[point_id] = {
+            "point_id": point_id,
+            "value": value,
+            "unit": unit,
+            "equipment_id": equipment_id,
+            "timestamp": datetime.now().isoformat(),
+        }
+        self._point_history[point_id].append(self._points[point_id].copy())
+    
+    def clear(self) -> None:
+        """Clear all state."""
+        self._equipment.clear()
+        self._points.clear()
+        self._point_history.clear()
+        self._alarms.clear()
+        self._zones.clear()
+
+
+# ============================================================================
+# ADDITIONAL MOCKS
+# ============================================================================
+
+class MockPredictiveEngine:
+    """Mock predictive maintenance engine."""
+    
+    async def predict_maintenance(self, equipment_id: str = "all") -> Dict[str, Any]:
+        return {
+            "equipment_id": equipment_id,
+            "health_score": 85,
+            "next_maintenance": "2026-06-15",
+            "failure_probability": 0.15,
+        }
+    
+    async def predict_rul(self, equipment_id: str, days: int = 90) -> Dict[str, Any]:
+        return {
+            "equipment_id": equipment_id,
+            "days_until_predicted_failure": 180,
+            "health_score": 85,
+        }
+
+
+class MockKnowledgeBase:
+    """Mock knowledge base for RAG tests."""
+    
+    async def query_specs(self, query: str, equipment_id: str = None, limit: int = 5) -> List[Dict[str, Any]]:
+        return [
+            {
+                "content": f"Sample content for: {query}",
+                "metadata": {"source": "manual.pdf", "page": 1},
+                "distance": 0.2,
+            }
+        ]
+
+
+class MockAdvisor:
+    """Mock advisor for recommendations."""
+    
+    async def get_recommendations(self, context: str, equipment_id: str = None, alarm_id: str = None, top_k: int = 3) -> Dict[str, Any]:
+        return {
+            "context": context,
+            "recommendations": [
+                {
+                    "id": "rec-001",
+                    "title": "Monitor Current Conditions",
+                    "confidence": 0.7,
+                }
+            ]
+        }
+
+
+class MockBriefingScheduler:
+    """Mock briefing scheduler."""
+    
+    async def generate_briefing(self, briefing_type: str = "daily_morning", focus_area: str = None) -> Dict[str, Any]:
+        return {
+            "briefing_type": briefing_type,
+            "generated_at": datetime.now().isoformat(),
+            "sections": {
+                "critical_items": [],
+                "recommendations": [],
+            }
+        }
+
+
+class MockGoalGenerator:
+    """Mock goal generator."""
+    
+    def get_active_goals(self, category: str = None) -> List[Dict[str, Any]]:
+        return [
+            {
+                "goal_id": "goal-001",
+                "title": "Reduce Energy Waste",
+                "category": "waste",
+                "priority": "high",
+            }
+        ]
+
+
+class MockTrustCalibrator:
+    """Mock trust calibrator."""
+    
+    async def calculate_trust_metrics(self, window_days: int = 30) -> Dict[str, Any]:
+        return {
+            "adoption_rate": 0.75,
+            "accuracy": 0.82,
+            "drift_score": 0.1,
+        }
+
+
+# ============================================================================
+# MISSING MOCKS (added for test compatibility)
+# ============================================================================
+
+class MockGSASOptimizer:
+    """Mock GSAS optimizer for testing."""
+    
+    def __init__(self, gsas_reporter=None):
+        self._recommendations = []
+        self._gsas_reporter = gsas_reporter or MockGSASReporter()
+    
+    def analyze_gaps(self):
+        return {
+            "energy_gap": 1.5,
+            "water_gap": 0.8,
+            "indoor_env_gap": 0.5,
+        }
+    
+    def generate_recommendations(self, limit=10):
+        return self._recommendations[:limit]
+    
+    def add_recommendation(self, rec):
+        self._recommendations.append(rec)
+
+
+class MockWorldModel:
+    """Mock world model for testing."""
+    
+    async def simulate_action(self, context, action, horizon=4):
+        return {
+            "predicted_states": [],
+            "utility_score": 0.8,
+        }
+    
+    def calculate_utility(self, state):
+        return 0.8
+
+

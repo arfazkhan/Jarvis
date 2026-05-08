@@ -25,6 +25,7 @@ class EquipmentHandlerMixin:
             "get_equipment_health": instance._handle_get_equipment_health,
             "get_point_history": instance._handle_get_point_history,
             "get_equipment_specs": instance._handle_get_equipment_specs,
+            "hybrid_search_knowledge": instance._handle_hybrid_search_knowledge,
             "get_dashboard_overview": instance._handle_get_dashboard_overview,
         }
     
@@ -130,6 +131,36 @@ class EquipmentHandlerMixin:
             "findings": [r["content"] for r in results],
             "sources": [r["metadata"].get("source") for r in results]
         }
+
+    async def _handle_hybrid_search_knowledge(self, args: Dict) -> Dict:
+        """Search technical manuals using tree, vector, or hybrid retrieval."""
+        query = args.get("query")
+        equipment_id = args.get("equipment_id")
+        strategy = args.get("strategy", "auto")
+        limit = int(args.get("limit", 5))
+
+        if not query:
+            return {"error": "query is required"}
+
+        if self.hybrid_rag:
+            return await self.hybrid_rag.retrieve(
+                query=query,
+                equipment_id=equipment_id,
+                strategy=strategy,
+                limit=limit,
+            )
+
+        if self.knowledge_base:
+            results = await self.knowledge_base.query_specs(query, equipment_id, limit=limit)
+            return {
+                "query": query,
+                "strategy": "vector_fallback",
+                "vector_results": results,
+                "combined": results,
+                "note": "Hybrid router not configured; used vector search fallback",
+            }
+
+        return {"error": "No knowledge retrieval backend configured"}
     
     async def _handle_get_dashboard_overview(self, args: Dict) -> Dict:
         if not self.bms_state:

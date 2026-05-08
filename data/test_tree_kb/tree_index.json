@@ -1,0 +1,46 @@
+{
+  "nodes": [
+    {
+      "node_id": "001",
+      "source": "test_manual.pdf",
+      "doc_name": "Carrier 30XA Manual",
+      "title": "Chiller Operations",
+      "summary": "Overview of chiller startup and shutdown procedures",
+      "hierarchy_path": "Chiller Operations",
+      "start_index": null,
+      "end_index": null,
+      "equipment_id": "CH-01",
+      "models_covered": [],
+      "text_preview": "This section covers Carrier 30XA chiller operations including startup sequence, safety checks, and shutdown procedures.",
+      "indexed_at": "2026-05-07T07:47:50.129265"
+    },
+    {
+      "node_id": "002",
+      "source": "test_manual.pdf",
+      "doc_name": "Carrier 30XA Manual",
+      "title": "Startup Procedure",
+      "summary": "Step-by-step chiller startup",
+      "hierarchy_path": "Chiller Operations > Startup Procedure",
+      "start_index": null,
+      "end_index": null,
+      "equipment_id": "CH-01",
+      "models_covered": [],
+      "text_preview": "1. Verify power. 2. Check oil levels. 3. Start chilled water pump. 4. Activate compressor.",
+      "indexed_at": "2026-05-07T07:47:50.129287"
+    },
+    {
+      "node_id": "003",
+      "source": "test_manual.pdf",
+      "doc_name": "Carrier 30XA Manual",
+      "title": "Safety Limits",
+      "summary": "Operating limits and setpoints",
+      "hierarchy_path": "Chiller Operations > Safety Limits",
+      "start_index": null,
+      "end_index": null,
+      "equipment_id": "CH-01",
+      "models_covered": [],
+      "text_preview": "CHW low limit: 4\u00b0C. CHW high limit: 15\u00b0C. Oil pressure minimum: 25 psi.",
+      "indexed_at": "2026-05-07T07:47:50.129297"
+    }
+  ]
+}

@@ -39,6 +39,26 @@ GSAS_TOOLS = [
         }
     },
     {
+        "name": "optimize_recommendations_for_gsas",
+        "description": "Score and rank operational recommendations by their contribution to GSAS targets. Use this before surfacing recommendations when compliance impact matters.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "recommendations": {
+                    "type": "array",
+                    "description": "Recommendations to score. Each item can include title, description, goal_type, source_engine, priority, potential_savings_qar, equipment_ids, and suggested_actions.",
+                    "items": {"type": "object"}
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of optimized recommendations to return",
+                    "default": 10
+                }
+            },
+            "required": ["recommendations"]
+        }
+    },
+    {
         "name": "generate_gord_report",
         "description": "Generate a GORD-compliant PDF report for GSAS Operations certification. This is the official report format required for submission to GORD (Gulf Organisation for Research & Development) for certification renewal. The report includes building scores, category breakdowns, BMS evidence, and signature blocks.",
         "parameters": {

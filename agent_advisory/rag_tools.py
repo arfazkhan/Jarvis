@@ -220,6 +220,86 @@ Returns the top matching snippets with source, page numbers, and relevance score
             return self.fail_response(f"Search error: {str(e)}")
 
 
+class HybridSearchKnowledgeBase(BaseTool):
+    """Tool to search technical knowledge using the hybrid router."""
+
+    name: str = "hybrid_search_knowledge"
+    description: str = """Search technical documentation using hybrid RAG.
+Use this as the default retrieval tool:
+- tree path for section/page/procedure/manual-navigation questions
+- vector path for exact facts, parameters, fault codes, and setpoints
+- hybrid path for specs, performance tables, capacities, COP, flow rates, and broad questions"""
+
+    parameters: dict = {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "The technical question or retrieval query"
+            },
+            "equipment_id": {
+                "type": "string",
+                "description": "Optional equipment ID or model family"
+            },
+            "strategy": {
+                "type": "string",
+                "enum": ["auto", "tree", "vector", "hybrid"],
+                "description": "Retrieval strategy. Keep auto unless deliberately forcing a path."
+            },
+            "top_k": {
+                "type": "integer",
+                "description": "Number of results to return"
+            }
+        },
+        "required": ["query"]
+    }
+
+    _hybrid_router: Any = None
+    _context: Optional[RetrievalContext] = None
+
+    def set_dependencies(self, hybrid_router, context: Optional[RetrievalContext] = None):
+        self._hybrid_router = hybrid_router
+        self._context = context
+
+    async def execute(
+        self,
+        query: str,
+        equipment_id: Optional[str] = None,
+        strategy: str = "auto",
+        top_k: int = 5,
+    ) -> ToolResult:
+        if not self._hybrid_router:
+            return self.fail_response("Hybrid RAG router not initialized")
+
+        try:
+            try:
+                top_k_int = int(top_k)
+            except (ValueError, TypeError):
+                top_k_int = 5
+
+            if self._context:
+                self._context.primary_query = query
+
+            result = await self._hybrid_router.retrieve(
+                query=query,
+                equipment_id=equipment_id,
+                strategy=strategy,
+                limit=min(top_k_int, 10),
+            )
+
+            if self._context:
+                chunks = []
+                for item in result.get("combined", []):
+                    content = item.get("content") or item.get("text_preview") or item.get("summary") or ""
+                    if content:
+                        chunks.append(content)
+                self._context.add_chunks(chunks)
+
+            return self.success_response(result)
+        except Exception as e:
+            return self.fail_response(f"Hybrid retrieval error: {str(e)}")
+
+
 class RefineSearch(BaseTool):
     """Tool to refine a search with additional context"""
     
@@ -792,24 +872,36 @@ Structure your answer as a senior engineer would."""
 
 
 
-def create_rag_tools(knowledge_base=None, llm=None) -> List[BaseTool]:
+def create_rag_tools(knowledge_base=None, llm=None, hybrid_router=None) -> List[BaseTool]:
     """Factory function to create RAG tools with injected dependencies"""
     # Create shared context for provenance tracking
     context = RetrievalContext(llm=llm)
+
+    tools = []
+
+    if hybrid_router:
+        hybrid = HybridSearchKnowledgeBase()
+        hybrid.set_dependencies(hybrid_router, context)
+        tools.append(hybrid)
     
     search = SearchKnowledgeBase()
     search.set_dependencies(knowledge_base, context)
+    tools.append(search)
     
     refine = RefineSearch()
     refine.set_dependencies(knowledge_base, context)
+    tools.append(refine)
     
     fetch = FetchTableDetails()
     fetch.set_dependencies(context)
+    tools.append(fetch)
     
     assess = AssessAnswerConfidence()
     assess.set_dependencies(context)
+    tools.append(assess)
     
     answer = ProvideAnswer()
     answer.set_dependencies(context)
+    tools.append(answer)
     
-    return [search, refine, fetch, assess, answer]
+    return tools

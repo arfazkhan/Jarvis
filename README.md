@@ -98,11 +98,13 @@ ML ensemble for failure prediction:
 - Peak hour awareness (Qatar: 12-6PM)
 - Weather-contextualized baselines
 
-### 6. GSAS Compliance (Qatar)
-Full **Green Sustainability Assessment System** tracking:
+### 6. GSAS-Aware Operations (Qatar)
+Turns **Green Sustainability Assessment System** targets into daily operating priorities:
 - 8 categories: UC, S, E, W, M, IE, CE, MO
 - Star rating projection (1-6 stars)
 - Compliance reports with improvement recommendations
+- Recommendation scoring by GSAS category, target delta, confidence, and evidence
+- Prioritizes actions that move energy, water, comfort, and operations metrics closer to GSAS targets
 
 ### 7. LLM-Driven Auto-Configuration
 New building? Run `scripts/auto_config_cli.py` and ARVIS will:
@@ -191,6 +193,7 @@ System adapts verbosity and confidence based on operator follow-through. Low tru
 - `query_skillbook` — Building institutional memory
 - `add_skillbook_entry` — Learned knowledge
 - `get_equipment_quirks` — Equipment-specific notes
+- `hybrid_search_knowledge` — Routes technical-manual search through tree, vector, or hybrid RAG
 
 ### Advisory
 - `generate_recommendations` — Multi-domain recommendations

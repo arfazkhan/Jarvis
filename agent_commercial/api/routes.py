@@ -437,23 +437,28 @@ def create_api(
             from agent_commercial.fleet_intelligence import get_fleet_intelligence
             from agent_commercial.predictive_maintenance import PredictiveMaintenanceEngine
             from agent_commercial.energy_analyzer import EnergyAnalyzer
+            from agent_commercial.gsas_reporter import GSASReporter
             
             fleet_intel = app.state.fleet_intel or get_fleet_intelligence()
             predictive_engine = app.state.predictive_engine or PredictiveMaintenanceEngine()
             energy_analyzer = app.state.energy_analyzer or EnergyAnalyzer()
             
-            generator = GoalGenerator(
-                fleet_intelligence=fleet_intel,
-                predictive_engine=predictive_engine,
-                energy_analyzer=energy_analyzer,
-                world_model=None
-            )
-            
             building_id = "default"
             if app.state.bms_state:
                 snapshot = await app.state.bms_state.get_snapshot()
                 building_id = snapshot.get("building_id", "default")
+
+            gsas_reporter = GSASReporter(building_id=building_id)
+            gsas_reporter.initialize_criteria()
                 
+            generator = GoalGenerator(
+                fleet_intelligence=fleet_intel,
+                predictive_engine=predictive_engine,
+                energy_analyzer=energy_analyzer,
+                world_model=None,
+                gsas_reporter=gsas_reporter,
+            )
+
             goals = generator.generate_goals(building_id)
             for g in goals[:limit]:
                 insights.append(InsightResponse(

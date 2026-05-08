@@ -32,6 +32,7 @@ from tests.mocks import (
     MockLLM,
     MockBACnetAdapter,
     MockBMSStateEngine,
+    MockBMSStateEngineV2,
     MockDatabase,
     create_mock_llm_with_responses,
     create_mock_bacnet_with_equipment,
@@ -127,7 +128,7 @@ def event_loop() -> Generator:
 @pytest.fixture
 def mock_llm() -> MockLLM:
     """Mock LLM with configurable responses."""
-    return MockLLM(latency_ms=10.0)  # Fast for tests
+    return MockLLM()
 
 
 @pytest.fixture
@@ -142,14 +143,18 @@ def mock_llm_with_responses() -> MockLLM:
 
 @pytest.fixture
 def mock_bacnet() -> MockBACnetAdapter:
-    """Mock BACnet adapter with sample equipment."""
-    return create_mock_bacnet_with_equipment(chillers=2, ahus=4, meters=1)
+    """Mock BACnet adapter with test data."""
+    return MockBACnetAdapter()
 
 
 @pytest.fixture
-def mock_bms_state() -> MockBMSStateEngine:
-    """Mock BMS state engine with sample equipment."""
-    return create_mock_bms_state_with_equipment()
+def mock_bms_state():
+    """Mock BMS state engine with sample equipment - returns objects."""
+    state = MockBMSStateEngineV2()
+    state.add_equipment(EquipmentFactory.chiller())
+    state.add_equipment(EquipmentFactory.ahu())
+    state.add_equipment(EquipmentFactory.meter())
+    return state
 
 
 @pytest.fixture

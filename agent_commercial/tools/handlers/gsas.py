@@ -20,6 +20,7 @@ class GSASHandlerMixin:
         return {
             "get_gsas_status": instance._handle_get_gsas_status,
             "get_gsas_improvement_priorities": instance._handle_get_gsas_improvement_priorities,
+            "optimize_recommendations_for_gsas": instance._handle_optimize_recommendations_for_gsas,
             "generate_gord_report": instance._handle_generate_gord_report,
         }
     
@@ -91,6 +92,14 @@ class GSASHandlerMixin:
     
     async def _handle_get_gsas_improvement_priorities(self, args: Dict) -> Dict:
         """Get prioritized GSAS improvement actions"""
+        if getattr(self, "gsas_reporter", None):
+            return {
+                "priorities": self.gsas_reporter.get_improvement_priorities(),
+                "target_score": self.gsas_reporter.target_score(),
+                "current_status": self.gsas_reporter.get_status(),
+                "note": "Ranked by weighted GSAS target contribution",
+            }
+
         return {
             "priorities": [
                 {"action": "Optimize Chiller Sequencing", "impact": 1.5, "category": "Energy"},
@@ -100,6 +109,28 @@ class GSASHandlerMixin:
                 {"action": "Add Real-time Water Metering", "impact": 0.4, "category": "Energy"},
             ],
             "note": "Generated based on current gaps in category scores"
+        }
+
+    async def _handle_optimize_recommendations_for_gsas(self, args: Dict) -> Dict:
+        """Score and rank recommendations against GSAS targets."""
+        recommendations = args.get("recommendations", [])
+        limit = args.get("limit", 10)
+
+        if not getattr(self, "gsas_reporter", None):
+            return {
+                "optimized": recommendations[:limit],
+                "note": "GSAS reporter not configured; returning original order",
+            }
+
+        optimized = self.gsas_reporter.optimize_recommendations_for_targets(
+            recommendations=recommendations,
+            limit=limit,
+        )
+        return {
+            "optimized": optimized,
+            "count": len(optimized),
+            "target_score": self.gsas_reporter.target_score(),
+            "current_status": self.gsas_reporter.get_status(),
         }
     
     async def _handle_generate_gord_report(self, args: Dict) -> Dict:

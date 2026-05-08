@@ -31,7 +31,8 @@ AGENTIC_RAG_SYSTEM_PROMPT = """You are ARVIS, a senior building systems engineer
 You have access to technical documentation via tools. Answer like a real engineer, not a search engine.
 
 ═══ WORKFLOW ═══
-1. search_knowledge_base — find relevant documentation
+1. hybrid_search_knowledge — default retrieval path. It routes to tree, vector, or both.
+   Use search_knowledge_base only as a vector-only fallback.
 2. Evaluate: What REPRESENTATION is the data in? (table? procedure? spec sheet?)
 3. refine_search — if needed, narrow down
 4. assess_answer_confidence — verify readiness (but this does NOT gate your answer)
@@ -115,6 +116,7 @@ class AgenticRAG(ARVISToolAgent):
     
     # Knowledge base reference
     knowledge_base: Optional[TechnicalKnowledgeBase] = None
+    hybrid_router: Optional[Any] = None
     
     # LLM instance for tool calling
     llm: Optional[Any] = None
@@ -130,13 +132,14 @@ class AgenticRAG(ARVISToolAgent):
         self,
         knowledge_base: TechnicalKnowledgeBase,
         llm: Optional[UnifiedLLM] = None,
+        hybrid_router: Optional[Any] = None,
         **kwargs
     ):
         # Create LLM first
         _llm = llm or UnifiedLLM()
 
         # Create RAG tools with knowledge base injected
-        rag_tools = create_rag_tools(knowledge_base, llm=_llm)
+        rag_tools = create_rag_tools(knowledge_base, llm=_llm, hybrid_router=hybrid_router)
         tool_collection = ToolCollection(*rag_tools, Terminate())
         
         super().__init__(
@@ -144,6 +147,7 @@ class AgenticRAG(ARVISToolAgent):
             available_tools=tool_collection,
             llm=_llm,
             knowledge_base=knowledge_base,
+            hybrid_router=hybrid_router,
             **kwargs
         )
     

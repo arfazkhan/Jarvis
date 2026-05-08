@@ -39,6 +39,7 @@ except ImportError:
 # ARVIS UnifiedLLM
 from agent_unified.llm import UnifiedLLM
 from agent_advisory.knowledge_base import TechnicalKnowledgeBase
+from agent_advisory.hybrid_rag import TreeKnowledgeBase
 
 logger = logging.getLogger("arvis.advisory.ingester")
 
@@ -88,6 +89,7 @@ class ManualIngester:
     def __init__(
         self,
         knowledge_base: TechnicalKnowledgeBase,
+        tree_knowledge_base: Optional[TreeKnowledgeBase] = None,
         max_pages_per_chunk: int = 5,
         max_tokens_per_node: int = 15000
     ):
@@ -100,6 +102,7 @@ class ManualIngester:
             max_tokens_per_node: Maximum tokens per tree node.
         """
         self.kb = knowledge_base
+        self.tree_kb = tree_knowledge_base
         self.max_pages_per_chunk = max_pages_per_chunk
         self.max_tokens_per_node = max_tokens_per_node
         self.llm = UnifiedLLM()
@@ -224,6 +227,15 @@ class ManualIngester:
                 error_msg = f"Failed to index node '{node.get('title', 'unknown')}': {e}"
                 logger.warning(error_msg)
                 errors.append(error_msg)
+
+        if self.tree_kb:
+            indexed_tree_nodes = self.tree_kb.add_document_tree(
+                source=str(pdf_path),
+                doc_name=doc_name,
+                tree_structure=nodes,
+                equipment_id=equipment_id,
+            )
+            print(f"[ManualIngester] Indexed {indexed_tree_nodes} nodes into tree knowledge base")
         
         elapsed = (datetime.now() - start_time).total_seconds()
         
@@ -591,6 +603,13 @@ Return ONLY the JSON array, no other text."""
         
         # Flatten and index
         nodes = self._flatten_tree(tree_structure)
+        if self.tree_kb:
+            self.tree_kb.add_document_tree(
+                source=str(md_path),
+                doc_name=doc_name,
+                tree_structure=tree_structure,
+                equipment_id=equipment_id,
+            )
         errors = []
         total_tokens = 0
         

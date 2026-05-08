@@ -9,6 +9,8 @@ Goals are prioritized opportunities or risks that the operator should address,
 such as "Prevent Chiller Failure" or "Reduce Energy Waste by 15%".
 """
 
+from __future__ import annotations
+
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -16,14 +18,29 @@ from typing import List, Dict, Any, Optional, TYPE_CHECKING
 from datetime import datetime, timedelta
 
 # Import data models from other engines
-from agent_commercial.fleet_intelligence import FleetIntelligence, BenchmarkResult
-from agent_commercial.predictive_maintenance import PredictiveMaintenanceEngine, FailurePrediction
-from agent_commercial.energy_analyzer import EnergyAnalyzer, WastePattern
+try:
+    from agent_commercial.fleet_intelligence import FleetIntelligence, BenchmarkResult
+except Exception:
+    FleetIntelligence = Any
+    BenchmarkResult = Any
+
+try:
+    from agent_commercial.predictive_maintenance import PredictiveMaintenanceEngine, FailurePrediction
+except Exception:
+    PredictiveMaintenanceEngine = Any
+    FailurePrediction = Any
+
+try:
+    from agent_commercial.energy_analyzer import EnergyAnalyzer, WastePattern
+except Exception:
+    EnergyAnalyzer = Any
+    WastePattern = Any
 
 if TYPE_CHECKING:
     from agent_advisory.memory_conflict_resolver import MemoryConflictResolver
     from agent_advisory.terminal_advisory import TerminalAdvisoryEngine
     from agent_advisory.trust_governor import TrustGovernor
+    from agent_commercial.gsas_reporter import GSASReporter
 
 logger = logging.getLogger("arvis.advisory.goals")
 
@@ -60,6 +77,9 @@ class ProactiveGoal:
     
     # Simulation Result (Phase 4: World Model)
     simulated_impact: Dict[str, Any] = field(default_factory=dict) # E.g., {"confidence": 0.85, "predicted_utility": 45.2}
+
+    # GSAS Operationalization
+    gsas_impact: Dict[str, Any] = field(default_factory=dict)
     
     # Memory Conflict Annotations (Phase 5: Conflict Resolution)
     memory_conflicts: List[Dict[str, Any]] = field(default_factory=list)
@@ -79,6 +99,7 @@ class ProactiveGoal:
             "risk_reduction": self.risk_reduction,
             "recommended_deadline": self.recommended_deadline.isoformat() if self.recommended_deadline else None,
             "suggested_actions": self.suggested_actions,
+            "gsas_impact": self.gsas_impact,
             "timestamp": self.timestamp.isoformat()
         }
 
@@ -141,7 +162,8 @@ class GoalGenerator:
         world_model: Optional[Any] = None, # Avoiding circular import or using WorldModel type
         memory_resolver: Optional["MemoryConflictResolver"] = None,
         terminal_engine: Optional["TerminalAdvisoryEngine"] = None,
-        trust_governor: Optional["TrustGovernor"] = None
+        trust_governor: Optional["TrustGovernor"] = None,
+        gsas_reporter: Optional["GSASReporter"] = None,
     ):
         self.fleet = fleet_intelligence
         self.predictive = predictive_engine
@@ -150,6 +172,7 @@ class GoalGenerator:
         self.memory_resolver = memory_resolver
         self.terminal_engine = terminal_engine
         self.trust_governor = trust_governor
+        self.gsas_reporter = gsas_reporter
         self.scorer = GoalScorer()
         self._last_resolution = None  # Cache for briefing access
         self._last_terminal_advisory = None  # Cache for briefing access
@@ -195,8 +218,13 @@ class GoalGenerator:
         # 3. Harvest goals from Fleet Intelligence (Optimization)
         if self.fleet:
             goals.extend(self._get_fleet_goals(building_id))
+
+        # 4. Score normal recommendations against GSAS operational targets.
+        # Safety-critical terminal advisories remain non-suppressible later.
+        if self.gsas_reporter:
+            self._apply_gsas_operationalization(goals)
             
-        # 4. Filter and Validate with World Model (if available)
+        # 5. Filter and Validate with World Model (if available)
         if self.world_model:
             # We assume current building state can be retrieved
             current_state = {"total_power_kw": 0, "zone_temp_avg_c": 23.0, "outdoor_temp_c": 35.0} # fallback
@@ -224,7 +252,7 @@ class GoalGenerator:
                         goal.score *= 0.5
                         goal.priority = "medium" if goal.priority == "high" else "low"
 
-        # 5. Memory Conflict Resolution (if resolver available)
+        # 6. Memory Conflict Resolution (if resolver available)
         if self.memory_resolver:
             try:
                 resolution = self.memory_resolver.resolve_conflicts(goals, building_id)
@@ -247,7 +275,7 @@ class GoalGenerator:
             except Exception as e:
                 logger.error(f"[GOALS] Conflict resolution failed (proceeding without): {e}")
         
-        # 6. Terminal Advisory Evaluation (non-suppressible)
+        # 7. Terminal Advisory Evaluation (non-suppressible)
         if self.terminal_engine:
             try:
                 # Get current building state from world model or default
@@ -283,7 +311,7 @@ class GoalGenerator:
             except Exception as e:
                 logger.error(f"[GOALS] Terminal advisory evaluation failed: {e}")
 
-        # 7. Trust-Weighted Reasoning (confidence dampening + proactive throttle)
+        # 8. Trust-Weighted Reasoning (confidence dampening + proactive throttle)
         if self.trust_governor:
             try:
                 goals = self.trust_governor.apply_to_goals(goals, building_id)
@@ -294,6 +322,31 @@ class GoalGenerator:
         goals.sort(key=lambda g: g.score, reverse=True)
         
         return goals
+
+    def _apply_gsas_operationalization(self, goals: List[ProactiveGoal]) -> None:
+        """Annotate and boost recommendations based on GSAS target impact."""
+        for goal in goals:
+            try:
+                impact = self.gsas_reporter.score_operational_recommendation(goal.to_dict())
+                impact_dict = impact.to_dict()
+                goal.gsas_impact = impact_dict
+
+                # GSAS relevance should affect normal prioritization, but not dominate
+                # safety/risk logic. Cap boost to keep operational risk first.
+                boost = min(0.15, impact.impact_score * impact.confidence * 0.15)
+                if goal.priority not in ("critical",):
+                    goal.score = min(1.0, goal.score + boost)
+
+                if impact.criteria:
+                    action = (
+                        f"Track GSAS impact: {impact.category} "
+                        f"({', '.join(impact.criteria)}) target delta +{impact.target_delta:.3f}"
+                    )
+                    if action not in goal.suggested_actions:
+                        goal.suggested_actions.append(action)
+
+            except Exception as e:
+                logger.error(f"[GOALS] GSAS operationalization failed for {goal.goal_id}: {e}")
 
     def _get_predictive_goals(self, building_id: str) -> List[ProactiveGoal]:
         """Generate goals based on predictive maintenance risks"""
@@ -555,4 +608,3 @@ class GoalDiscoveryEngine:
                 "requires_approval": True
             }
         })
-
