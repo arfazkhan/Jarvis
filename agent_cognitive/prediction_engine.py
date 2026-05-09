@@ -179,7 +179,10 @@ class PredictionEngine:
         
         # Get current BMS state if available
         if self.bms_state:
-            context["current_state"] = self.bms_state.get_summary()
+            if asyncio.iscoroutinefunction(self.bms_state.get_summary):
+                context["current_state"] = await self.bms_state.get_summary()
+            else:
+                context["current_state"] = self.bms_state.get_summary()
         
         # Dispatch to appropriate predictor
         if prediction_type == PredictionType.ENERGY_DEMAND:

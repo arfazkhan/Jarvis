@@ -642,11 +642,44 @@ class BACnetSimulatorAdapter:
         self.points: Dict[str, BACnetPoint] = {}
         self._is_connected = False
         self._polling_active = False
-        self._on_point_update: List[Callable] = []
+        self._on_point_update = []
+        self._simulated_values = {}
         
-        # Simulated values state
-        self._simulated_values: Dict[str, float] = {}
+    def start_polling(self, interval_seconds: int = 60) -> None:
+        """Simulate background polling"""
+        self._polling_active = True
+        self._poll_interval = interval_seconds
+        import threading
+        self._polling_thread = threading.Thread(
+            target=self._polling_loop,
+            daemon=True
+        )
+        self._polling_thread.start()
         
+    def stop_polling(self) -> None:
+        """Stop simulated polling"""
+        self._polling_active = False
+        if hasattr(self, "_polling_thread"):
+            self._polling_thread.join(timeout=1)
+            
+    def _polling_loop(self) -> None:
+        """Simulated background polling loop"""
+        import time
+        import asyncio
+        while self._polling_active:
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                points = loop.run_until_complete(self.read_all_points())
+                
+                for point in points:
+                    for callback in self._on_point_update:
+                        callback(point)
+                
+                loop.close()
+            except Exception as e:
+                logger.error(f"Simulated polling error: {e}")
+            time.sleep(self._poll_interval)
     async def connect(self) -> bool:
         """Simulate connection"""
         self._is_connected = True

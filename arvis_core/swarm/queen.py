@@ -39,6 +39,9 @@ class QueenCoordinator(BaseModel):
         if self.tool_handler and not node.tool_handler:
             node.tool_handler = self.tool_handler
             
+        if self.llm and not getattr(node, 'llm', None):
+            node.llm = self.llm
+            
         self.nodes[node.name] = node
         logger.info(f"[Queen] Registered new node: {node.name} with {len(node.tools)} tools")
 

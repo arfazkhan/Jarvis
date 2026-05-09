@@ -15,7 +15,7 @@ Endpoints:
 This API serves both the web dashboard and the LLM tool executor.
 """
 
-from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, Depends, status
+from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, Depends, status, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Dict, List, Optional, Any
@@ -124,6 +124,44 @@ class DashboardOverview(BaseModel):
     maintenance_due_7d: int
 
 
+class GSASAnomalyResolutionRequest(BaseModel):
+    resolution: str
+
+class GSASApprovalRequest(BaseModel):
+    operator_id: str
+
+class GSASRejectionRequest(BaseModel):
+    operator_id: str
+    reason: str
+
+
+class WasteRecordRequest(BaseModel):
+    waste_type: str
+    quantity_kg: float
+    disposal_method: str
+    contractor: str
+    period_start: Optional[str] = None
+    period_end: Optional[str] = None
+
+
+class DocumentIngestionRequest(BaseModel):
+    file_path: str
+    document_type: str
+
+
+class DocumentIngestionRequest(BaseModel):
+    file_path: str
+    document_type: str
+
+class SurveyResponseRequest(BaseModel):
+    occupant_type: str
+    thermal_comfort: int
+    air_quality: int
+    lighting_quality: int
+    acoustic_comfort: int
+    comments: Optional[str] = None
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # API APPLICATION
 # ═══════════════════════════════════════════════════════════════════════════
@@ -151,6 +189,10 @@ def create_api(
     safety_controller=None,
     sim_service=None,
     water_adapter=None,
+    gsas_approval=None,
+    waste_tracker=None,
+    document_ingestion=None,
+    survey_manager=None,
 ) -> FastAPI:
     """
     Create the FastAPI application with all routes.
@@ -205,6 +247,10 @@ def create_api(
     
     # Advanced Simulation
     app.state.sim_service = sim_service
+    app.state.gsas_approval = gsas_approval
+    app.state.waste_tracker = waste_tracker
+    app.state.document_ingestion = document_ingestion
+    app.state.survey_manager = survey_manager
 
     # Include Omega Simulation Routes
     app.include_router(omega_router)
@@ -826,7 +872,11 @@ def create_api(
                 building_id = snapshot.get("building_id", building_id)
                 building_name = snapshot.get("building_name", building_name)
                 
-            reporter = GSASReporter(building_id, building_name)
+            reporter = GSASReporter(
+                building_id, building_name,
+                waste_tracker=getattr(app.state, "waste_tracker", None),
+                survey_manager=getattr(app.state, "survey_manager", None)
+            )
             reporter.initialize_criteria()
             reporter.update_from_bms({}, {}, {})
             pdf_path = reporter.generate_gord_pdf()
@@ -872,7 +922,11 @@ def create_api(
             building_name = snapshot.get("building_name", building_name)
         
         # Initialize reporter
-        reporter = GSASReporter(building_id, building_name)
+        reporter = GSASReporter(
+            building_id, building_name,
+            waste_tracker=getattr(app.state, "waste_tracker", None),
+            survey_manager=getattr(app.state, "survey_manager", None)
+        )
         reporter.initialize_criteria()
         
         # Get real BMS data if available
@@ -939,7 +993,11 @@ def create_api(
         from agent_commercial.gsasgate_exporter import GSASgateExporter
         
         # Initialize reporter with current state
-        reporter = GSASReporter("BUILDING-01", "Commercial Building")
+        reporter = GSASReporter(
+            "BUILDING-01", "Commercial Building",
+            waste_tracker=getattr(app.state, "waste_tracker", None),
+            survey_manager=getattr(app.state, "survey_manager", None)
+        )
         reporter.initialize_criteria()
         
         # Get data from adapters
@@ -968,6 +1026,294 @@ def create_api(
             "download_url": f"/api/v1/reports/download/{filename}",
             "summary": reporter.get_status()
         }
+
+    # ─────────────────────────────────────────────────────────────────────
+    # GSAS APPROVAL WORKFLOW (Phase 1)
+    # ─────────────────────────────────────────────────────────────────────
+
+    @app.post("/api/v1/gsas/packages")
+    async def create_gsas_package():
+        """Create a new frozen GSAS submission package for review."""
+        from agent_commercial.gsas_reporter import GSASReporter
+        from agent_commercial.gsasgate_exporter import GSASgateExporter
+        from agent_commercial.gsas_approval import GSASApprovalWorkflow
+        
+        approval = getattr(app.state, "gsas_approval", None)
+        if not approval:
+            approval = GSASApprovalWorkflow()
+            app.state.gsas_approval = approval
+            
+        # 1. Gather current state
+        state = app.state.bms_state
+        building_id = "BUILDING-01"
+        building_name = "Commercial Building"
+        if state:
+            snapshot = await state.get_snapshot()
+            building_id = snapshot.get("building_id", building_id)
+            building_name = snapshot.get("building_name", building_name)
+            
+        reporter = GSASReporter(
+            building_id, building_name,
+            waste_tracker=getattr(app.state, "waste_tracker", None),
+            survey_manager=getattr(app.state, "survey_manager", None)
+        )
+        reporter.initialize_criteria()
+        
+        # Get latest sensor data
+        energy_data = {}
+        if app.state.energy_analyzer:
+            summary = app.state.energy_analyzer.get_summary()
+            if summary:
+                energy_data["consumption_vs_baseline"] = max(0, -summary.get("baseline_deviation_percent", 0))
+                energy_data["submetering_coverage"] = 80
+        
+        water_data = {}
+        if app.state.water_adapter:
+            water_data = app.state.water_adapter.get_gsas_water_data()
+            
+        reporter.update_from_bms(energy_data, water_data, {})
+        exporter = GSASgateExporter(reporter)
+        
+        # 2. Create package
+        package = approval.create_package(reporter, exporter)
+        
+        return {
+            "status": "success",
+            "package": package.to_dict()
+        }
+
+    @app.get("/api/v1/gsas/packages")
+    async def list_gsas_packages():
+        """List all GSAS submission packages."""
+        approval = getattr(app.state, "gsas_approval", None)
+        if not approval:
+            return []
+        return [p.to_dict() for p in approval.list_packages()]
+
+    @app.get("/api/v1/gsas/packages/{package_id}")
+    async def get_gsas_package(package_id: str):
+        """Get details for a specific package."""
+        approval = getattr(app.state, "gsas_approval", None)
+        if not approval:
+            raise HTTPException(404, "Approval engine offline")
+            
+        package = approval.get_package(package_id)
+        if not package:
+            raise HTTPException(404, f"Package {package_id} not found")
+            
+        return package.to_dict()
+
+    @app.post("/api/v1/gsas/packages/{package_id}/resolve/{anomaly_id}")
+    async def resolve_gsas_anomaly(package_id: str, anomaly_id: str, req: GSASAnomalyResolutionRequest):
+        """CSP resolves a flagged anomaly."""
+        approval = getattr(app.state, "gsas_approval", None)
+        if not approval:
+            raise HTTPException(404, "Approval engine offline")
+            
+        success = approval.resolve_anomaly(package_id, anomaly_id, req.resolution)
+        if not success:
+            raise HTTPException(404, "Package or Anomaly not found")
+            
+        return {"status": "success", "message": "Anomaly resolved"}
+
+    @app.post("/api/v1/gsas/packages/{package_id}/approve")
+    async def approve_gsas_package(package_id: str, req: GSASApprovalRequest):
+        """Final CSP approval gate."""
+        approval = getattr(app.state, "gsas_approval", None)
+        if not approval:
+            raise HTTPException(404, "Approval engine offline")
+            
+        result = approval.approve_package(package_id, req.operator_id)
+        if result["status"] == "error":
+            raise HTTPException(400, result["message"])
+            
+        return result
+
+    @app.post("/api/v1/gsas/packages/{package_id}/reject")
+    async def reject_gsas_package(package_id: str, req: GSASRejectionRequest):
+        """CSP rejection with reason."""
+        approval = getattr(app.state, "gsas_approval", None)
+        if not approval:
+            raise HTTPException(404, "Approval engine offline")
+            
+        success = approval.reject_package(package_id, req.operator_id, req.reason)
+        if not success:
+            raise HTTPException(404, "Package not found")
+            
+        return {"status": "success"}
+        
+    @app.get("/api/v1/gsas/packages/{package_id}/export")
+    async def download_gsas_export(package_id: str):
+        """Download the frozen GSASgate JSON export for an approved package."""
+        from fastapi.responses import FileResponse
+        approval = getattr(app.state, "gsas_approval", None)
+        if not approval:
+            raise HTTPException(404, "Approval engine offline")
+            
+        package = approval.get_package(package_id)
+        if not package:
+            raise HTTPException(404, "Package not found")
+            
+        if package.status != "approved" and package.status.value != "approved":
+            raise HTTPException(400, "Package must be approved before export")
+            
+        if not package.export_filepath or not __import__("os").path.exists(package.export_filepath):
+            raise HTTPException(404, "Export file not found")
+            
+        return FileResponse(
+            path=package.export_filepath, 
+            filename=f"{package_id}_gsasgate.json",
+            media_type="application/json"
+        )
+
+
+    # ─────────────────────────────────────────────────────────────────────
+    # WASTE MANAGEMENT (Phase 2 - MO.3)
+    # ─────────────────────────────────────────────────────────────────────
+
+    @app.post("/api/v1/gsas/waste/records")
+    async def add_waste_record(req: WasteRecordRequest):
+        """Add a manual or extracted waste disposal record."""
+        from agent_commercial.waste_tracker import WasteTracker, WasteRecord
+        from datetime import date
+        
+        tracker = getattr(app.state, "waste_tracker", None)
+        if not tracker:
+            tracker = WasteTracker()
+            app.state.waste_tracker = tracker
+            
+        record = WasteRecord(
+            waste_type=req.waste_type,
+            quantity_kg=req.quantity_kg,
+            disposal_method=req.disposal_method,
+            contractor=req.contractor,
+            period_start=date.fromisoformat(req.period_start) if req.period_start else date.today(),
+            period_end=date.fromisoformat(req.period_end) if req.period_end else date.today(),
+        )
+        
+        tracker.add_record(record)
+        return {"status": "success", "record_id": record.record_id}
+
+    @app.get("/api/v1/gsas/waste/summary")
+    async def get_waste_summary(days: int = Query(30, ge=1, le=365)):
+        """Get waste diversion summary for GSAS scoring."""
+        tracker = getattr(app.state, "waste_tracker", None)
+        if not tracker:
+            return {
+                "diversion_rate": 0.0, "total_kg": 0.0, 
+                "breakdown_by_type": {}, "breakdown_by_method": {},
+                "note": "Waste tracker offline"
+            }
+        return tracker.get_summary(days)
+
+    @app.post("/api/v1/gsas/ingest")
+    async def ingest_gsas_document(
+        file: UploadFile = File(...),
+        document_type: str = Form(...)
+    ):
+        """AI-powered ingestion of GSAS evidence (bills, invoices)."""
+        import os
+        import shutil
+        from agent_commercial.document_ingestion import IngestionManager
+        
+        # Save uploaded file temporarily
+        os.makedirs("evidence", exist_ok=True)
+        file_path = f"evidence/{uuid.uuid4()}_{file.filename}"
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+        ingestor = getattr(app.state, "document_ingestion", None)
+        if not ingestor:
+            ingestor = IngestionManager(
+                waste_tracker=app.state.waste_tracker,
+                energy_analyzer=app.state.energy_analyzer
+            )
+            app.state.document_ingestion = ingestor
+            
+        result = await ingestor.ingest_document(file_path, document_type)
+        return result
+
+    # ─────────────────────────────────────────────────────────────────────
+    # LABELS & SCHEDULING (Phase 4)
+    # ─────────────────────────────────────────────────────────────────────
+
+    @app.get("/api/v1/gsas/labels")
+    async def get_gsas_labels():
+        """Generate Energy & Water Performance Labels (EPL/WPL)."""
+        from agent_commercial.gsas_reporter import GSASReporter
+        from agent_commercial.gsas_labels import LabelGenerator
+        
+        # 1. Get current scores
+        reporter = GSASReporter("BUILDING-01", "Commercial Building")
+        reporter.initialize_criteria()
+        
+        # Pull data from adapters
+        energy_score = 1.5 # Default
+        if app.state.energy_analyzer:
+            summary = app.state.energy_analyzer.get_summary()
+            if summary:
+                # Mock mapping normalized score
+                dev = summary.get("baseline_deviation_percent", 0)
+                energy_score = max(0, min(3.0, 1.5 - (dev/10)))
+        
+        water_score = 1.2 # Default
+        if app.state.water_adapter:
+            w_data = app.state.water_adapter.get_gsas_water_data()
+            # Logic to derive score from water_data...
+            water_score = 2.0 # Mocking for demo
+            
+        # 2. Generate labels
+        lg = LabelGenerator()
+        return {
+            "epl": lg.generate_epl(energy_score),
+            "wpl": lg.generate_wpl(water_score)
+        }
+
+    @app.get("/api/v1/gsas/timeline")
+    async def get_gsas_timeline():
+        """Get the 4-year recertification milestone timeline."""
+        from agent_commercial.gsas_scheduler import GSASScheduler
+        
+        # In real app, load last_cert_date from DB
+        scheduler = GSASScheduler()
+        return {
+            "days_to_expiry": scheduler.get_days_to_expiry(),
+            "timeline": scheduler.get_timeline()
+        }
+
+    # ─────────────────────────────────────────────────────────────────────
+    # OCCUPANT SURVEYS (Phase 5 - IE.10)
+    # ─────────────────────────────────────────────────────────────────────
+
+    @app.post("/api/v1/gsas/surveys")
+    async def submit_survey_response(req: SurveyResponseRequest):
+        """Submit occupant feedback for IE scoring."""
+        from agent_commercial.occupant_surveys import SurveyManager, SurveyResponse
+        
+        manager = getattr(app.state, "survey_manager", None)
+        if not manager:
+            manager = SurveyManager()
+            app.state.survey_manager = manager
+            
+        response = SurveyResponse(
+            occupant_type=req.occupant_type,
+            thermal_comfort=req.thermal_comfort,
+            air_quality=req.air_quality,
+            lighting_quality=req.lighting_quality,
+            acoustic_comfort=req.acoustic_comfort,
+            comments=req.comments
+        )
+        
+        manager.add_response(response)
+        return {"status": "success", "response_id": response.response_id}
+
+    @app.get("/api/v1/gsas/surveys/summary")
+    async def get_survey_summary():
+        """Get aggregated occupant satisfaction metrics."""
+        manager = getattr(app.state, "survey_manager", None)
+        if not manager:
+            return {"satisfaction_rate": 0, "response_count": 0, "note": "Survey manager offline"}
+        return manager.get_gsas_ie_data()
 
     @app.get("/api/v1/reports/download/{filename}")
     async def download_report(filename: str):

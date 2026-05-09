@@ -326,10 +326,13 @@ class OnlineLearner:
             return None
         
         # Establish baseline if not done
-        if self._baseline_rmse is None and n >= self.min_samples_for_baseline:
+        if self._baseline_rmse is None:
+            if n < self.min_samples_for_baseline:
+                return None
+                
             initial_records = list(self._buffer)[:self.min_samples_for_baseline]
-            self._baseline_rmse = np.mean([r.rmse for r in initial_records])
-            self._baseline_mape = np.mean([r.mape for r in initial_records])
+            self._baseline_rmse = float(np.mean([r.rmse for r in initial_records]))
+            self._baseline_mape = float(np.mean([r.mape for r in initial_records]))
             self._baseline_established_at = datetime.now()
             logger.info(
                 f"Baseline established: RMSE={self._baseline_rmse:.2f} "

@@ -139,7 +139,7 @@ class Recommendation:
             "confidence": self.confidence,
             "predicted_outcome": self.predicted_outcome,
             "actual_outcome": self.actual_outcome,
-            "outcome_verdict": self.outcome_verdict.value if self.outline_verdict else None,
+            "outcome_verdict": self.outcome_verdict.value if self.outcome_verdict else None,
             "outcome_error_score": self.outcome_error_score,
             "created_at": self.created_at.isoformat(),
             "acted_at": self.acted_at.isoformat() if self.acted_at else None,

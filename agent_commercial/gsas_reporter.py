@@ -275,10 +275,10 @@ class GSASReporter:
             "keywords": ["water", "m3", "meter", "leak", "flow", "irrigation"],
         },
         GSASCategory.INDOOR_ENVIRONMENT: {
-            "criteria": ["IE.1", "IE.2"],
+            "criteria": ["IE.1", "IE.2", "IE.10"],
             "keywords": [
                 "comfort", "temperature", "thermal", "humidity", "co2",
-                "iaq", "ventilation", "occupant", "complaint",
+                "iaq", "ventilation", "occupant", "complaint", "survey", "satisfaction",
             ],
         },
         GSASCategory.MANAGEMENT_OPERATIONS: {
@@ -295,10 +295,14 @@ class GSASReporter:
         building_id: str = "default",
         building_name: str = "Commercial Building",
         target_rating: GSASStarRating = GSASStarRating.THREE_STAR,
+        waste_tracker: Optional[Any] = None,
+        survey_manager: Optional[Any] = None,
     ):
         self.building_id = building_id
         self.building_name = building_name
         self.target_rating = target_rating
+        self.waste_tracker = waste_tracker
+        self.survey_manager = survey_manager
         
         # Criteria storage
         self.criteria: Dict[str, GSASCriterion] = {}
@@ -378,6 +382,8 @@ class GSASReporter:
                            max_points=2.0)
         self._add_criterion("IE.6", "Views", GSASCategory.INDOOR_ENVIRONMENT,
                            max_points=1.0)
+        self._add_criterion("IE.10", "Occupant Satisfaction", GSASCategory.INDOOR_ENVIRONMENT,
+                           max_points=2.0)
         
         # ─────────────────────────────────────────────────────────────────
         # MATERIALS (M) - 14% weight
@@ -536,6 +542,7 @@ class GSASReporter:
         water_data: Optional[Dict[str, Any]] = None,
         iaq_data: Optional[Dict[str, Any]] = None,
         maintenance_data: Optional[Dict[str, Any]] = None,
+        waste_data: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
         Update GSAS scores based on BMS data.
@@ -545,7 +552,18 @@ class GSASReporter:
             water_data: Water consumption metrics
             iaq_data: Indoor air quality metrics
             maintenance_data: Maintenance compliance data
+            waste_data: Waste management metrics
         """
+        if self.waste_tracker and not waste_data:
+            waste_data = self.waste_tracker.get_gsas_waste_data()
+            
+        if self.survey_manager:
+            if iaq_data is None:
+                iaq_data = {}
+            if "satisfaction_rate" not in iaq_data:
+                survey_data = self.survey_manager.get_gsas_ie_data()
+                iaq_data["satisfaction_rate"] = survey_data.get("satisfaction_rate", 0)
+
         if energy_data:
             self._update_energy_criteria(energy_data)
         
@@ -557,6 +575,9 @@ class GSASReporter:
         
         if maintenance_data:
             self._update_maintenance_criteria(maintenance_data)
+            
+        if waste_data:
+            self._update_waste_criteria(waste_data)
         
         # Safety check — GSAS disqualification guard
         self.check_disqualification()
@@ -579,6 +600,18 @@ class GSASReporter:
             else:
                 self._set_score("E.1", 0.5, CriterionStatus.IN_PROGRESS)
         
+        # E.2 Primary Energy & CO2
+        if "co2_reduction_percent" in data:
+            reduction = data["co2_reduction_percent"]
+            if reduction >= 40:
+                self._set_score("E.2", 3.0, CriterionStatus.EXCEEDS)
+            elif reduction >= 25:
+                self._set_score("E.2", 2.0, CriterionStatus.ACHIEVED)
+            elif reduction >= 10:
+                self._set_score("E.2", 1.0, CriterionStatus.IN_PROGRESS)
+            else:
+                self._set_score("E.2", 0.0, CriterionStatus.AT_RISK)
+
         # E.3 Energy Monitoring
         if "submetering_coverage" in data:
             coverage = data["submetering_coverage"]  # %
@@ -588,6 +621,18 @@ class GSASReporter:
                 self._set_score("E.3", 1.5, CriterionStatus.ACHIEVED)
             elif coverage >= 50:
                 self._set_score("E.3", 1.0, CriterionStatus.IN_PROGRESS)
+
+        # E.5 District Cooling
+        if "district_cooling_ratio" in data:
+            ratio = data["district_cooling_ratio"]
+            if ratio >= 100:
+                self._set_score("E.5", 2.0, CriterionStatus.EXCEEDS)
+            elif ratio >= 50:
+                self._set_score("E.5", 1.5, CriterionStatus.ACHIEVED)
+            elif ratio > 0:
+                self._set_score("E.5", 1.0, CriterionStatus.IN_PROGRESS)
+            else:
+                self._set_score("E.5", 0.0, CriterionStatus.AT_RISK)
     
     def _update_water_criteria(self, data: Dict[str, Any]) -> None:
         """Update water-related criteria"""
@@ -626,7 +671,7 @@ class GSASReporter:
             elif compliance >= 75:
                 self._set_score("IE.1", 1.0, CriterionStatus.IN_PROGRESS)
         
-        # IE.2 Indoor Air Quality
+        # IE.2 Indoor Air Quality (CO2)
         if "co2_compliance" in data:
             co2_ok = data["co2_compliance"]  # %
             if co2_ok >= 98:
@@ -635,9 +680,45 @@ class GSASReporter:
                 self._set_score("IE.2", 2.0, CriterionStatus.ACHIEVED)
             elif co2_ok >= 80:
                 self._set_score("IE.2", 1.0, CriterionStatus.IN_PROGRESS)
+                
+        # IE.10 Occupant Satisfaction (Survey Based)
+        if "satisfaction_rate" in data:
+            rate = data["satisfaction_rate"]
+            if rate >= 90:
+                self._set_score("IE.10", 2.0, CriterionStatus.EXCEEDS)
+            elif rate >= 80:
+                self._set_score("IE.10", 1.5, CriterionStatus.ACHIEVED)
+            elif rate >= 70:
+                self._set_score("IE.10", 1.0, CriterionStatus.IN_PROGRESS)
     
     def _update_maintenance_criteria(self, data: Dict[str, Any]) -> None:
         """Update maintenance-related criteria"""
+        # MO.1 Commissioning
+        if "commissioning_coverage" in data:
+            coverage = data["commissioning_coverage"]
+            if coverage >= 90:
+                self._set_score("MO.1", 2.0, CriterionStatus.EXCEEDS)
+            elif coverage >= 70:
+                self._set_score("MO.1", 1.5, CriterionStatus.ACHIEVED)
+            elif coverage >= 50:
+                self._set_score("MO.1", 1.0, CriterionStatus.IN_PROGRESS)
+            else:
+                self._set_score("MO.1", 0.0, CriterionStatus.AT_RISK)
+
+        # MO.2 Energy Management
+        if "energy_audit_current" in data or "energy_policy_active" in data:
+            audit = data.get("energy_audit_current", False)
+            policy = data.get("energy_policy_active", False)
+            if audit and policy:
+                self._set_score("MO.2", 2.0, CriterionStatus.EXCEEDS)
+            elif audit:
+                self._set_score("MO.2", 1.5, CriterionStatus.ACHIEVED)
+            elif policy:
+                self._set_score("MO.2", 1.0, CriterionStatus.IN_PROGRESS)
+            else:
+                self._set_score("MO.2", 0.0, CriterionStatus.AT_RISK)
+
+        # MO.4 Facility Management
         if "pm_compliance" in data:
             compliance = data["pm_compliance"]  # %
             if compliance >= 95:
@@ -646,6 +727,19 @@ class GSASReporter:
                 self._set_score("MO.4", 1.5, CriterionStatus.ACHIEVED)
             elif compliance >= 60:
                 self._set_score("MO.4", 1.0, CriterionStatus.IN_PROGRESS)
+
+    def _update_waste_criteria(self, data: Dict[str, Any]) -> None:
+        """Update waste management criteria (MO.3)"""
+        if "diversion_rate" in data:
+            rate = data["diversion_rate"]  # %
+            if rate >= 75:
+                self._set_score("MO.3", 2.0, CriterionStatus.EXCEEDS)
+            elif rate >= 50:
+                self._set_score("MO.3", 1.5, CriterionStatus.ACHIEVED)
+            elif rate >= 25:
+                self._set_score("MO.3", 1.0, CriterionStatus.IN_PROGRESS)
+            else:
+                self._set_score("MO.3", 0.5, CriterionStatus.IN_PROGRESS)
     
     def _set_score(
         self,

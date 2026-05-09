@@ -29,15 +29,20 @@ class LLMAgent:
         automation_engine=None,
         learning_engine=None,
         subscribe_to_voice=False,
+        override_provider=None,
+        override_model=None,
     ):
         self.event_bus = event_bus
         self.state_engine = state_engine
         self.automation_engine = automation_engine
         self.learning_engine = learning_engine
+        self.provider = override_provider or os.getenv("LLM_PROVIDER", "groq")
+        self.model = override_model or os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
         
         # Provider clients
         self._groq_client = None
         self._openai_client = None
+        self.client = None # UnifiedLLM expects a .client attribute
         
         # Initialize Groq client if API key exists
         groq_key = os.getenv("GROQ_API_KEY")

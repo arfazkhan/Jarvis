@@ -134,7 +134,7 @@ class UnifiedLLM(BaseModel):
             _REASONING_AGENT = LLMAgent(
                 event_bus=DummyBus(), 
                 state_engine=None, 
-                automations=None, 
+                automation_engine=None, 
                 subscribe_to_voice=False,
                 override_provider=provider,
                 override_model=model
@@ -165,7 +165,7 @@ class UnifiedLLM(BaseModel):
             _TOOL_AGENT = LLMAgent(
                 event_bus=DummyBus(), 
                 state_engine=None, 
-                automations=None, 
+                automation_engine=None, 
                 subscribe_to_voice=False,
                 override_provider=tool_provider,
                 override_model=tool_model
@@ -183,7 +183,7 @@ class UnifiedLLM(BaseModel):
                 _FALLBACK_TOOL_AGENT = LLMAgent(
                     event_bus=DummyBus(),
                     state_engine=None,
-                    automations=None,
+                    automation_engine=None,
                     subscribe_to_voice=False,
                     override_provider="groq",
                     override_model="llama-3.3-70b-versatile"
