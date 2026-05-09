@@ -341,14 +341,16 @@ def check_cost_impact(
     engine = CostEngine()
     estimate = engine.predict_setpoint_cost(current_temp, target_temp, zone_cfm)
     
-    return {
+    result = {
         "zone_id": zone_id,
         "current_temp": current_temp,
         "target_temp": target_temp,
-        "estimate": estimate.to_dict(),
         "warning_message": estimate.format_warning(),
         "should_warn_user": estimate.proceed_warning,
     }
+    # Flatten estimate fields
+    result.update(estimate.to_dict())
+    return result
 
 
 def get_current_burn_rate(total_kw: float) -> Dict[str, Any]:

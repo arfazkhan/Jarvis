@@ -37,17 +37,25 @@ class SovereignHandlerMixin:
         if not query:
             return {"error": "query is required"}
         
-        if self.knowledge_base and hasattr(self.knowledge_base, "query_skillbook"):
-            return await self.knowledge_base.query_skillbook(
-                query=query,
-                equipment_id=equipment_id,
-                skill_type=skill_type,
-                limit=limit
-            )
+        knowledge_base = getattr(self, "knowledge_base", None)
+        if knowledge_base and hasattr(knowledge_base, "query_skillbook"):
+            try:
+                return await knowledge_base.query_skillbook(
+                    query=query,
+                    equipment_id=equipment_id,
+                    skill_type=skill_type,
+                    limit=limit
+                )
+            except Exception as e:
+                logger.error(f"Error querying skillbook in knowledge_base: {e}")
         
         # Fallback: search in tracker if available
-        if self.tracker and hasattr(self.tracker, "search_skills"):
-            return await self.tracker.search_skills(query, limit=limit)
+        tracker = getattr(self, "tracker", None)
+        if tracker and hasattr(tracker, "search_skills"):
+            try:
+                return await tracker.search_skills(query, limit=limit)
+            except Exception as e:
+                logger.error(f"Error searching skills in tracker: {e}")
         
         return {
             "query": query,
@@ -67,23 +75,31 @@ class SovereignHandlerMixin:
         if not title or not description or not skill_type:
             return {"error": "title, description, and skill_type are required"}
         
-        if self.knowledge_base and hasattr(self.knowledge_base, "add_skill"):
-            return await self.knowledge_base.add_skill(
-                title=title,
-                description=description,
-                skill_type=skill_type,
-                equipment_id=equipment_id,
-                confidence=confidence,
-                tags=tags
-            )
+        knowledge_base = getattr(self, "knowledge_base", None)
+        if knowledge_base and hasattr(knowledge_base, "add_skill"):
+            try:
+                return await knowledge_base.add_skill(
+                    title=title,
+                    description=description,
+                    skill_type=skill_type,
+                    equipment_id=equipment_id,
+                    confidence=confidence,
+                    tags=tags
+                )
+            except Exception as e:
+                logger.error(f"Error adding skill to knowledge_base: {e}")
         
-        if self.tracker and hasattr(self.tracker, "record_skill"):
-            return await self.tracker.record_skill(
-                title=title,
-                description=description,
-                skill_type=skill_type,
-                equipment_id=equipment_id
-            )
+        tracker = getattr(self, "tracker", None)
+        if tracker and hasattr(tracker, "record_skill"):
+            try:
+                return await tracker.record_skill(
+                    title=title,
+                    description=description,
+                    skill_type=skill_type,
+                    equipment_id=equipment_id
+                )
+            except Exception as e:
+                logger.error(f"Error recording skill in tracker: {e}")
         
         return {
             "status": "recorded",
@@ -97,11 +113,15 @@ class SovereignHandlerMixin:
         building_id = args.get("building_id")
         metric = args.get("metric", "energy_eui")
         
-        if self.world_model and hasattr(self.world_model, "compare_to_fleet"):
-            return await self.world_model.compare_to_fleet(
-                building_id=building_id,
-                metric=metric
-            )
+        world_model = getattr(self, "world_model", None)
+        if world_model and hasattr(world_model, "compare_to_fleet"):
+            try:
+                return await world_model.compare_to_fleet(
+                    building_id=building_id,
+                    metric=metric
+                )
+            except Exception as e:
+                logger.error(f"Error in fleet comparison: {e}")
         
         # Fallback: basic comparison
         return {
@@ -132,14 +152,19 @@ class SovereignHandlerMixin:
         if not change_type or target is None:
             return {"error": "change_type and target are required"}
         
-        if self.world_model and hasattr(self.world_model, "simulate_change"):
-            return await self.world_model.simulate_change(
-                change_type=change_type,
-                target=target,
-                current_value=current_value,
-                proposed_value=proposed_value,
-                duration_hours=duration_hours
-            )
+        world_model = getattr(self, "world_model", None)
+        if world_model and hasattr(world_model, "simulate_change"):
+            try:
+                return await world_model.simulate_change(
+                    change_type=change_type,
+                    target=target,
+                    current_value=current_value,
+                    proposed_value=proposed_value,
+                    duration_hours=duration_hours
+                )
+            except Exception as e:
+                logger.error(f"Error in change simulation: {e}")
+                # Fallback to local calculation on error
         
         # Fallback: simple estimation
         try:
@@ -181,13 +206,17 @@ class SovereignHandlerMixin:
         if not event_type:
             return {"error": "event_type is required"}
         
-        if self.world_model and hasattr(self.world_model, "correlate_events"):
-            return await self.world_model.correlate_events(
-                event_type=event_type,
-                time_range=time_range,
-                correlate_with=correlate_with,
-                min_correlation=min_correlation
-            )
+        world_model = getattr(self, "world_model", None)
+        if world_model and hasattr(world_model, "correlate_events"):
+            try:
+                return await world_model.correlate_events(
+                    event_type=event_type,
+                    time_range=time_range,
+                    correlate_with=correlate_with,
+                    min_correlation=min_correlation
+                )
+            except Exception as e:
+                logger.error(f"Error in event correlation: {e}")
         
         # Fallback: basic correlation
         return {

@@ -33,13 +33,17 @@ class AdvisoryHandlerMixin:
         alarm_id = args.get("alarm_id")
         top_k = args.get("top_k", 3)
         
-        if self.advisor:
-            return await self.advisor.get_recommendations(
-                context=context,
-                equipment_id=equipment_id,
-                alarm_id=alarm_id,
-                top_k=top_k
-            )
+        advisor = getattr(self, "advisor", None)
+        if advisor and hasattr(advisor, "get_recommendations"):
+            try:
+                return await advisor.get_recommendations(
+                    context=context,
+                    equipment_id=equipment_id,
+                    alarm_id=alarm_id,
+                    top_k=top_k
+                )
+            except Exception as e:
+                logger.error(f"Error getting recommendations from advisor: {e}")
         
         # Fallback recommendations
         return {
@@ -61,12 +65,16 @@ class AdvisoryHandlerMixin:
         """Check for active proactive goals"""
         category = args.get("category")
         
-        if self.goal_generator:
-            goals = self.goal_generator.get_active_goals(category=category)
-            return {
-                "goals": goals,
-                "count": len(goals)
-            }
+        goal_generator = getattr(self, "goal_generator", None)
+        if goal_generator and hasattr(goal_generator, "get_active_goals"):
+            try:
+                goals = goal_generator.get_active_goals(category=category)
+                return {
+                    "goals": goals,
+                    "count": len(goals)
+                }
+            except Exception as e:
+                logger.error(f"Error getting active goals: {e}")
         
         return {
             "goals": [],
@@ -78,11 +86,15 @@ class AdvisoryHandlerMixin:
         briefing_type = args.get("briefing_type", "daily_morning")
         focus_area = args.get("focus_area")
         
-        if self.briefing_scheduler:
-            return await self.briefing_scheduler.generate_briefing(
-                briefing_type=briefing_type,
-                focus_area=focus_area
-            )
+        briefing_scheduler = getattr(self, "briefing_scheduler", None)
+        if briefing_scheduler and hasattr(briefing_scheduler, "generate_briefing"):
+            try:
+                return await briefing_scheduler.generate_briefing(
+                    briefing_type=briefing_type,
+                    focus_area=focus_area
+                )
+            except Exception as e:
+                logger.error(f"Error generating briefing: {e}")
         
         # Fallback briefing
         return {
@@ -113,16 +125,24 @@ class AdvisoryHandlerMixin:
         content = args.get("content")
         rating = args.get("rating")
         
-        if self.feedback_loop:
-            return await self.feedback_loop.submit_feedback(
-                feedback_type=feedback_type,
-                target=target,
-                content=content,
-                rating=rating
-            )
+        feedback_loop = getattr(self, "feedback_loop", None)
+        if feedback_loop and hasattr(feedback_loop, "submit_feedback"):
+            try:
+                return await feedback_loop.submit_feedback(
+                    feedback_type=feedback_type,
+                    target=target,
+                    content=content,
+                    rating=rating
+                )
+            except Exception as e:
+                logger.error(f"Error submitting feedback to loop: {e}")
         
-        if self.tracker:
-            self.tracker.record_feedback(target, feedback_type, content)
+        tracker = getattr(self, "tracker", None)
+        if tracker and hasattr(tracker, "record_feedback"):
+            try:
+                tracker.record_feedback(target, feedback_type, content)
+            except Exception as e:
+                logger.error(f"Error recording feedback in tracker: {e}")
         
         return {
             "status": "recorded",
@@ -137,11 +157,19 @@ class AdvisoryHandlerMixin:
         trust_data = {}
         drift_data = {}
         
-        if self.trust_calibrator:
-            trust_data = await self.trust_calibrator.calculate_trust_metrics(window_days)
+        trust_calibrator = getattr(self, "trust_calibrator", None)
+        if trust_calibrator and hasattr(trust_calibrator, "calculate_trust_metrics"):
+            try:
+                trust_data = await trust_calibrator.calculate_trust_metrics(window_days)
+            except Exception as e:
+                logger.error(f"Error calculating trust metrics: {e}")
             
-        if self.online_learner:
-            drift_data = self.online_learner.get_performance_summary()
+        online_learner = getattr(self, "online_learner", None)
+        if online_learner and hasattr(online_learner, "get_performance_summary"):
+            try:
+                drift_data = online_learner.get_performance_summary()
+            except Exception as e:
+                logger.error(f"Error getting performance summary: {e}")
             
         return {
             "trust_metrics": trust_data,

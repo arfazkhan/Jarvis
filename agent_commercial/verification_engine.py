@@ -502,6 +502,9 @@ async def verify_maintenance_work(
     )
     
     return {
+        "status": "success",
+        "work_order_id": work_order_id,
+        "equipment_id": equipment_id,
         "verification": result.to_dict(),
         "formatted_message": result.format_message(),
         "is_ghost_maintenance": result.status == VerificationStatus.FAILED,

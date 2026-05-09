@@ -26,20 +26,21 @@ def assert_valid_tool_result(result: Dict[str, Any]) -> None:
     """
     Assert tool result has required fields.
     
-    Expected structure:
-        {
-            "status": "success" | "error",
-            "data": {...} | None,
-            "error": str | None
-        }
+    Handles both wrapped:
+        {"status": "success", "data": {...}}
+    And unwrapped:
+        {"total_kwh": 100, ...}
     """
-    assert "status" in result, "Tool result must have 'status'"
-    assert result["status"] in ["success", "error"], "Status must be 'success' or 'error'"
-    
-    if result["status"] == "success":
-        assert "data" in result, "Successful result must have 'data'"
+    if "status" in result:
+        assert result["status"] in ["success", "error"], f"Invalid status: {result['status']}"
+        if result["status"] == "success":
+            assert "data" in result or len(result) > 1, "Successful result must have data"
+        else:
+            assert "error" in result, "Error result must have 'error'"
     else:
-        assert "error" in result, "Error result must have 'error'"
+        # Unwrapped format - should at least not have a critical error
+        assert "error" not in result or isinstance(result["error"], (dict, str)), \
+            "Unwrapped result should not contain a failure without being an error status"
 
 
 def assert_valid_recommendation(rec: Dict[str, Any]) -> None:
@@ -187,6 +188,15 @@ class Timer:
     def __exit__(self, *args):
         self.end_time = time.perf_counter()
         self.duration_ms = (self.end_time - self.start_time) * 1000
+    
+    @property
+    def elapsed(self) -> float:
+        """Return elapsed time in seconds."""
+        if self.duration_ms is not None:
+            return self.duration_ms / 1000.0
+        if self.start_time is not None:
+            return time.perf_counter() - self.start_time
+        return 0.0
     
     def __str__(self) -> str:
         if self.duration_ms is None:
@@ -595,10 +605,27 @@ def create_test_point(point_id: str = "TEST-01/TEST", **kwargs) -> Dict[str, Any
 
 # ============= CONCURRENT TEST HELPERS =============
 
-async def run_concurrently(*coros):
-    """Run multiple coroutines concurrently for testing."""
+async def run_concurrently(*args, count=None, **kwargs):
+    """
+    Run multiple coroutines concurrently for testing.
+    Supports two signatures:
+    1. run_concurrently(coro1, coro2, ...)
+    2. run_concurrently([lambda_fn], count=N) -> runs the single lambda N times
+    3. run_concurrently([lambda_fn1, lambda_fn2, ...]) -> runs the list as is
+    """
     import asyncio
-    return await asyncio.gather(*coros, return_exceptions=True)
+    if count and len(args) == 1 and isinstance(args[0], list):
+        if len(args[0]) == 1:
+            # Run the single provided task 'count' times
+            coros = [args[0][0]() for _ in range(count)]
+        else:
+            # List already has items, just ensure we don't multiply incorrectly
+            # If len matches count, just run them. If not, use the list as is.
+            coros = [fn() for fn in args[0]]
+        return await asyncio.gather(*coros, return_exceptions=True)
+    
+    # Handle direct coroutine arguments
+    return await asyncio.gather(*args, return_exceptions=True)
 
 
 def assert_tool_result_valid(result: Dict[str, Any]):

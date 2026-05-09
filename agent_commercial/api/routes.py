@@ -150,6 +150,7 @@ def create_api(
     briefing_engine=None,
     safety_controller=None,
     sim_service=None,
+    water_adapter=None,
 ) -> FastAPI:
     """
     Create the FastAPI application with all routes.
@@ -183,6 +184,7 @@ def create_api(
     app.state.llm_agent = llm_agent
     app.state.advisor = advisor
     app.state.trust_calibrator = trust_calibrator
+    app.state.water_adapter = water_adapter
     
     # Advanced Sovereign Engines
     app.state.learning_engine = learning_engine
@@ -885,6 +887,9 @@ def create_api(
                 energy_data["consumption_vs_baseline"] = max(0, -baseline_deviation)  # Reduction is positive
                 energy_data["submetering_coverage"] = 80  # Assume good coverage if we have analyzer
         
+        if app.state.water_adapter:
+            water_data = app.state.water_adapter.get_gsas_water_data()
+        
         # Update from BMS data
         reporter.update_from_bms(energy_data, water_data, iaq_data)
         
@@ -913,6 +918,57 @@ def create_api(
             logger.error(f"GORD report generation failed: {e}")
             raise HTTPException(500, f"Report generation failed: {str(e)}")
     
+    @app.get("/api/v1/water/consumption")
+    async def get_water_consumption_summary():
+        """Get summary of water consumption and savings"""
+        if not app.state.water_adapter:
+            return {
+                "daily_m3": 0, "monthly_m3": 0, "reduction_percent": 0,
+                "status": "unknown", "note": "Water adapter offline"
+            }
+        return app.state.water_adapter.get_summary()
+    
+    @app.post("/api/v1/gsas/export")
+    async def export_gsasgate_data(
+        format: str = Query("json", description="json or csv")
+    ):
+        """
+        Export GSAS assessment data for GSASgate (GORD Portal) submission.
+        """
+        from agent_commercial.gsas_reporter import GSASReporter
+        from agent_commercial.gsasgate_exporter import GSASgateExporter
+        
+        # Initialize reporter with current state
+        reporter = GSASReporter("BUILDING-01", "Commercial Building")
+        reporter.initialize_criteria()
+        
+        # Get data from adapters
+        energy_data = {}
+        if app.state.energy_analyzer:
+            summary = app.state.energy_analyzer.get_summary()
+            if summary:
+                energy_data["consumption_vs_baseline"] = max(0, -summary.get("baseline_deviation_percent", 0))
+                energy_data["submetering_coverage"] = 80
+                
+        water_data = {}
+        if app.state.water_adapter:
+            water_data = app.state.water_adapter.get_gsas_water_data()
+            
+        reporter.update_from_bms(energy_data, water_data, {})
+        
+        # Export
+        exporter = GSASgateExporter(reporter)
+        filename = f"gsasgate_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{format}"
+        filepath = exporter.save_to_file(filename, format=format)
+        
+        return {
+            "status": "success",
+            "format": format,
+            "filename": filename,
+            "download_url": f"/api/v1/reports/download/{filename}",
+            "summary": reporter.get_status()
+        }
+
     @app.get("/api/v1/reports/download/{filename}")
     async def download_report(filename: str):
         """Download a generated report"""

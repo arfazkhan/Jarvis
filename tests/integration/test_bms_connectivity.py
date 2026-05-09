@@ -46,8 +46,18 @@ class TestBMSConnectivity:
     ):
         """Reading BACnet points should update state engine."""
         # Setup
+        from agent_commercial.bms_data_model import Equipment, EquipmentType, EquipmentStatus
         await bacnet_adapter.connect()
-        state_engine.register_equipment(EquipmentFactory.chiller())
+        
+        chiller_dict = EquipmentFactory.chiller()
+        chiller = Equipment(
+            equipment_id=chiller_dict["equipment_id"],
+            name=chiller_dict["name"],
+            equipment_type=EquipmentType.CHILLER,
+            location=chiller_dict["location"],
+            status=EquipmentStatus.RUNNING
+        )
+        await state_engine.register_equipment(chiller)
         
         # Configure point
         from agent_unified.engines.bacnet import BACnetPoint
@@ -68,17 +78,12 @@ class TestBMSConnectivity:
         assert point.value is not None
         
         # Update state
-        state_engine.update_point(
-            point.point_id,
-            point.value,
-            point.unit,
-            point.equipment_id,
-        )
+        await state_engine.update_point(point)
         
         # Verify state updated
-        current = state_engine.get_point("CH-01/CHWST")
+        current = await state_engine.get_point("CH-01/CHWST")
         assert current is not None
-        assert current["value"] == point.value
+        assert current.value == point.value
         
         await bacnet_adapter.disconnect()
     

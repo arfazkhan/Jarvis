@@ -41,6 +41,7 @@ from agent_commercial.bacnet_adapter import BACnetAdapter, BACnetSimulatorAdapte
 from agent_commercial.api.routes import create_api
 from agent_commercial.tools_schema import BMSToolHandler, get_bms_tools, get_ops_copilot_prompt
 from agent_commercial.briefing_engine import BriefingGenerator
+from agent_commercial.water_meter_adapter import WaterMeterAdapter
 
 # Configure logging
 logging.basicConfig(
@@ -95,6 +96,10 @@ class OpsCopilot:
         self.alarm_engine = AlarmEngine()
         self.energy_analyzer = EnergyAnalyzer()
         self.predictive_engine = PredictiveMaintenanceEngine()
+        self.water_adapter = WaterMeterAdapter(
+            baseline_m3_monthly=2000.0,
+            building_id="BUILDING-01"
+        )
         
         # Wire engines together
         self.predictive_engine.set_bms_state(self.state_engine)
@@ -336,6 +341,13 @@ class OpsCopilot:
                 location="Central Plant, Basement",
                 status=EquipmentStatus.RUNNING,
             ),
+            Equipment(
+                equipment_id="WTR-01",
+                name="Main Water Meter",
+                equipment_type=EquipmentType.METER_WATER,
+                location="Central Plant, Basement",
+                status=EquipmentStatus.RUNNING,
+            ),
         ]
         
         for eq in equipment:
@@ -392,6 +404,14 @@ class OpsCopilot:
             BACnetPoint(device_id=5001, object_type="analogInput", object_instance=1,
                        point_id="METER-01/KW", point_name="Building Power",
                        equipment_id="METER-01", unit="kW"),
+            
+            # Water meter
+            BACnetPoint(device_id=6001, object_type="analogInput", object_instance=1,
+                       point_id="WTR-01/TOTAL_M3", point_name="Total Water Consumption",
+                       equipment_id="WTR-01", unit="m³"),
+            BACnetPoint(device_id=6001, object_type="analogInput", object_instance=2,
+                       point_id="WTR-01/FLOW_LPM", point_name="Water Flow Rate",
+                       equipment_id="WTR-01", unit="L/min"),
         ]
         
         for point in points:
@@ -512,6 +532,13 @@ class OpsCopilot:
                             unit="kW",
                             timestamp=point.timestamp,
                         )
+                    
+                    if "TOTAL_M3" in point.point_id:
+                        self.water_adapter.ingest_reading(
+                            meter_id="MAIN",
+                            value_m3=point.value,
+                            timestamp=point.timestamp
+                        )
                 
                 # Simulate occasional alarms
                 if random.random() < 0.02:  # 2% chance each cycle
@@ -579,6 +606,7 @@ class OpsCopilot:
             llm_agent=self.llm_agent,  # CONNECTED: The Mind is now attached to the API
             advisor=self.advisor,  # Feedback loop
             trust_calibrator=self.trust_calibrator,  # Trust metrics
+            water_adapter=self.water_adapter, # New water pipeline
             briefing_engine=BriefingGenerator(
                 building_id="default",
                 bms_state=self.state_engine,

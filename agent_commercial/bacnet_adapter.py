@@ -382,6 +382,10 @@ class BACnetSimulatorAdapter:
             "AHU-02/SAT": 14.5,
             "AHU-02/RAT": 23.5,
             "METER/KW": 620.0,
+            "WTR-01/TOTAL_M3": 1250.0,
+            "WTR-01/FLOW_LPM": 12.5,
+            "WTR-02/TOTAL_M3": 450.0,
+            "WTR-02/FLOW_LPM": 3.2,
         }
 
     async def discover_devices(self, timeout_seconds: int = 1) -> List[BACnetDevice]:
@@ -423,6 +427,13 @@ class BACnetSimulatorAdapter:
         base = self._sim_values.get(point_config.point_id, 50.0)
         if "KW" in point_config.point_id:
             val = base * (1 + random.uniform(-0.05, 0.05))
+        elif "TOTAL_M3" in point_config.point_id:
+            # Meters are cumulative, they should only go up
+            increment = random.uniform(0.01, 0.05)
+            self._sim_values[point_config.point_id] = base + increment
+            val = base + increment
+        elif "FLOW_LPM" in point_config.point_id:
+            val = base * (1 + random.uniform(-0.1, 0.1))
         elif "SAT" in point_config.point_id or "CHWST" in point_config.point_id:
             val = base + random.uniform(-0.5, 0.5)
         else:

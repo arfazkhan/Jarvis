@@ -348,6 +348,39 @@ class AlarmFactory:
         }
     
     @staticmethod
+    def flood(count: int = 100) -> List[Dict[str, Any]]:
+        """Generate a large number of alarms."""
+        return [
+            AlarmFactory.warning_ahu(
+                alarm_id=f"FLOOD-{i:04d}",
+                message=f"Flood alarm {i}"
+            )
+            for i in range(count)
+        ]
+    
+    @staticmethod
+    def cascade(count: int = 5, root_equipment: str = "CH-01") -> List[Dict[str, Any]]:
+        """Generate a cascade of related alarms."""
+        cluster_id = f"CL-{uuid.uuid4().hex[:6]}"
+        root = AlarmFactory.critical_chiller(
+            alarm_id=f"ROOT-{uuid.uuid4().hex[:6]}",
+            equipment_id=root_equipment
+        )
+        root["cluster_id"] = cluster_id
+        
+        related = [
+            AlarmFactory.warning_ahu(
+                alarm_id=f"REL-{i:03d}",
+                equipment_id=f"VAV-{i:02d}"
+            )
+            for i in range(count - 1)
+        ]
+        for r in related:
+            r["cluster_id"] = cluster_id
+            
+        return [root] + related
+    
+    @staticmethod
     def acknowledged(
         alarm_id: str = None,
         equipment_id: str = "AHU-02",
@@ -419,6 +452,12 @@ class EnergyReadingFactory:
             "lighting_kw": lighting_kw,
             "other_kw": other_kw,
         }
+    
+    @staticmethod
+    def reading(hour_offset: int = 0, kw: float = 450.0) -> Dict[str, Any]:
+        """Create a reading with an hour offset from now."""
+        timestamp = datetime.now() - timedelta(hours=hour_offset)
+        return EnergyReadingFactory.at_time(timestamp, kw)
     
     @staticmethod
     def at_time(
@@ -538,6 +577,8 @@ class RecommendationFactory:
         action: str = "reduce_cooling_setpoint",
         confidence: float = 0.85,
         estimated_savings_kwh: float = 150.0,
+        gsas_aligned: bool = True,
+        **kwargs
     ) -> Dict[str, Any]:
         """Create an energy optimization recommendation."""
         return {
@@ -545,11 +586,12 @@ class RecommendationFactory:
             "equipment_id": equipment_id,
             "action": action,
             "confidence": confidence,
-            "gsas_aligned": True,
+            "gsas_aligned": gsas_aligned,
             "gsas_category": "E",
             "estimated_savings_kwh": estimated_savings_kwh,
             "priority": "medium",
             "created_at": datetime.now().isoformat(),
+            **kwargs
         }
     
     @staticmethod
@@ -559,6 +601,8 @@ class RecommendationFactory:
         action: str = "schedule_compressor_maintenance",
         confidence: float = 0.92,
         days_until_failure: int = 14,
+        gsas_aligned: bool = True,
+        **kwargs
     ) -> Dict[str, Any]:
         """Create a maintenance recommendation."""
         return {
@@ -566,11 +610,12 @@ class RecommendationFactory:
             "equipment_id": equipment_id,
             "action": action,
             "confidence": confidence,
-            "gsas_aligned": True,
+            "gsas_aligned": gsas_aligned,
             "gsas_category": "MO",
             "days_until_failure": days_until_failure,
             "priority": "high",
             "created_at": datetime.now().isoformat(),
+            **kwargs
         }
     
     @staticmethod
@@ -593,3 +638,17 @@ class RecommendationFactory:
             "priority": "high",
             "created_at": datetime.now().isoformat(),
         }
+    @staticmethod
+    def reduce_setpoint(**kwargs) -> Dict[str, Any]:
+        """Alias for reduce_cooling_setpoint."""
+        return RecommendationFactory.reduce_cooling_setpoint(**kwargs)
+
+    @staticmethod
+    def reduce_cooling_setpoint(**kwargs) -> Dict[str, Any]:
+        """Create a cooling setpoint reduction recommendation."""
+        return RecommendationFactory.energy_optimization(action="reduce_cooling_setpoint", **kwargs)
+    
+    @staticmethod
+    def schedule_maintenance(**kwargs) -> Dict[str, Any]:
+        """Create a general maintenance recommendation."""
+        return RecommendationFactory.maintenance_alert(action="schedule_maintenance", **kwargs)

@@ -6,9 +6,21 @@ Handlers for GSAS compliance and reporting tools.
 """
 
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
+from datetime import datetime
 
 logger = logging.getLogger("arvis.bms.tools.gsas")
+
+# Safe imports for modular standalone operation
+try:
+    from agent_commercial.database import get_database
+except ImportError:
+    get_database = None
+
+try:
+    from agent_commercial.report_generator import generate_gord_pdf
+except ImportError:
+    generate_gord_pdf = None
 
 
 class GSASHandlerMixin:
@@ -26,21 +38,36 @@ class GSASHandlerMixin:
     
     async def _handle_get_gsas_status(self, args: Dict) -> Dict:
         """Get real GSAS status from database and BMS state"""
-        from agent_commercial.database import get_database
-        
-        db = get_database()
-        building_id = args.get("building_id", "main")
-        
-        # Try to get cached GSAS score from database
-        cached = await db.get_latest_gsas_score(building_id)
-        
-        if cached:
-            return {
-                "overall_score": cached["overall_score"],
-                "certification_level": cached["certification_level"],
-                "categories": cached["category_scores"],
-                "timestamp": cached["timestamp"],
-            }
+        # If we have a reporter, use it as primary source
+        if getattr(self, "gsas_reporter", None) and hasattr(self.gsas_reporter, "get_status"):
+            status = self.gsas_reporter.get_status()
+            return status if isinstance(status, dict) else status.to_dict()
+
+        if get_database is None:
+            # Fallback to BMS-only calculation if DB is missing
+            return await self._calculate_gsas_from_bms(args)
+            
+        try:
+            db = get_database()
+            building_id = args.get("building_id", "main")
+            
+            # Try to get cached GSAS score from database
+            cached = await db.get_latest_gsas_score(building_id)
+            
+            if cached:
+                return {
+                    "overall_score": cached.get("overall_score", 0),
+                    "certification_level": cached.get("certification_level", "Unknown"),
+                    "categories": cached.get("category_scores", {}),
+                    "timestamp": cached.get("timestamp", datetime.now().isoformat()),
+                }
+        except Exception as e:
+            logger.warning(f"Database error in GSAS status: {e}")
+            
+        return await self._calculate_gsas_from_bms(args)
+
+    async def _calculate_gsas_from_bms(self, args: Dict) -> Dict:
+        """Helper to calculate scores from live BMS data when DB/Reporter unavailable"""
         
         # Calculate from BMS state if no cached score
         # This uses actual equipment data to estimate GSAS categories
@@ -135,8 +162,6 @@ class GSASHandlerMixin:
     
     async def _handle_generate_gord_report(self, args: Dict) -> Dict:
         """Generate GORD-compliant PDF report for GSAS certification"""
-        from agent_commercial.database import get_database
-        
         building_id = args.get("building_id", "main")
         building_name = args.get("building_name", "ARVIS Building")
         
@@ -144,11 +169,12 @@ class GSASHandlerMixin:
         gsas_status = await self._handle_get_gsas_status({"building_id": building_id})
         
         # Generate report data
+        now = datetime.now()
         report = {
-            "report_id": f"GORD-{building_id}-{__import__('datetime').datetime.now().strftime('%Y%m%d')}",
+            "report_id": f"GORD-{building_id}-{now.strftime('%Y%m%d-%H%M%S-%f')}",
             "building_name": building_name,
             "building_id": building_id,
-            "generated_at": __import__('datetime').datetime.now().isoformat(),
+            "generated_at": now.isoformat(),
             "gsas_status": gsas_status,
             "sections": [
                 "Executive Summary",
@@ -159,16 +185,19 @@ class GSASHandlerMixin:
                 "BMS Evidence",
                 "Recommendations",
             ],
-            "status": "generated",
+            "report_status": "generated",
             "format": "PDF",
         }
         
         # If we have a report generator, use it
-        try:
-            from agent_commercial.report_generator import generate_gord_pdf
-            pdf_path = await generate_gord_pdf(report)
-            report["pdf_path"] = pdf_path
-        except ImportError:
+        if generate_gord_pdf:
+            try:
+                pdf_path = await generate_gord_pdf(report)
+                report["pdf_path"] = pdf_path
+            except Exception as e:
+                logger.error(f"Error generating GORD PDF: {e}")
+                report["note"] = f"PDF generation failed: {str(e)}"
+        else:
             report["note"] = "PDF generation requires report_generator module"
         
         return report

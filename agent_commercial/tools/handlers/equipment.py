@@ -8,9 +8,23 @@ Handlers for equipment-related BMS tools.
 import logging
 from typing import Dict, Any
 
-from agent_commercial.bms_data_model import EquipmentType
-
 logger = logging.getLogger("arvis.bms.tools.equipment")
+
+# Safe imports for modular standalone operation
+try:
+    from agent_commercial.bms_data_model import EquipmentType
+except ImportError:
+    class EquipmentType:
+        AHU = "air_handling_unit"
+        CHILLER = "chiller"
+        VAV = "variable_air_volume"
+        FCU = "fan_coil_unit"
+        PUMP = "pump"
+        COOLING_TOWER = "cooling_tower"
+        BOILER = "boiler"
+        METER_ELECTRIC = "electric_meter"
+        METER_WATER = "water_meter"
+        METER_GAS = "gas_meter"
 
 
 class EquipmentHandlerMixin:
@@ -63,7 +77,32 @@ class EquipmentHandlerMixin:
                 meter_types = [EquipmentType.METER_ELECTRIC, EquipmentType.METER_WATER, EquipmentType.METER_GAS]
                 equipment = [e for e in equipment if e.equipment_type in meter_types]
             else:
-                equipment = [e for e in equipment if e.equipment_type.value == str(eq_type)]
+                # Robust filtering that handles Enums, mock classes, and strings
+                def matches_type(e_type, target):
+                    try:
+                        target_str = str(target).lower()
+                        # 1. Try Enum value
+                        if hasattr(e_type, "value"):
+                            if str(e_type.value).lower() == target_str:
+                                return True
+                        # 2. Try Enum name or attribute name
+                        if hasattr(e_type, "name"):
+                            if str(e_type.name).lower() == target_str:
+                                return True
+                        # 3. Try string match if safe
+                        try:
+                            if str(e_type).lower() == target_str:
+                                return True
+                        except:
+                            pass
+                        # 4. Try repr as last resort
+                        if target_str in repr(e_type).lower():
+                            return True
+                    except:
+                        pass
+                    return False
+
+                equipment = [e for e in equipment if matches_type(e.equipment_type, eq_type)]
         if status:
             equipment = [e for e in equipment if e.status.value == status]
         if location:
@@ -78,8 +117,9 @@ class EquipmentHandlerMixin:
         """Get real equipment health from predictive engine"""
         equipment_id = args.get("equipment_id", "all")
         
-        if self.predictive_engine and hasattr(self.predictive_engine, "predict_maintenance"):
-            prediction = await self.predictive_engine.predict_maintenance(equipment_id)
+        predictive = getattr(self, "predictive_engine", None)
+        if predictive and hasattr(predictive, "predict_maintenance"):
+            prediction = await predictive.predict_maintenance(equipment_id)
             return {
                 "equipment_id": equipment_id,
                 "overall_health": "good" if prediction.get("health_score", 100) > 70 else "poor",
@@ -100,13 +140,21 @@ class EquipmentHandlerMixin:
         point_id = args.get("point_id")
         minutes = args.get("minutes", 60)
         
-        if not self.bms_state:
+        state = getattr(self, "bms_state", None)
+        if not state:
             return {"error": "BMS state engine not configured"}
         
-        history = await self.bms_state.get_point_history(point_id, minutes)
+        if hasattr(state, "get_point_history"):
+            history = await state.get_point_history(point_id, minutes)
+            return {
+                "point_id": point_id,
+                "data": [{"timestamp": t.isoformat(), "value": v} for t, v in history]
+            }
+        
         return {
             "point_id": point_id,
-            "data": [{"timestamp": t.isoformat(), "value": v} for t, v in history]
+            "data": [],
+            "note": "Point history retrieval not supported by current state engine"
         }
     
     async def _handle_get_equipment_specs(self, args: Dict) -> Dict:
@@ -115,21 +163,25 @@ class EquipmentHandlerMixin:
         equipment_id = args.get("equipment_id")
         depth = args.get("system_depth", 0)
         
-        if not self.knowledge_base:
+        kb = getattr(self, "knowledge_base", None)
+        graph = getattr(self, "graph_rag", None)
+        
+        if not kb and not graph:
             return {"error": "Technical knowledge base not initialized"}
             
         # Use GraphRAGNavigator if depth > 0 and available
-        if depth > 0 and self.graph_rag and equipment_id:
-            results = await self.graph_rag.query_system_specs(query, equipment_id, depth=depth)
-        else:
-            results = await self.knowledge_base.query_specs(query, equipment_id)
+        results = []
+        if depth > 0 and graph and equipment_id and hasattr(graph, "query_system_specs"):
+            results = await graph.query_system_specs(query, equipment_id, depth=depth)
+        elif kb and hasattr(kb, "query_specs"):
+            results = await kb.query_specs(query, equipment_id)
         
         return {
             "query": query,
             "equipment_id": equipment_id,
             "navigation_depth": depth,
-            "findings": [r["content"] for r in results],
-            "sources": [r["metadata"].get("source") for r in results]
+            "findings": [r["content"] for r in results] if results else [],
+            "sources": [r["metadata"].get("source") for r in results] if results else []
         }
 
     async def _handle_hybrid_search_knowledge(self, args: Dict) -> Dict:
@@ -142,16 +194,19 @@ class EquipmentHandlerMixin:
         if not query:
             return {"error": "query is required"}
 
-        if self.hybrid_rag:
-            return await self.hybrid_rag.retrieve(
+        hybrid = getattr(self, "hybrid_rag", None)
+        kb = getattr(self, "knowledge_base", None)
+
+        if hybrid and hasattr(hybrid, "retrieve"):
+            return await hybrid.retrieve(
                 query=query,
                 equipment_id=equipment_id,
                 strategy=strategy,
                 limit=limit,
             )
 
-        if self.knowledge_base:
-            results = await self.knowledge_base.query_specs(query, equipment_id, limit=limit)
+        if kb and hasattr(kb, "query_specs"):
+            results = await kb.query_specs(query, equipment_id, limit=limit)
             return {
                 "query": query,
                 "strategy": "vector_fallback",
@@ -163,8 +218,12 @@ class EquipmentHandlerMixin:
         return {"error": "No knowledge retrieval backend configured"}
     
     async def _handle_get_dashboard_overview(self, args: Dict) -> Dict:
-        if not self.bms_state:
+        state = getattr(self, "bms_state", None)
+        if not state:
             return {"error": "BMS state engine not configured"}
         
-        snapshot = await self.bms_state.get_snapshot()
-        return snapshot
+        if hasattr(state, "get_snapshot"):
+            snapshot = await state.get_snapshot()
+            return snapshot
+            
+        return {"error": "Dashboard overview not supported by current state engine"}

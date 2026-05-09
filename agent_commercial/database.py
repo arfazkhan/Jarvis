@@ -59,6 +59,18 @@ class BMSDatabase:
         
         logger.info(f"BMSDatabase initialized: {self.db_path}")
 
+    async def close(self) -> None:
+        """Close the database connection and cleanup resources"""
+        async with self._lock:
+            if self._async_conn:
+                logger.info(f"Closing async database connection to: {self.db_path}")
+                try:
+                    await self._async_conn.close()
+                except Exception as e:
+                    logger.error(f"Error closing database: {e}")
+                finally:
+                    self._async_conn = None
+
     async def _get_async_connection(self) -> aiosqlite.Connection:
         """Get or create asynchronous database connection with WAL mode enabled"""
         async with self._lock:

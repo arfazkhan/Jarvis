@@ -101,6 +101,15 @@ class BMSStateEngine:
         
         logger.info("BMSStateEngine initialized")
 
+    def get_summary(self) -> Dict[str, Any]:
+        """Return a summary of the current BMS state."""
+        return {
+            "equipment_count": len(self._equipment),
+            "points_count": len(self._points),
+            "alarm_count": len(self._alarms),
+            "stats": self._stats
+        }
+
     def set_database(self, db):
         """Set database for persistence."""
         self.db = db
@@ -473,6 +482,14 @@ class BMSStateEngine:
             
             return cleaned
     
+    async def get_summary(self) -> Dict[str, Any]:
+        """Get summary of current building state."""
+        return await self.get_stats()
+        
+    def get_points_by_equipment(self, equipment_id: str) -> List[BMSDataPoint]:
+        """Get all data points for a specific equipment."""
+        return [p for p in self._points.values() if p.equipment_id == equipment_id]
+        
     async def get_stats(self) -> Dict[str, Any]:
         """Get state engine statistics"""
         async with self._lock:

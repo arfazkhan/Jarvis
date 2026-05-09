@@ -212,6 +212,20 @@ class EnergyAnalyzer:
         for reading in readings:
             self.add_reading(reading)
     
+    def add_waste_pattern(self, pattern_data: Dict[str, Any]) -> str:
+        """
+        Manually add a detected waste pattern.
+        Used for testing and manual auditor overrides.
+        """
+        pattern = WastePattern(
+            pattern_type=pattern_data.get("pattern_type", "unknown"),
+            description=pattern_data.get("description", ""),
+            zone_id=pattern_data.get("zone_id", ""),
+            estimated_waste_qar_annual=pattern_data.get("estimated_savings_qar", 0.0),
+        )
+        self.waste_patterns[pattern.pattern_id] = pattern
+        return pattern.pattern_id
+    
     # ═══════════════════════════════════════════════════════════════════════
     # BASELINE MODELING
     # ═══════════════════════════════════════════════════════════════════════
@@ -507,15 +521,8 @@ class EnergyAnalyzer:
     def identify_waste_patterns(self) -> List[WastePattern]:
         """
         Analyze history to identify recurring waste patterns.
-        
-        Patterns detected:
-        - after_hours_hvac: HVAC running during unoccupied periods
-        - weekend_consumption: High weekend energy
-        - overcooling: Cooling below setpoint
-        - simultaneous_heat_cool: Heating and cooling at same time
-        - schedule_drift: Energy use starting before/after expected times
         """
-        patterns = []
+        patterns = list(self.waste_patterns.values())
         
         for meter_id, readings in self.history.items():
             if len(readings) < 48:  # Need at least 2 days

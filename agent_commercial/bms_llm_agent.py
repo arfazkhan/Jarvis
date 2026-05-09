@@ -97,6 +97,7 @@ class BMSLLMAgent:
         energy_analyzer=None,
         predictive_engine=None,
         gsas_reporter=None,
+        llm=None,
     ):
         """
         Initialize the BMS LLM Agent.
@@ -166,7 +167,7 @@ class BMSLLMAgent:
         self.transition_model = StateTransitionModel()
         self.world_model = WorldModel(self.transition_model)
         self.explainer = ExplanationEngine(self.world_model)
-        self.online_learner = OnlineLearner(self.world_model)
+        self.online_learner = OnlineLearner()
         self.knowledge_base = TechnicalKnowledgeBase()
         self.tree_knowledge_base = TreeKnowledgeBase()
         self.hybrid_rag = HybridRAGRouter(
@@ -235,7 +236,7 @@ class BMSLLMAgent:
         )
         
         # Initialize UnifiedLLM
-        self.llm = UnifiedLLM()
+        self.llm = llm or UnifiedLLM()
         self.provider = "unified"
         
         logger.info(f"BMSLLMAgent initialized with UnifiedLLM")
@@ -257,7 +258,7 @@ class BMSLLMAgent:
         try:
             from arvis_core.swarm.queen import QueenCoordinator
             from agent_commercial.swarm_nodes import get_all_swarm_nodes
-            self.queen = QueenCoordinator()
+            self.queen = QueenCoordinator(llm=self.llm)
             self.queen.tool_handler = self.tool_handler
             for node in get_all_swarm_nodes():
                 self.queen.register_node(node)

@@ -32,12 +32,16 @@ class MLHandlerMixin:
         building_id = args.get("building_id")
         include_confidence = args.get("include_confidence", True)
         
-        if self.predictive_engine and hasattr(self.predictive_engine, "forecast_energy"):
-            return await self.predictive_engine.forecast_energy(
-                hours=forecast_hours,
-                building_id=building_id,
-                include_confidence=include_confidence
-            )
+        predictive_engine = getattr(self, "predictive_engine", None)
+        if predictive_engine and hasattr(predictive_engine, "forecast_energy"):
+            try:
+                return await predictive_engine.forecast_energy(
+                    hours=forecast_hours,
+                    building_id=building_id,
+                    include_confidence=include_confidence
+                )
+            except Exception as e:
+                logger.error(f"Error forecasting energy demand: {e}")
         
         # Fallback: simple forecast
         import random
@@ -76,11 +80,15 @@ class MLHandlerMixin:
         if not equipment_id:
             return {"error": "equipment_id is required"}
         
-        if self.predictive_engine and hasattr(self.predictive_engine, "detect_faults"):
-            return await self.predictive_engine.detect_faults(
-                equipment_id=equipment_id,
-                fault_type=fault_type
-            )
+        predictive_engine = getattr(self, "predictive_engine", None)
+        if predictive_engine and hasattr(predictive_engine, "detect_faults"):
+            try:
+                return await predictive_engine.detect_faults(
+                    equipment_id=equipment_id,
+                    fault_type=fault_type
+                )
+            except Exception as e:
+                logger.error(f"Error detecting faults for {equipment_id}: {e}")
         
         # Fallback: basic fault detection
         return {
@@ -99,11 +107,15 @@ class MLHandlerMixin:
         if not alarm_ids:
             return {"error": "alarm_ids is required"}
         
-        if self.world_model and hasattr(self.world_model, "analyze_root_cause"):
-            return await self.world_model.analyze_root_cause(
-                alarm_ids=alarm_ids,
-                depth=system_depth
-            )
+        world_model = getattr(self, "world_model", None)
+        if world_model and hasattr(world_model, "analyze_root_cause"):
+            try:
+                return await world_model.analyze_root_cause(
+                    alarm_ids=alarm_ids,
+                    depth=system_depth
+                )
+            except Exception as e:
+                logger.error(f"Error in root cause analysis: {e}")
         
         # Fallback: basic analysis
         return {
@@ -128,16 +140,23 @@ class MLHandlerMixin:
         zone_id = args.get("zone_id")
         monte_carlo_samples = args.get("monte_carlo_samples", 1000)
         
-        if self.world_model and hasattr(self.world_model, "simulate_with_uncertainty"):
-            return await self.world_model.simulate_with_uncertainty(
-                change_type=change_type,
-                current_value=current_value,
-                proposed_value=proposed_value,
-                equipment_id=equipment_id,
-                zone_id=zone_id,
-                samples=monte_carlo_samples
-            )
+        world_model = getattr(self, "world_model", None)
+        if world_model and hasattr(world_model, "simulate_with_uncertainty"):
+            try:
+                return await world_model.simulate_with_uncertainty(
+                    change_type=change_type,
+                    current_value=current_value,
+                    proposed_value=proposed_value,
+                    equipment_id=equipment_id,
+                    zone_id=zone_id,
+                    samples=monte_carlo_samples
+                )
+            except Exception as e:
+                logger.error(f"Error in uncertainty simulation: {e}")
         
+        if current_value is None or proposed_value is None:
+            return {"error": "Both 'current_value' and 'proposed_value' are required for simulation"}
+            
         # Fallback: simple estimation
         delta = proposed_value - current_value
         energy_impact = -delta * 2.5  # Rough estimate: 2.5% per degree
@@ -166,12 +185,16 @@ class MLHandlerMixin:
         if not query:
             return {"error": "query is required"}
         
-        if self.knowledge_base and hasattr(self.knowledge_base, "find_similar_skills"):
-            return await self.knowledge_base.find_similar_skills(
-                query=query,
-                top_k=top_k,
-                equipment_type=equipment_type
-            )
+        knowledge_base = getattr(self, "knowledge_base", None)
+        if knowledge_base and hasattr(knowledge_base, "find_similar_skills"):
+            try:
+                return await knowledge_base.find_similar_skills(
+                    query=query,
+                    top_k=top_k,
+                    equipment_type=equipment_type
+                )
+            except Exception as e:
+                logger.error(f"Error finding similar skills: {e}")
         
         # Fallback: keyword search
         return {
@@ -185,11 +208,15 @@ class MLHandlerMixin:
         building_id = args.get("building_id")
         comparison_scope = args.get("comparison_scope", "local_fleet")
         
-        if self.world_model and hasattr(self.world_model, "benchmark_building"):
-            return await self.world_model.benchmark_building(
-                building_id=building_id,
-                scope=comparison_scope
-            )
+        world_model = getattr(self, "world_model", None)
+        if world_model and hasattr(world_model, "benchmark_building"):
+            try:
+                return await world_model.benchmark_building(
+                    building_id=building_id,
+                    scope=comparison_scope
+                )
+            except Exception as e:
+                logger.error(f"Error in building benchmarking: {e}")
         
         # Fallback: basic benchmark
         return {

@@ -69,7 +69,7 @@ def mock_advisor():
 @pytest.fixture
 def mock_goal_generator():
     """Mock goal generator with sample goals."""
-    generator = MockGoalGenerator()
+    generator = MockGoalGenerator(goals=[])
     generator.add_goal({
         "goal_id": "GOAL-001",
         "title": "Reduce Energy Consumption by 10%",
@@ -501,7 +501,7 @@ class TestAdvisoryStress:
             for i in range(100)
         ]
         
-        results = await run_concurrently([lambda: mock_advisor.get_recommendations(context="test")], count=100)
+        results = await run_concurrently(*[mock_advisor.get_recommendations(context="test") for _ in range(100)])
         
         # Mock doesn't support concurrent calls directly, but real tool would
         pass  # Placeholder - would test real tool in integration tests

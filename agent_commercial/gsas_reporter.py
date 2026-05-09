@@ -28,7 +28,7 @@ Reference: GSAS v2.1 Technical Guidelines (GORD)
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Callable
 from enum import Enum
 import json
 
@@ -310,6 +310,14 @@ class GSASReporter:
         self.energy_baseline_kwh: float = 0.0
         self.water_baseline_m3: float = 0.0
         
+        # Disqualification safeguards
+        self._on_disqualification: List[Callable[[Dict[str, Any]], None]] = []
+        self._disqualification_active: bool = False
+
+        # GSAS-OP: Score at or below 0 in E or W = automatic disqualification
+        self.DISQUALIFICATION_THRESHOLD = 0.0
+        self.DISQUALIFICATION_WARNING_THRESHOLD = 0.3
+        
         logger.info(f"GSASReporter initialized for {building_id}")
     
     # ═══════════════════════════════════════════════════════════════════════
@@ -425,6 +433,79 @@ class GSASReporter:
                            max_points=2.0)
         
         logger.info(f"Initialized {len(self.criteria)} GSAS criteria")
+
+    def on_disqualification(self, callback: Callable[[Dict[str, Any]], None]) -> None:
+        """Register a callback for disqualification events."""
+        self._on_disqualification.append(callback)
+
+    def check_disqualification(self) -> Optional[Dict[str, Any]]:
+        """
+        Check for Energy or Water scores that lead to disqualification.
+        
+        Based on GSAS-OP rules: Score <= 0 in E or W = Automatic Disqualification.
+        """
+        category_scores = self.calculate_category_scores()
+        
+        # Check Energy (E) and Water (W)
+        for cat_code in ("E", "W"):
+            cat_score = category_scores.get(cat_code)
+            if not cat_score:
+                continue
+            
+            # Normalized score (0.0 to 3.0)
+            score = cat_score.weighted_score
+            cat_name = cat_score.category_name
+            
+            alert = None
+            if score <= self.DISQUALIFICATION_THRESHOLD:
+                self._disqualification_active = True
+                alert = {
+                    "type": "gsas_disqualification",
+                    "severity": "critical",
+                    "category": cat_code,
+                    "category_name": cat_name,
+                    "current_score": round(score, 2),
+                    "threshold": self.DISQUALIFICATION_THRESHOLD,
+                    "message": f"GSAS DISQUALIFICATION: {cat_name} score has dropped to {score:.2f}. Building is ineligible for certification.",
+                    "recommended_actions": [
+                        "Immediately review energy/water consumption patterns",
+                        "Check for equipment failures or BMS sensor faults",
+                        "Contact GSAS Service Provider for remediation plan"
+                    ],
+                    "timestamp": datetime.now().isoformat()
+                }
+            elif score <= self.DISQUALIFICATION_WARNING_THRESHOLD:
+                # Warning only, don't set _disqualification_active to True yet
+                alert = {
+                    "type": "gsas_disqualification_warning",
+                    "severity": "high",
+                    "category": cat_code,
+                    "category_name": cat_name,
+                    "current_score": round(score, 2),
+                    "threshold": self.DISQUALIFICATION_WARNING_THRESHOLD,
+                    "message": f"GSAS COMPLIANCE WARNING: {cat_name} score is near disqualification threshold ({score:.2f}).",
+                    "recommended_actions": [
+                        "Analyze recent consumption trends",
+                        "Audit BMS sub-metering data",
+                        "Optimize setpoints to reduce demand"
+                    ],
+                    "timestamp": datetime.now().isoformat()
+                }
+
+            if alert:
+                for cb in self._on_disqualification:
+                    try:
+                        cb(alert)
+                    except Exception as e:
+                        logger.error(f"GSAS disqualification callback error: {e}")
+                return alert
+
+        # If we get here, scores are healthy
+        if self._disqualification_active:
+            self._disqualification_active = False
+            logger.info("GSAS compliance restored: Energy and Water scores above disqualification threshold.")
+            
+        return None
     
     def _add_criterion(
         self,
@@ -477,6 +558,9 @@ class GSASReporter:
         if maintenance_data:
             self._update_maintenance_criteria(maintenance_data)
         
+        # Safety check — GSAS disqualification guard
+        self.check_disqualification()
+        
         logger.debug("Updated GSAS scores from BMS data")
     
     def _update_energy_criteria(self, data: Dict[str, Any]) -> None:
@@ -515,6 +599,20 @@ class GSASReporter:
                 self._set_score("W.1", 2.0, CriterionStatus.ACHIEVED)
             elif reduction >= 10:
                 self._set_score("W.1", 1.0, CriterionStatus.IN_PROGRESS)
+            else:
+                self._set_score("W.1", 0.5, CriterionStatus.IN_PROGRESS)
+
+        # W.3 Water Monitoring (Sub-metering)
+        if "submetering_coverage" in data:
+            coverage = data["submetering_coverage"]
+            if coverage >= 90:
+                self._set_score("W.3", 2.0, CriterionStatus.EXCEEDS)
+            elif coverage >= 70:
+                self._set_score("W.3", 1.5, CriterionStatus.ACHIEVED)
+            elif coverage >= 50:
+                self._set_score("W.3", 1.0, CriterionStatus.IN_PROGRESS)
+            else:
+                self._set_score("W.3", 0.5, CriterionStatus.IN_PROGRESS)
     
     def _update_iaq_criteria(self, data: Dict[str, Any]) -> None:
         """Update indoor environment criteria"""
@@ -902,11 +1000,15 @@ class GSASReporter:
         star_rating = self.get_star_rating(overall_score)
         category_scores = self.calculate_category_scores()
         
+        target_val = self.target_rating.value if hasattr(self.target_rating, "value") else self.target_rating
+        star_val = star_rating.value if hasattr(star_rating, "value") else star_rating
+        
         return {
             "overall_score": round(overall_score, 2),
-            "star_rating": star_rating.value,
-            "target_rating": self.target_rating.value,
-            "on_track": star_rating.value >= self.target_rating.value,
+            "star_rating": star_val,
+            "target_rating": target_val,
+            "on_track": star_val >= target_val and not self._disqualification_active,
+            "disqualification_risk": self._disqualification_active,
             "categories": {k: v.to_dict() for k, v in category_scores.items()},
             "bms_measurable_count": sum(
                 1 for c in self.criteria.values() if c.is_bms_measurable
