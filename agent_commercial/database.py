@@ -394,10 +394,251 @@ class BMSDatabase:
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_brief_generated ON briefings(generated_at DESC)")
 
         
+        # 17. System Config (key-value store for pilot day, feature flags, etc.)
+        if 'system_config' not in existing_tables:
+            logger.info("Creating table: system_config")
+            await conn.execute("""
+            CREATE TABLE system_config (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT
+            )
+            """)
+
+        # 18. Suggested Actions (Learning Engine feedback loop)
+        if 'suggested_actions' not in existing_tables:
+            logger.info("Creating table: suggested_actions")
+            await conn.execute("""
+            CREATE TABLE suggested_actions (
+                suggestion_id TEXT PRIMARY KEY,
+                type TEXT,
+                target TEXT,
+                action TEXT,
+                reason TEXT,
+                status TEXT DEFAULT 'pending',
+                created_at TEXT,
+                applied_at TEXT,
+                outcome TEXT,
+                outcome_metrics TEXT
+            )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_suggested_status ON suggested_actions(status)")
+
+        # 19. State Snapshots (warm-start persistence)
+        if 'state_snapshots' not in existing_tables:
+            logger.info("Creating table: state_snapshots")
+            await conn.execute("""
+            CREATE TABLE state_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                snapshot_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """)
+
+        # 20. Prediction Baselines (cognitive engine warm-start)
+        if 'prediction_baselines' not in existing_tables:
+            logger.info("Creating table: prediction_baselines")
+            await conn.execute("""
+            CREATE TABLE prediction_baselines (
+                metric TEXT NOT NULL,
+                hour INTEGER NOT NULL,
+                value REAL NOT NULL,
+                samples INTEGER DEFAULT 1,
+                updated_at TEXT,
+                PRIMARY KEY (metric, hour)
+            )
+            """)
+
+        # 21. Recommendation Outcomes (feedback loop — Track 2)
+        if 'recommendation_outcomes' not in existing_tables:
+            logger.info("Creating table: recommendation_outcomes")
+            await conn.execute("""
+            CREATE TABLE recommendation_outcomes (
+                outcome_id          TEXT PRIMARY KEY,
+                recommendation_id   TEXT NOT NULL,
+                session_id          TEXT,
+                action_type         TEXT,
+                baseline_kwh        REAL,
+                predicted_kwh_delta REAL,
+                actual_kwh_delta    REAL,
+                predicted_score     REAL,
+                actual_score        REAL,
+                confidence          REAL DEFAULT 0.7,
+                outcome_status      TEXT DEFAULT 'pending',
+                accuracy            REAL,
+                measured_at         TEXT,
+                created_at          TEXT,
+                notes               TEXT
+            )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_outcomes_status ON recommendation_outcomes(outcome_status)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_outcomes_rec ON recommendation_outcomes(recommendation_id)")
+
+        # 22. Distilled Rules (replaces swarm_nodes.py source rewriting — Track 2)
+        if 'distilled_rules' not in existing_tables:
+            logger.info("Creating table: distilled_rules")
+            await conn.execute("""
+            CREATE TABLE distilled_rules (
+                rule_id     TEXT PRIMARY KEY,
+                agent_name  TEXT NOT NULL,
+                rule_text   TEXT NOT NULL,
+                confidence  REAL DEFAULT 0.0,
+                veto_count  INTEGER DEFAULT 0,
+                active      INTEGER DEFAULT 1,
+                created_at  TEXT,
+                updated_at  TEXT,
+                source_evidence_id TEXT,
+                expires_at  TEXT,
+                hit_count   INTEGER DEFAULT 0
+            )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_rules_agent ON distilled_rules(agent_name, active)")
+            # Migration: add columns if table exists but lacks new fields
+            try:
+                await conn.execute("ALTER TABLE distilled_rules ADD COLUMN source_evidence_id TEXT")
+            except Exception:
+                pass
+            try:
+                await conn.execute("ALTER TABLE distilled_rules ADD COLUMN expires_at TEXT")
+            except Exception:
+                pass
+            try:
+                await conn.execute("ALTER TABLE distilled_rules ADD COLUMN hit_count INTEGER DEFAULT 0")
+            except Exception:
+                pass
+
+        # 23. Investigation Plans — T2 Episodic memory archive
+        if 'investigation_plans' not in existing_tables:
+            logger.info("Creating table: investigation_plans")
+            await conn.execute("""
+            CREATE TABLE investigation_plans (
+                plan_id         TEXT PRIMARY KEY,
+                query           TEXT NOT NULL,
+                building_id     TEXT DEFAULT '',
+                status          TEXT DEFAULT 'active',
+                progress        REAL DEFAULT 0.0,
+                evidence_count  INTEGER DEFAULT 0,
+                query_embedding BLOB,
+                plan_json       TEXT,
+                created_at      TEXT NOT NULL,
+                completed_at    TEXT
+            )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_plans_building ON investigation_plans(building_id, created_at)")
+
+        if 'plan_tasks' not in existing_tables:
+            logger.info("Creating table: plan_tasks")
+            await conn.execute("""
+            CREATE TABLE plan_tasks (
+                task_id         TEXT PRIMARY KEY,
+                plan_id         TEXT NOT NULL,
+                goal            TEXT,
+                tool_hint       TEXT,
+                status          TEXT DEFAULT 'pending',
+                expected_outcome TEXT,
+                evidence_ids    TEXT DEFAULT '[]',
+                attempts        INTEGER DEFAULT 0,
+                assigned_node   TEXT,
+                FOREIGN KEY (plan_id) REFERENCES investigation_plans(plan_id)
+            )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_plan ON plan_tasks(plan_id)")
+
+        if 'audit_spans' not in existing_tables:
+            logger.info("Creating table: audit_spans")
+            await conn.execute("""
+            CREATE TABLE audit_spans (
+                span_id         TEXT PRIMARY KEY,
+                plan_id         TEXT NOT NULL,
+                task_id         TEXT DEFAULT '',
+                node_name       TEXT DEFAULT '',
+                action          TEXT,
+                tool_name       TEXT,
+                tool_args       TEXT,
+                evidence_id     TEXT,
+                verdict         TEXT,
+                duration_ms     REAL DEFAULT 0.0,
+                timestamp       TEXT NOT NULL,
+                FOREIGN KEY (plan_id) REFERENCES investigation_plans(plan_id)
+            )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_spans_plan ON audit_spans(plan_id)")
+
+        if 'plan_evidence' not in existing_tables:
+            logger.info("Creating table: plan_evidence")
+            await conn.execute("""
+            CREATE TABLE plan_evidence (
+                evidence_id     TEXT PRIMARY KEY,
+                plan_id         TEXT NOT NULL,
+                source_tool     TEXT,
+                node_name       TEXT DEFAULT '',
+                summary         TEXT,
+                is_ml_fallback  INTEGER DEFAULT 0,
+                model_id        TEXT,
+                drift_score     REAL,
+                call_sig        TEXT,
+                evidence_json   TEXT,
+                created_at      TEXT NOT NULL,
+                FOREIGN KEY (plan_id) REFERENCES investigation_plans(plan_id)
+            )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_evidence_plan ON plan_evidence(plan_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_evidence_tool ON plan_evidence(source_tool)")
+
+        if 'conversation_turns' not in existing_tables:
+            logger.info("Creating table: conversation_turns")
+            await conn.execute("""
+            CREATE TABLE conversation_turns (
+                turn_id         TEXT PRIMARY KEY,
+                operator_id     TEXT NOT NULL,
+                building_id     TEXT DEFAULT '',
+                role            TEXT NOT NULL,
+                content         TEXT,
+                is_summary      INTEGER DEFAULT 0,
+                summary_range   TEXT,
+                created_at      TEXT NOT NULL
+            )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_turns_operator ON conversation_turns(operator_id, building_id, created_at)")
+
+        # 25. LLM Usage Metering — per-call Bedrock cost tracking
+        if 'llm_usage' not in existing_tables:
+            logger.info("Creating table: llm_usage")
+            await conn.execute("""
+            CREATE TABLE llm_usage (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                plan_id         TEXT DEFAULT '',
+                node_name       TEXT DEFAULT '',
+                channel         TEXT DEFAULT '',
+                model_id        TEXT NOT NULL,
+                input_tokens    INTEGER NOT NULL,
+                output_tokens   INTEGER NOT NULL,
+                cost_usd        REAL NOT NULL,
+                timestamp       TEXT NOT NULL
+            )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_plan ON llm_usage(plan_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_ts ON llm_usage(timestamp)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_usage_model ON llm_usage(model_id)")
+
+        # Add cost columns to investigation_plans (safe for existing DBs)
+        try:
+            await conn.execute("ALTER TABLE investigation_plans ADD COLUMN total_llm_cost_usd REAL DEFAULT 0.0")
+        except Exception:
+            pass
+        try:
+            await conn.execute("ALTER TABLE investigation_plans ADD COLUMN total_llm_tokens INTEGER DEFAULT 0")
+        except Exception:
+            pass
+        try:
+            await conn.execute("ALTER TABLE investigation_plans ADD COLUMN total_tool_cost_usd REAL DEFAULT 0.0")
+        except Exception:
+            pass
+
         await conn.commit()
         logger.info("✅ Database schema verification complete.")
-            
-    
+
+
     # ═══════════════════════════════════════════════════════════════════════════
     # EQUIPMENT OPERATIONS
     # ═══════════════════════════════════════════════════════════════════════════
@@ -540,8 +781,12 @@ class BMSDatabase:
     async def get_fleet_insights(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Get the latest insights generated across the fleet"""
         query = "SELECT * FROM fleet_insights ORDER BY timestamp DESC LIMIT ?"
-        rows = await self.fetch_all(query, (limit,))
-        return rows
+        conn = await self._get_async_connection()
+        async with conn.execute(query, (limit,)) as cursor:
+            rows = await cursor.fetchall()
+            if rows:
+                return [dict(row) for row in rows]
+            return []
         
     # ═══════════════════════════════════════════════════════════════════════════
     # CHAT HISTORY COMMANDS
@@ -1403,9 +1648,9 @@ class BMSDatabase:
     ) -> None:
         """Record operator response to a briefing (Async)"""
         conn = await self._get_async_connection()
-        
+
         await conn.execute("""
-            UPDATE briefings SET 
+            UPDATE briefings SET
                 operator_response = ?,
                 responded_at = ?,
                 status = ?
@@ -1417,6 +1662,311 @@ class BMSDatabase:
             briefing_id,
         ))
         await conn.commit()
+
+    async def save_recommendation_outcome(self, outcome: Dict[str, Any]) -> None:
+        """Persist a recommendation outcome record."""
+        conn = await self._get_async_connection()
+        await conn.execute("""
+            INSERT OR REPLACE INTO recommendation_outcomes
+            (outcome_id, recommendation_id, session_id, action_type,
+             baseline_kwh, predicted_kwh_delta, actual_kwh_delta,
+             predicted_score, actual_score, confidence,
+             outcome_status, accuracy, measured_at, created_at, notes)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            outcome.get("outcome_id"),
+            outcome.get("recommendation_id"),
+            outcome.get("session_id"),
+            outcome.get("action_type"),
+            outcome.get("baseline_kwh"),
+            outcome.get("predicted_kwh_delta"),
+            outcome.get("actual_kwh_delta"),
+            outcome.get("predicted_score"),
+            outcome.get("actual_score"),
+            outcome.get("confidence", 0.7),
+            outcome.get("outcome_status", "pending"),
+            outcome.get("accuracy"),
+            outcome.get("measured_at"),
+            outcome.get("created_at"),
+            outcome.get("notes"),
+        ))
+        await conn.commit()
+
+    async def get_pending_outcomes(self) -> List[Dict[str, Any]]:
+        """Fetch outcomes that are pending measurement (older than 20h)."""
+        conn = await self._get_async_connection()
+        cutoff = (datetime.now() - timedelta(hours=20)).isoformat()
+        async with conn.execute("""
+            SELECT * FROM recommendation_outcomes
+            WHERE outcome_status = 'pending' AND created_at <= ?
+            ORDER BY created_at ASC LIMIT 20
+        """, (cutoff,)) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(zip([c[0] for c in cursor.description], r)) for r in rows]
+
+    async def update_outcome(self, outcome_id: str, **kwargs) -> None:
+        """Update fields on an existing outcome record."""
+        conn = await self._get_async_connection()
+        allowed = {"actual_kwh_delta", "actual_score", "outcome_status", "accuracy", "measured_at", "notes"}
+        fields = {k: v for k, v in kwargs.items() if k in allowed}
+        if not fields:
+            return
+        set_clause = ", ".join(f"{k} = ?" for k in fields)
+        await conn.execute(
+            f"UPDATE recommendation_outcomes SET {set_clause} WHERE outcome_id = ?",
+            (*fields.values(), outcome_id)
+        )
+        await conn.commit()
+
+    async def save_distilled_rule(self, rule: Dict[str, Any]) -> None:
+        """Persist a distilled rule with TTL and source tracking."""
+        conn = await self._get_async_connection()
+        await conn.execute("""
+            INSERT OR REPLACE INTO distilled_rules
+            (rule_id, agent_name, rule_text, confidence, veto_count, active,
+             created_at, updated_at, source_evidence_id, expires_at, hit_count)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            rule.get("rule_id"),
+            rule.get("agent_name"),
+            rule.get("rule_text"),
+            rule.get("confidence", 0.0),
+            rule.get("veto_count", 0),
+            rule.get("active", 1),
+            rule.get("created_at"),
+            rule.get("updated_at"),
+            rule.get("source_evidence_id"),
+            rule.get("expires_at"),
+            rule.get("hit_count", 0),
+        ))
+        await conn.commit()
+
+    async def get_distilled_rules(self, agent_name: str) -> List[Dict[str, Any]]:
+        """Fetch active, non-expired distilled rules for a specific agent."""
+        from datetime import datetime, timezone
+        _now = datetime.now(timezone.utc).isoformat()
+        conn = await self._get_async_connection()
+        async with conn.execute("""
+            SELECT rule_id, rule_text, confidence FROM distilled_rules
+            WHERE agent_name = ? AND active = 1
+              AND (expires_at IS NULL OR expires_at > ?)
+            ORDER BY confidence DESC LIMIT 5
+        """, (agent_name, _now)) as cursor:
+            rows = await cursor.fetchall()
+            rules = [dict(zip([c[0] for c in cursor.description], r)) for r in rows]
+
+        # Increment hit_count for retrieved rules
+        if rules:
+            rule_ids = [r["rule_id"] for r in rules if r.get("rule_id")]
+            if rule_ids:
+                placeholders = ",".join("?" * len(rule_ids))
+                await conn.execute(
+                    f"UPDATE distilled_rules SET hit_count = hit_count + 1 WHERE rule_id IN ({placeholders})",
+                    rule_ids,
+                )
+                await conn.commit()
+
+        return rules
+
+    # ── T2 Episodic Memory: Investigation archive ────────────────────────────
+
+    async def archive_investigation_plan(self, plan) -> str:
+        """Persist a completed InvestigationPlan to the episodic archive."""
+        import json as _json
+        from datetime import datetime as _dt, timezone as _tz
+        conn = await self._get_async_connection()
+        now = _dt.now(_tz.utc).isoformat()
+
+        plan_id = getattr(plan, "id", str(__import__("uuid").uuid4())[:12])
+        query = getattr(plan, "query", "")
+        status = getattr(plan, "status", None)
+        status_val = status.value if hasattr(status, "value") else str(status)
+        progress = getattr(plan, "progress", 0.0)
+        evidence_count = len(getattr(plan, "evidence", []))
+        created_at = getattr(plan, "created_at", None)
+        created_at_str = created_at.isoformat() if created_at else now
+
+        try:
+            plan_json = plan.to_persist_dict() if hasattr(plan, "to_persist_dict") else {}
+        except Exception:
+            plan_json = {}
+
+        await conn.execute("""
+            INSERT OR REPLACE INTO investigation_plans
+            (plan_id, query, building_id, status, progress, evidence_count, plan_json, created_at, completed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (plan_id, query, "", status_val, progress, evidence_count,
+              _json.dumps(plan_json, default=str), created_at_str, now))
+
+        # Archive tasks
+        for task in getattr(plan, "tasks", []):
+            await conn.execute("""
+                INSERT OR REPLACE INTO plan_tasks
+                (task_id, plan_id, goal, tool_hint, status, expected_outcome, evidence_ids, attempts, assigned_node)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (task.id, plan_id, task.goal, task.tool_hint,
+                  task.status.value if hasattr(task.status, "value") else str(task.status),
+                  task.expected_outcome, _json.dumps(task.evidence_ids),
+                  task.attempts, task.assigned_node))
+
+        # Archive audit spans
+        for span in getattr(plan, "audit_trail", []):
+            await conn.execute("""
+                INSERT OR REPLACE INTO audit_spans
+                (span_id, plan_id, task_id, node_name, action, tool_name, tool_args,
+                 evidence_id, verdict, duration_ms, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (span.id, plan_id, span.task_id, span.node_name, span.action,
+                  span.tool_name, _json.dumps(span.tool_args or {}, default=str),
+                  span.evidence_id, span.verdict, span.duration_ms,
+                  span.timestamp.isoformat() if hasattr(span.timestamp, "isoformat") else str(span.timestamp)))
+
+        # Archive evidence
+        for ev in getattr(plan, "evidence", type("", (), {"get_all": lambda self: []})()).get_all() if hasattr(getattr(plan, "evidence", None), "get_all") else []:
+            await conn.execute("""
+                INSERT OR REPLACE INTO plan_evidence
+                (evidence_id, plan_id, source_tool, node_name, summary, is_ml_fallback,
+                 model_id, drift_score, call_sig, evidence_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (ev.id, plan_id, ev.source_tool, ev.node_name, ev.summary,
+                  1 if ev.is_ml_fallback else 0, ev.model_id, ev.drift_score,
+                  ev.call_sig, _json.dumps(ev.raw_payload, default=str), now))
+
+        await conn.commit()
+        return plan_id
+
+    async def get_investigation_plans(
+        self,
+        building_id: str = "",
+        limit: int = 20,
+        query_filter: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve archived investigation plans, newest first."""
+        conn = await self._get_async_connection()
+        if query_filter:
+            rows = await conn.execute_fetchall(
+                "SELECT plan_id, query, status, progress, evidence_count, created_at, completed_at "
+                "FROM investigation_plans WHERE query LIKE ? ORDER BY created_at DESC LIMIT ?",
+                (f"%{query_filter}%", limit),
+            )
+        else:
+            rows = await conn.execute_fetchall(
+                "SELECT plan_id, query, status, progress, evidence_count, created_at, completed_at "
+                "FROM investigation_plans ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            )
+        return [dict(r) for r in rows]
+
+    async def load_investigation_plan_json(self, plan_id: str) -> Optional[str]:
+        """Load full plan JSON for replay."""
+        conn = await self._get_async_connection()
+        rows = await conn.execute_fetchall(
+            "SELECT plan_json FROM investigation_plans WHERE plan_id = ?", (plan_id,)
+        )
+        if rows:
+            return rows[0]["plan_json"]
+        return None
+
+    async def flush_llm_usage(self, plan_id: str, budget=None) -> int:
+        """Drain _LLM_USAGE_LOG into llm_usage table and update investigation_plans totals."""
+        from agent_unified.llm import drain_usage_log
+        entries = drain_usage_log()
+        if not entries:
+            return 0
+
+        conn = await self._get_async_connection()
+        total_cost = 0.0
+        total_tokens = 0
+        for entry in entries:
+            await conn.execute("""
+                INSERT INTO llm_usage (plan_id, node_name, channel, model_id, input_tokens, output_tokens, cost_usd, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                plan_id,
+                entry.get("node_name", ""),
+                entry.get("channel", ""),
+                entry["model_id"],
+                entry["input_tokens"],
+                entry["output_tokens"],
+                entry["cost_usd"],
+                entry["timestamp"],
+            ))
+            total_cost += entry["cost_usd"]
+            total_tokens += entry["input_tokens"] + entry["output_tokens"]
+
+        # Update investigation_plans aggregate columns
+        if plan_id:
+            tool_cost = budget.used_cost_usd - total_cost if budget else 0.0
+            await conn.execute("""
+                UPDATE investigation_plans
+                SET total_llm_cost_usd = ?, total_llm_tokens = ?, total_tool_cost_usd = ?
+                WHERE plan_id = ?
+            """, (total_cost, total_tokens, max(0.0, tool_cost), plan_id))
+
+        await conn.commit()
+        logger.info(f"[DB] Flushed {len(entries)} LLM usage entries for plan={plan_id} (${total_cost:.4f}, {total_tokens} tokens)")
+        return len(entries)
+
+    # ── T1 Working Memory: Conversation turns ────────────────────────────────
+
+    async def save_conversation_turn(
+        self,
+        operator_id: str,
+        building_id: str,
+        role: str,
+        content: str,
+        is_summary: bool = False,
+        summary_range: str = "",
+    ) -> None:
+        """Persist one conversation turn."""
+        from datetime import datetime as _dt, timezone as _tz
+        conn = await self._get_async_connection()
+        await conn.execute("""
+            INSERT INTO conversation_turns
+            (turn_id, operator_id, building_id, role, content, is_summary, summary_range, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (str(__import__("uuid").uuid4())[:12], operator_id, building_id,
+              role, content, 1 if is_summary else 0, summary_range,
+              _dt.now(_tz.utc).isoformat()))
+        await conn.commit()
+
+    async def load_conversation_turns(
+        self,
+        operator_id: str,
+        building_id: str,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Load recent conversation turns for an operator."""
+        conn = await self._get_async_connection()
+        rows = await conn.execute_fetchall(
+            "SELECT role, content, is_summary, created_at FROM conversation_turns "
+            "WHERE operator_id = ? AND building_id = ? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (operator_id, building_id, limit),
+        )
+        return [dict(r) for r in reversed(rows)]
+
+    async def save_suggested_action(self, action_text: str, source: str = "system", confidence: float = 1.0) -> None:
+        """Persist a suggested action for injection into LLM context."""
+        async with await self._get_async_connection() as conn:
+            await conn.execute(
+                """INSERT OR IGNORE INTO suggested_actions
+                   (action_id, action_text, source, confidence, created_at, status)
+                   VALUES (?, ?, ?, ?, ?, 'pending')""",
+                (str(__import__('uuid').uuid4()), action_text, source, confidence,
+                 __import__('datetime').datetime.now().isoformat())
+            )
+            await conn.commit()
+
+    async def get_pending_suggestions(self, limit: int = 10) -> list:
+        """Fetch pending suggested actions for LLM context injection."""
+        async with await self._get_async_connection() as conn:
+            async with conn.execute(
+                "SELECT action_text, source, confidence FROM suggested_actions WHERE status='pending' ORDER BY confidence DESC LIMIT ?",
+                (limit,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows] if rows else []
 
 
 # ═══════════════════════════════════════════════════════════════════════════

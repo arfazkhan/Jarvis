@@ -20,6 +20,10 @@ ENV = os.getenv("ENV", "development")
 DEBUG = os.getenv("DEBUG", "true").lower() == "true"
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
+# ARVIS Lite Mode — reduced resource footprint for pilot deployments
+ARVIS_LITE = os.getenv("ARVIS_LITE", "false").lower() == "true"
+ARVIS_VERTICAL = os.getenv("ARVIS_VERTICAL", "COMMERCIAL").upper()
+
 # ============================================================================
 # PHASE 1: Cognitive Layer Settings
 # ============================================================================

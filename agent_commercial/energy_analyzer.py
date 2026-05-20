@@ -140,15 +140,33 @@ class EnergyAnalyzer:
         >>> patterns = analyzer.identify_waste_patterns()
     """
     
-    # Qatar-specific: Average electricity rate (QR/kWh)
-    ELECTRICITY_RATE_QAR = 0.08  # Subsidized industrial rate
-    ELECTRICITY_RATE_QAR_COMMERCIAL = 0.15  # Commercial rate
-    
+    # Kahramaa tariff rates (QAR/kWh) — official 2024 structures
+    ELECTRICITY_RATE_QAR = 0.07            # Subsidized industrial flat rate
+    ELECTRICITY_RATE_QAR_COMMERCIAL = 0.14  # Commercial marginal top-tier (> 15,000 kWh/month)
+    # Kahramaa commercial tiered slabs: (upper_bound_kwh, rate_qar_per_kwh)
+    _COMMERCIAL_TIERS: List[Tuple[float, float]] = [
+        (4_000,       0.09),   # 1–4,000 kWh
+        (15_000,      0.12),   # 4,001–15,000 kWh
+        (float("inf"), 0.14),  # > 15,001 kWh
+    ]
+    # Large commercial buildings exceed 15,000 kWh/month easily;
+    # waste is billed at the top marginal tier.
+    MARGINAL_RATE_LARGE_COMMERCIAL = 0.14
+
     # Working hours (Qatar: Sunday-Thursday, not Mon-Fri)
     WORKDAYS = {6, 0, 1, 2, 3}  # Sunday=6, Monday=0, ..., Thursday=3
-    WORK_HOURS = range(7, 20)   # 7 AM to 8 PM
+    WORK_HOURS = range(7, 18)    # Standard corporate: 7 AM–6 PM
+    # Qatar Labour Law: Ramadan limits all workers to 6 hours/day statutory max
+    RAMADAN_WORK_HOURS = range(9, 15)  # 9 AM–3 PM during Ramadan
+    # Known Ramadan windows (Gregorian, ±1 day due to moon sighting)
+    _RAMADAN_RANGES: List[Tuple[datetime, datetime]] = [
+        (datetime(2024, 3, 10), datetime(2024, 4, 9)),
+        (datetime(2025, 3, 1),  datetime(2025, 3, 30)),
+        (datetime(2026, 2, 18), datetime(2026, 3, 19)),
+        (datetime(2027, 2, 8),  datetime(2027, 3, 8)),
+    ]
     
-    def __init__(self, electricity_rate_qar: float = 0.15):
+    def __init__(self, electricity_rate_qar: float = 0.14):
         """
         Initialize Energy Analyzer.
         
@@ -191,7 +209,38 @@ class EnergyAnalyzer:
         self.waste_patterns: Dict[str, WastePattern] = {}
         
         logger.info("EnergyAnalyzer initialized")
-    
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # HELPERS: Ramadan calendar + tiered tariff
+    # ═══════════════════════════════════════════════════════════════════════
+
+    @classmethod
+    def _is_ramadan(cls, dt: datetime) -> bool:
+        """Return True if dt falls within a known Ramadan window."""
+        for start, end in cls._RAMADAN_RANGES:
+            if start <= dt <= end:
+                return True
+        return False
+
+    @classmethod
+    def _effective_work_hours(cls, dt: datetime) -> range:
+        """Return the statutory work hours range for the given date."""
+        return cls.RAMADAN_WORK_HOURS if cls._is_ramadan(dt) else cls.WORK_HOURS
+
+    @classmethod
+    def marginal_rate(cls, cumulative_monthly_kwh: float) -> float:
+        """
+        Return the Kahramaa commercial marginal rate for the tier the meter
+        is currently in, based on cumulative monthly consumption so far.
+        For waste ROI: detected waste is billed at this marginal rate.
+        Defaults to top tier (0.14) when cumulative usage is unknown — correct
+        for large commercial buildings that always exceed 15,000 kWh/month.
+        """
+        for upper, rate in cls._COMMERCIAL_TIERS:
+            if cumulative_monthly_kwh <= upper:
+                return rate
+        return cls.MARGINAL_RATE_LARGE_COMMERCIAL
+
     # ═══════════════════════════════════════════════════════════════════════
     # DATA INGESTION
     # ═══════════════════════════════════════════════════════════════════════
@@ -306,9 +355,28 @@ class EnergyAnalyzer:
         # 2. Train VAE Analyzer
         try:
             # Prepare VAE-specific historical data (mapping schema)
+            if 'outdoor_temp' in historical_data.columns:
+                # Forward-fill gaps; remaining NaNs filled by rolling 24-hour seasonal mean
+                temp_series = (
+                    historical_data['outdoor_temp']
+                    .ffill()
+                    .fillna(historical_data['outdoor_temp'].rolling(24, min_periods=1).mean())
+                    .fillna(historical_data['outdoor_temp'].mean())
+                )
+            else:
+                # No temp sensor: derive a rough seasonal proxy from monthly averages
+                # rather than a static scalar that would poison the VAE latent space.
+                if 'timestamp' in historical_data.columns:
+                    month = pd.to_datetime(historical_data['timestamp']).dt.month
+                    # Qatar monthly avg highs (°C): Jan=21, Feb=23, Mar=27, Apr=33,
+                    # May=39, Jun=42, Jul=43, Aug=44, Sep=40, Oct=35, Nov=29, Dec=23
+                    _monthly = {1:21,2:23,3:27,4:33,5:39,6:42,7:43,8:44,9:40,10:35,11:29,12:23}
+                    temp_series = month.map(_monthly).astype(float)
+                else:
+                    temp_series = pd.Series([32.0] * len(historical_data))
             vae_df = pd.DataFrame({
                 "value": historical_data['value'],
-                "outdoor_temp": historical_data['outdoor_temp'] if 'outdoor_temp' in historical_data.columns else 35.0,
+                "outdoor_temp": temp_series,
                 "expected_value": historical_data['value'].rolling(24).mean().fillna(historical_data['value'].mean())
             })
             vae_metrics = self.vae_analyzer.train(vae_df)
@@ -358,8 +426,9 @@ class EnergyAnalyzer:
         
         # Adjust for temperature (if available)
         if outdoor_temp is not None and baseline.temp_coefficient != 0:
-            # Assume 30°C as reference temperature
-            temp_delta = outdoor_temp - 30
+            # GCC empirical CDD base: 23°C (ASHRAE/eQuest regional studies)
+            # Buildings require mechanical cooling below 23°C due to high internal gains.
+            temp_delta = outdoor_temp - 23
             expected += baseline.temp_coefficient * temp_delta
         
         return max(baseline.base_load, expected)
@@ -389,9 +458,11 @@ class EnergyAnalyzer:
             if len(history) >= self.vae_analyzer.sequence_length:
                 # Create a mini-dataframe for the VAE
                 # Using the customized meter schema
+                _monthly_avg = {1:21,2:23,3:27,4:33,5:39,6:42,7:43,8:44,9:40,10:35,11:29,12:23}
                 df_seq = pd.DataFrame([{
                     "value": r.value,
-                    "outdoor_temp": r.outdoor_temp or 35.0,
+                    "outdoor_temp": r.outdoor_temp if r.outdoor_temp is not None
+                                    else _monthly_avg.get(r.timestamp.month, 32),
                     "expected_value": self.get_expected_value(r.meter_id, r.timestamp, r.outdoor_temp),
                 } for r in history[-self.vae_analyzer.sequence_length:]])
                 
@@ -449,9 +520,10 @@ class EnergyAnalyzer:
         """Rule-based anomaly checks for known patterns"""
         anomalies = []
         
-        # Check for after-hours high consumption
+        # Check for after-hours high consumption (Ramadan-aware)
         is_workday = reading.day_of_week in self.WORKDAYS
-        is_work_hours = reading.hour_of_day in self.WORK_HOURS
+        effective_hours = self._effective_work_hours(reading.timestamp)
+        is_work_hours = reading.hour_of_day in effective_hours
         
         if not is_work_hours or not is_workday:
             # Night/weekend - expect low consumption
@@ -507,11 +579,11 @@ class EnergyAnalyzer:
     
     def _estimate_after_hours_savings(self, excess_kw: float) -> float:
         """Estimate savings from eliminating after-hours waste"""
-        # After hours = nights (12h) + weekends (48h) ≈ 60h/week unoccupied
-        # 60h * 52 weeks = 3120 hours/year
-        after_hours_per_year = 3120
+        # Night hours per week: 5 workday nights * 12h = 60h
+        # Weekend hours per week: 2 days * 24h = 48h
+        # Total unoccupied per week: 60 + 48 = 108h  (not 60 — audit finding)
+        after_hours_per_year = 108 * 52  # = 5_616
         annual_excess_kwh = excess_kw * after_hours_per_year
-        
         return annual_excess_kwh * self.electricity_rate
     
     # ═══════════════════════════════════════════════════════════════════════
@@ -547,10 +619,10 @@ class EnergyAnalyzer:
         if not baseline:
             return patterns
         
-        # Analyze readings outside work hours
+        # Analyze readings outside work hours (Ramadan-aware per reading)
         after_hours_readings = [
             r for r in readings
-            if r.hour_of_day not in self.WORK_HOURS or r.day_of_week not in self.WORKDAYS
+            if r.hour_of_day not in self._effective_work_hours(r.timestamp) or r.day_of_week not in self.WORKDAYS
         ]
         
         if not after_hours_readings:
@@ -615,14 +687,16 @@ class EnergyAnalyzer:
         weekend_mean = np.mean([r.value for r in weekend_readings])
         weekday_mean = np.mean([r.value for r in weekday_readings])
         
-        # If weekend is > 60% of weekday, potential issue
-        if weekend_mean > weekday_mean * 0.6:
+        # Qatar high-ambient: full weekend shutdown risks heat-soak + massive Sunday pull-down.
+        # Optimal setback target is 40–50% of weekday mean (not 30% shutdown).
+        # Flag if weekend > 75% of weekday (well above setback range).
+        if weekend_mean > weekday_mean * 0.75:
             ratio = weekend_mean / weekday_mean
-            excess_pct = (ratio - 0.3) * 100  # Expect 30% on weekends
-            
+            excess_pct = (ratio - 0.45) * 100  # Excess above 45% setback target
+
             patterns.append(WastePattern(
                 pattern_type="weekend_consumption",
-                description=f"Weekend energy consumption is {ratio:.0%} of weekday levels (expected ~30%)",
+                description=f"Weekend energy consumption is {ratio:.0%} of weekday (setback target: 40–50%)",
                 building_id=meter_id.split("/")[0] if "/" in meter_id else "",
                 occurrences=len(weekend_readings),
                 estimated_waste_kwh_daily=(weekend_mean - weekday_mean * 0.3),
@@ -663,23 +737,30 @@ class EnergyAnalyzer:
             high_hours = [r.hour_of_day for r in day_readings if r.value > threshold]
             
             if high_hours:
-                if min(high_hours) < 6:  # Before 6 AM
+                # Pre-4 AM: optimal-start in Qatar can legitimately run 4-6 AM for pull-down;
+                # only flag before 4 AM as potentially unscheduled waste.
+                if min(high_hours) < 4:
                     early_starts += 1
-                if max(high_hours) > 21:  # After 9 PM
+                # After 10 PM: systems running 2+ hours past typical latest occupancy
+                if max(high_hours) > 22:
                     late_ends += 1
-        
+
         if early_starts >= 5:
             patterns.append(WastePattern(
                 pattern_type="early_start",
-                description=f"HVAC/lighting starting before 6 AM on {early_starts} days",
+                description=(
+                    f"High consumption before 4 AM on {early_starts} days. "
+                    "Note: pre-6 AM operation may be valid optimal-start pre-conditioning "
+                    "required for Qatar heat pull-down — verify against BAS schedule."
+                ),
                 occurrences=early_starts,
                 estimated_waste_qar_annual=early_starts * 52 * threshold * 2 * self.electricity_rate,
             ))
-        
+
         if late_ends >= 5:
             patterns.append(WastePattern(
                 pattern_type="late_shutdown",
-                description=f"Systems still running after 9 PM on {late_ends} days",
+                description=f"Systems still running after 10 PM on {late_ends} days",
                 occurrences=late_ends,
                 estimated_waste_qar_annual=late_ends * 52 * threshold * 3 * self.electricity_rate,
             ))
@@ -688,7 +769,8 @@ class EnergyAnalyzer:
     
     def _calculate_weekend_savings(self, weekend_mean: float, weekday_mean: float) -> float:
         """Calculate potential savings from reducing weekend consumption"""
-        target_weekend = weekday_mean * 0.3  # Target 30% of weekday
+        # Target: 45% setback (thermodynamically sound for Qatar heat-soak prevention)
+        target_weekend = weekday_mean * 0.45
         excess = max(0, weekend_mean - target_weekend)
         
         # 2 weekend days * 52 weeks * 24 hours
@@ -781,8 +863,9 @@ class EnergyAnalyzer:
             expected = self.get_expected_value(meter_id, latest.timestamp, latest.outdoor_temp)
             total_baseline_kw += expected
             
-        # Calculate Intensity (kWh/m2/year equivalent based on current instant)
-        # Intensity = (kW * 8760) / Area
+        # Instantaneous intensity annualization: only valid as a directional dashboard metric.
+        # True EUI requires 12-month rolling integral; this snapshot will appear inflated in
+        # peak summer and depressed in winter — use for trend comparison only.
         current_intensity = (total_current_kw * 8760) / building_area_m2
         baseline_intensity = (total_baseline_kw * 8760) / building_area_m2
         

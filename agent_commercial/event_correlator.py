@@ -184,29 +184,35 @@ class EventCorrelator:
         ],
     }
     
-    def __init__(self, 
+    def __init__(self,
                  bms_state=None,
                  alarm_engine=None,
-                 energy_analyzer=None):
+                 energy_analyzer=None,
+                 db=None):
         """
         Initialize the Event Correlator.
-        
+
         Args:
             bms_state: BMSStateEngine for equipment topology
             alarm_engine: AlarmEngine for alarm history
             energy_analyzer: EnergyAnalyzer for consumption data
+            db: Database instance for persistence
         """
         self.bms_state = bms_state
         self.alarm_engine = alarm_engine
         self.energy_analyzer = energy_analyzer
-        
+        self.db = db
+
         # Event history buffer (last 24 hours)
         self.event_history: List[Event] = []
         self.max_history_hours = 24
-        
+
+        # Learned causal patterns (beyond hardcoded CAUSAL_PATTERNS)
+        self._learned_patterns: Dict[str, List[Dict[str, Any]]] = {}
+        self._pattern_confidence_decay = 0.95  # Per-day decay
+
         self.llm_provider = None
-        
-        
+
         logger.info("EventCorrelator initialized")
     
     def add_event(self, event: Event) -> None:
@@ -622,6 +628,100 @@ class EventCorrelator:
             avg_confidence = min(avg_confidence + 0.1, 1.0)
         
         return round(avg_confidence, 2)
+
+
+    # =========================================================================
+    # PERSISTENCE & WARM-START
+    # =========================================================================
+
+    async def warm_start(self) -> bool:
+        """Load event history from DB and restore learned patterns."""
+        loaded_events = self._load_history_from_db()
+        loaded_patterns = self._load_learned_patterns()
+        if loaded_events or loaded_patterns:
+            logger.info(f"Warm-start: {len(self.event_history)} events, {len(self._learned_patterns)} learned patterns")
+            return True
+        logger.info("Event correlator cold start — no history available")
+        return False
+
+    def _load_history_from_db(self) -> bool:
+        """Load last 24h of alarms/events from DB into event_history."""
+        try:
+            db = self.db
+            if db is None:
+                from agent_commercial.database import get_database
+                db = get_database()
+
+            import sqlite3
+            conn = sqlite3.connect(str(db.db_path))
+            cutoff = (datetime.now() - timedelta(hours=self.max_history_hours)).isoformat()
+
+            cursor = conn.execute(
+                "SELECT alarm_id, equipment_id, alarm_type, severity, message, timestamp "
+                "FROM alarms WHERE timestamp > ? ORDER BY timestamp",
+                (cutoff,),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+
+            for row in rows:
+                alarm_id, eq_id, alarm_type, severity, message, ts = row
+                self.event_history.append(Event(
+                    event_id=alarm_id or f"alarm_{ts}",
+                    source=EventSource.BMS_ALARM,
+                    timestamp=datetime.fromisoformat(ts) if ts else datetime.now(),
+                    event_type=alarm_type or "unknown",
+                    description=message or "",
+                    equipment_id=eq_id,
+                    metadata={"severity": severity},
+                ))
+
+            return len(rows) > 0
+        except Exception as e:
+            logger.debug(f"Could not load history from DB: {e}")
+            return False
+
+    def _load_learned_patterns(self) -> bool:
+        """Load learned causal patterns from JSON file."""
+        import json
+        from pathlib import Path
+        pattern_file = Path(__file__).parent / "data" / "causal_patterns.json"
+        if not pattern_file.exists():
+            return False
+        try:
+            with open(pattern_file) as f:
+                self._learned_patterns = json.load(f)
+            return bool(self._learned_patterns)
+        except Exception as e:
+            logger.debug(f"Could not load patterns: {e}")
+            return False
+
+    def persist_patterns(self) -> bool:
+        """Save learned causal patterns to disk."""
+        import json
+        from pathlib import Path
+        pattern_file = Path(__file__).parent / "data" / "causal_patterns.json"
+        pattern_file.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(pattern_file, "w") as f:
+                json.dump(self._learned_patterns, f, indent=2)
+            logger.info(f"Persisted {len(self._learned_patterns)} learned patterns")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to persist patterns: {e}")
+            return False
+
+    def learn_pattern(self, trigger_key: str, effect_source: str, effect_type: str, explanation: str, confidence: float = 0.7) -> None:
+        """Record a newly discovered causal pattern."""
+        if trigger_key not in self._learned_patterns:
+            self._learned_patterns[trigger_key] = []
+        self._learned_patterns[trigger_key].append({
+            "effect_source": effect_source,
+            "effect_type": effect_type,
+            "explanation": explanation,
+            "confidence": confidence,
+            "learned_at": datetime.now().isoformat(),
+        })
 
 
 # =============================================================================

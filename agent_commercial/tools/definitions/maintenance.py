@@ -26,6 +26,10 @@ MAINTENANCE_TOOLS = [
             },
             "required": []
         },
+        "version": "1.0.0",
+        "cost_class": "medium",
+        "precedents": ["get_equipment_status"],
+        "produces": ["evidence:maintenance_prediction"],
         "response_schema": {
             "type": "object",
             "properties": {
@@ -53,6 +57,10 @@ MAINTENANCE_TOOLS = [
             },
             "required": ["equipment_id"]
         },
+        "version": "1.0.0",
+        "cost_class": "medium",
+        "precedents": ["get_equipment_status"],
+        "produces": ["evidence:remaining_useful_life"],
         "response_schema": {
             "type": "object",
             "properties": {
@@ -82,6 +90,49 @@ MAINTENANCE_TOOLS = [
                 }
             },
             "required": ["work_order_id", "equipment_id"]
+        },
+        "version": "1.0.0",
+        "cost_class": "cheap",
+        "precedents": ["get_equipment_status"],
+        "produces": ["evidence:maintenance_verification"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "work_order_id": {"type": "string"},
+                "equipment_id": {"type": "string"},
+                "verified": {"type": "boolean", "description": "True if telemetry confirms maintenance was performed"},
+                "verdict": {"type": "string", "description": "CONFIRMED, GHOST_MAINTENANCE, or INSUFFICIENT_DATA"},
+                "pre_metric": {"type": "number", "description": "Metric value before maintenance"},
+                "post_metric": {"type": "number", "description": "Metric value after maintenance"},
+                "improvement_pct": {"type": "number"},
+                "evidence_summary": {"type": "string"}
+            }
+        }
+    },
+    {
+        "name": "predict_filter_degradation",
+        "description": "Predict when AHU filters will need replacement based on differential pressure trend analysis. Uses rolling DP data to extrapolate time-to-threshold and generate early warnings weeks before failure. Returns projected replacement date, confidence, and recommendation.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "equipment_id": {
+                    "type": "string",
+                    "description": "AHU equipment identifier (optional — returns all tracked filters if omitted)",
+                    "examples": ["AHU-01"]
+                }
+            },
+            "required": []
+        },
+        "version": "1.0.0",
+        "cost_class": "medium",
+        "precedents": ["get_equipment_status"],
+        "produces": ["evidence:filter_degradation"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "filters": {"type": "array"},
+                "summary": {"type": "string"}
+            }
         }
     },
 ]

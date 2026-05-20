@@ -30,7 +30,7 @@ try:
     import chromadb
     from chromadb.config import Settings
     CHROMADB_AVAILABLE = True
-except ImportError:
+except Exception:
     CHROMADB_AVAILABLE = False
     logger.warning("[OperatorPatternStore] ChromaDB not available - patterns won't persist")
 

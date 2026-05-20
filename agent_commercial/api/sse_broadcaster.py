@@ -85,6 +85,57 @@ class SSEBroadcaster:
                 queues.remove(dq)
                 self._loops.pop(dq[0], None)
 
+    async def broadcast_plan_update(self, plan, channel: str = "chat"):
+        """
+        P4: Broadcast live investigation plan state to operator.
+        Replaces fixed 4-phase tasks_state with dynamic plan.tasks rendering.
+        """
+        if plan is None:
+            return
+
+        tasks_data = []
+        for t in plan.tasks:
+            status_map = {
+                "pending": "pending",
+                "active": "in_progress",
+                "complete": "completed",
+                "failed": "error",
+                "skipped": "skipped",
+            }
+            tasks_data.append({
+                "id": t.id,
+                "task": t.goal,
+                "status": status_map.get(t.status.value, "pending"),
+                "has_evidence": t.has_evidence,
+            })
+
+        payload = {
+            "plan_id": plan.id,
+            "progress": round(plan.progress * 100),
+            "coverage": round(plan.coverage * 100),
+            "budget": plan.budget.to_dict(),
+            "tasks": tasks_data,
+        }
+
+        # M7.4: Append ml_health when ML evidence is present in the plan
+        try:
+            all_ev = plan.evidence.get_all()
+            ml_ev = [e for e in all_ev if getattr(e, "model_id", None) or getattr(e, "is_ml_fallback", False)]
+            if ml_ev:
+                from agent_commercial.ml.observability import get_ml_observability
+                obs = get_ml_observability()
+                ml_health = {}
+                for ev in ml_ev:
+                    mid = getattr(ev, "model_id", None) or ev.source_tool
+                    if mid and mid not in ml_health:
+                        ml_health[mid] = obs.get_model_health(mid)
+                if ml_health:
+                    payload["ml_health"] = ml_health
+        except Exception:
+            pass
+
+        await self.broadcast("plan_update", payload, channel=channel)
+
     async def subscribe(self, channel: str = "monitor") -> AsyncGenerator[Dict[str, Any], None]:
         """
         Yields events for a single client connection on a specific channel.

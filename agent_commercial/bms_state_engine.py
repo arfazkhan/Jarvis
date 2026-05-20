@@ -84,6 +84,7 @@ class BMSStateEngine:
         # Event callbacks
         self._on_point_update: List[Callable] = []
         self._on_alarm: List[Callable] = []
+        self._on_alarm_resolved: List[Callable] = []
         self._on_equipment_status_change: List[Callable] = []
         
         # Thread safety
@@ -395,7 +396,31 @@ class BMSStateEngine:
                         )
                     except Exception as e:
                         logger.error(f"Failed to persist alarm resolution: {e}")
-                
+
+                # Fire resolution callbacks (e.g. cognitive loop → skillbook write)
+                resolved_alarm = alarm
+                for cb in self._on_alarm_resolved:
+                    try:
+                        cb({
+                            "type": "bms_alarm_resolved",
+                            "payload": {
+                                "alarm": {
+                                    "alarm_id": alarm_id,
+                                    "equipment_id": resolved_alarm.equipment_id,
+                                    "alarm_type": resolved_alarm.alarm_type
+                                        if hasattr(resolved_alarm, "alarm_type") else "unknown",
+                                    "message": resolved_alarm.message
+                                        if hasattr(resolved_alarm, "message") else "",
+                                },
+                                "resolution_summary": (
+                                    f"{resolved_alarm.equipment_id} alarm resolved: "
+                                    + (resolved_alarm.message if hasattr(resolved_alarm, "message") else alarm_id)
+                                ),
+                            },
+                        })
+                    except Exception as _cb_err:
+                        logger.warning(f"alarm_resolved callback error: {_cb_err}")
+
                 return True
             return False
     
@@ -455,8 +480,12 @@ class BMSStateEngine:
         """Register callback for new alarms"""
         self._on_alarm.append(callback)
     
+    def on_alarm_resolved(self, callback: Callable[[dict], None]) -> None:
+        """Register callback fired when an alarm is resolved. Payload is the event dict."""
+        self._on_alarm_resolved.append(callback)
+
     def on_equipment_status_change(
-        self, 
+        self,
         callback: Callable[[str, EquipmentStatus, EquipmentStatus], None]
     ) -> None:
         """Register callback for equipment status changes"""
@@ -486,10 +515,6 @@ class BMSStateEngine:
         """Get summary of current building state."""
         return await self.get_stats()
         
-    def get_points_by_equipment(self, equipment_id: str) -> List[BMSDataPoint]:
-        """Get all data points for a specific equipment."""
-        return [p for p in self._points.values() if p.equipment_id == equipment_id]
-        
     async def get_stats(self) -> Dict[str, Any]:
         """Get state engine statistics"""
         async with self._lock:
@@ -499,7 +524,160 @@ class BMSStateEngine:
                 "point_count": len(self._points),
                 "alarm_count": len(self._alarms),
                 "active_alarm_count": len([
-                    a for a in self._alarms.values() 
+                    a for a in self._alarms.values()
                     if a.state in (AlarmState.ACTIVE, AlarmState.ACKNOWLEDGED)
                 ]),
             }
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # PERSISTENCE — Snapshot & Restore for Warm-Start
+    # ═══════════════════════════════════════════════════════════════════════
+
+    async def take_snapshot(self) -> None:
+        """Persist current state to database for warm-start recovery."""
+        if not self.db:
+            return
+
+        try:
+            import json
+            async with self._lock:
+                equipment_data = []
+                for eq in self._equipment.values():
+                    equipment_data.append({
+                        "equipment_id": eq.equipment_id,
+                        "name": eq.name,
+                        "equipment_type": eq.equipment_type.value,
+                        "status": eq.status.value,
+                        "location": eq.location or "",
+                        "runtime_hours": eq.runtime_hours or 0,
+                        "efficiency": (eq.efficiency * 100) if eq.efficiency else None,
+                        "parent_equipment_id": eq.parent_equipment_id or "",
+                    })
+
+                points_data = []
+                for p in self._points.values():
+                    if p.value is not None:
+                        points_data.append({
+                            "point_id": p.point_id,
+                            "equipment_id": p.equipment_id or "",
+                            "value": p.value,
+                            "unit": p.unit or "",
+                            "timestamp": p.timestamp.isoformat() if p.timestamp else datetime.now().isoformat(),
+                        })
+
+                alarms_data = []
+                for a in self._alarms.values():
+                    if a.state in (AlarmState.ACTIVE, AlarmState.ACKNOWLEDGED):
+                        alarms_data.append({
+                            "alarm_id": a.alarm_id,
+                            "equipment_id": a.equipment_id,
+                            "message": a.message,
+                            "severity": a.severity.value,
+                            "state": a.state.value,
+                            "triggered_at": a.triggered_at.isoformat() if a.triggered_at else None,
+                        })
+
+            snapshot = {
+                "equipment": equipment_data,
+                "points": points_data,
+                "alarms": alarms_data,
+                "timestamp": datetime.now().isoformat(),
+            }
+
+            conn = await self.db._get_async_connection()
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS state_snapshots (
+                    id INTEGER PRIMARY KEY,
+                    snapshot_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            await conn.execute(
+                "DELETE FROM state_snapshots WHERE id NOT IN (SELECT id FROM state_snapshots ORDER BY created_at DESC LIMIT 5)"
+            )
+            await conn.execute(
+                "INSERT INTO state_snapshots (snapshot_json, created_at) VALUES (?, ?)",
+                (json.dumps(snapshot), datetime.now().isoformat())
+            )
+            await conn.commit()
+            logger.info(f"State snapshot saved: {len(equipment_data)} equipment, {len(points_data)} points, {len(alarms_data)} alarms")
+
+        except Exception as e:
+            logger.error(f"Failed to take state snapshot: {e}")
+
+    async def restore_from_snapshot(self) -> bool:
+        """Restore state from most recent database snapshot (warm-start)."""
+        if not self.db:
+            return False
+
+        try:
+            import json
+            conn = await self.db._get_async_connection()
+
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS state_snapshots (
+                    id INTEGER PRIMARY KEY,
+                    snapshot_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """)
+
+            async with conn.execute(
+                "SELECT snapshot_json FROM state_snapshots ORDER BY created_at DESC LIMIT 1"
+            ) as cursor:
+                row = await cursor.fetchone()
+
+            if not row:
+                logger.info("No snapshot found — cold start")
+                return False
+
+            snapshot = json.loads(row[0])
+
+            for eq_data in snapshot.get("equipment", []):
+                eq = Equipment(
+                    equipment_id=eq_data["equipment_id"],
+                    name=eq_data["name"],
+                    equipment_type=EquipmentType(eq_data["equipment_type"]),
+                    status=EquipmentStatus(eq_data["status"]),
+                    location=eq_data.get("location", ""),
+                    runtime_hours=eq_data.get("runtime_hours", 0),
+                    efficiency=eq_data["efficiency"] / 100 if eq_data.get("efficiency") else None,
+                    parent_equipment_id=eq_data.get("parent_equipment_id") or None,
+                )
+                self._equipment[eq.equipment_id] = eq
+                if eq.location:
+                    self._update_topology(eq)
+
+            for pt_data in snapshot.get("points", []):
+                point = BMSDataPoint(
+                    point_id=pt_data["point_id"],
+                    name=pt_data.get("name", pt_data["point_id"]),
+                    equipment_id=pt_data.get("equipment_id", ""),
+                    value=pt_data["value"],
+                    unit=pt_data.get("unit", ""),
+                    timestamp=datetime.fromisoformat(pt_data["timestamp"]) if pt_data.get("timestamp") else datetime.now(),
+                )
+                self._points[point.point_id] = point
+
+            for al_data in snapshot.get("alarms", []):
+                from agent_commercial.bms_data_model import AlarmSeverity
+                alarm = Alarm(
+                    alarm_id=al_data["alarm_id"],
+                    equipment_id=al_data["equipment_id"],
+                    message=al_data["message"],
+                    severity=AlarmSeverity(al_data["severity"]),
+                    state=AlarmState(al_data["state"]),
+                )
+                if al_data.get("triggered_at"):
+                    alarm.triggered_at = datetime.fromisoformat(al_data["triggered_at"])
+                self._alarms[alarm.alarm_id] = alarm
+
+            logger.info(
+                f"State restored from snapshot: {len(self._equipment)} equipment, "
+                f"{len(self._points)} points, {len(self._alarms)} alarms"
+            )
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to restore from snapshot: {e}")
+            return False

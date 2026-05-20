@@ -67,6 +67,7 @@ class CognitiveLoop:
         # New Agentic Engines
         self.goal_generator = None
         self.goal_discovery = None
+        self.goal_tracker = None
         self.meta_cognition = MetaCognition() # Always available (uses shared DB)
         
         self.running = False
@@ -95,6 +96,9 @@ class CognitiveLoop:
             self._energy_analyzer = EnergyAnalyzer()
             self._pm_engine = PredictiveMaintenanceEngine()
             self._fleet_intelligence = FleetIntelligence()
+
+            # Wire alarm-resolved → skillbook write (state machine, not LLM-optional)
+            self._bms_state.on_alarm_resolved(self._on_event)
             
             # Initialize Goal Discovery Stack
             self.goal_generator = GoalGenerator(
@@ -110,8 +114,18 @@ class CognitiveLoop:
                 event_bus=self.event_bus,
                 check_interval_seconds=900
             )
-            
-            logger.info("BMS engines and Goal Discovery initialized for commercial mode")
+
+            # Goal Execution Tracker — subscribes to discovery events, tracks lifecycle
+            from agent_advisory.goal_execution_tracker import GoalExecutionTracker
+            self.goal_tracker = GoalExecutionTracker(
+                event_bus=self.event_bus,
+                bms_state=self._bms_state,
+                remind_after_hours=24.0,
+                expire_after_days=7,
+                max_reminders=3,
+            )
+
+            logger.info("BMS engines, Goal Discovery, and Goal Tracker initialized for commercial mode")
         except ImportError as e:
             logger.warning(f"Could not initialize BMS engines: {e}")
 
@@ -154,17 +168,35 @@ class CognitiveLoop:
         if self.mode == ArvisMode.COMMERCIAL:
             interval = min(interval, 300)  # Max 5 minutes for BMS
         
+        _last_retrain_check = 0.0
+        _RETRAIN_CHECK_INTERVAL = 3600  # hourly
+
         while self.running:
             # 1. Process Event Queue (Batch or Continuous)
             self._process_queue()
-            
+
             # 2. Run Prediction Cycle periodically
             if time.time() - last_cycle_time > interval:
                 self.run_cycle()
                 # 3. Cleanup expired context
                 self.context.cleanup_expired_edges()
                 last_cycle_time = time.time()
-                
+
+            # 4. M4.2: Hourly retrain trigger check
+            if time.time() - _last_retrain_check > _RETRAIN_CHECK_INTERVAL:
+                _last_retrain_check = time.time()
+                try:
+                    import asyncio as _asyncio
+                    from agent_commercial.ml.retrain_scheduler import get_retrain_scheduler
+                    _sched = get_retrain_scheduler()
+                    _loop = _asyncio.new_event_loop()
+                    _results = _loop.run_until_complete(_sched.check_and_execute())
+                    _loop.close()
+                    if _results:
+                        logger.info(f"[CognitiveLoop] RetrainScheduler executed {len(_results)} retrain(s)")
+                except Exception as _re:
+                    logger.debug(f"[CognitiveLoop] RetrainScheduler check failed: {_re}")
+
             time.sleep(0.1)  # Prevent CPU spin
 
     def _process_queue(self):
@@ -226,17 +258,109 @@ class CognitiveLoop:
             alarm = payload.get("alarm")
             if alarm and self._alarm_engine:
                 self._alarm_engine.ingest_alarm(alarm)
-                
+
+        elif event_type == "bms_alarm_resolved":
+            # Alarm resolved → programmatic skillbook write
+            # This fires regardless of whether ARVIS mentioned skillbook in its response.
+            alarm = payload.get("alarm", {})
+            resolution = payload.get("resolution_summary", "")
+            equipment_id = alarm.get("equipment_id") or payload.get("equipment_id")
+            if equipment_id and resolution:
+                import threading as _threading
+                _threading.Thread(
+                    target=self._write_resolved_fault_sync,
+                    args=(equipment_id, alarm.get("alarm_type", "unknown"), resolution),
+                    daemon=True,
+                ).start()
+
         elif event_type == "bms_energy_reading":
             # Energy meter reading
             reading = payload.get("reading")
             if reading and self._energy_analyzer:
                 self._energy_analyzer.add_reading(reading)
 
+    def _write_resolved_fault_sync(
+        self,
+        equipment_id: str,
+        alarm_type: str,
+        resolution_summary: str,
+    ) -> None:
+        """Sync thread wrapper — runs the async skillbook write in a new event loop."""
+        import asyncio as _asyncio
+        try:
+            loop = _asyncio.new_event_loop()
+            loop.run_until_complete(
+                self._write_resolved_fault_to_skillbook(
+                    equipment_id, alarm_type, resolution_summary
+                )
+            )
+        except Exception as e:
+            logger.warning(f"[Skillbook] Sync write thread failed: {e}")
+        finally:
+            loop.close()
+
+    async def _write_resolved_fault_to_skillbook(
+        self,
+        equipment_id: str,
+        alarm_type: str,
+        resolution_summary: str,
+    ) -> None:
+        """
+        State-machine triggered skillbook write on alarm resolution.
+        Fires from event bus — not LLM-optional.
+        """
+        try:
+            from agent_advisory.knowledge_base import TechnicalKnowledgeBase
+            kb = TechnicalKnowledgeBase()
+            if hasattr(kb, "add_skill"):
+                await kb.add_skill(
+                    title=f"{equipment_id} — {alarm_type} resolved",
+                    description=resolution_summary,
+                    skill_type="fault_pattern",
+                    equipment_id=equipment_id,
+                    confidence=0.75,
+                    tags=[equipment_id, alarm_type, "auto_recorded"],
+                )
+                logger.info(
+                    f"[Skillbook] Fault resolution recorded: {equipment_id} / {alarm_type}"
+                )
+        except Exception as e:
+            logger.warning(f"[Skillbook] Resolution write failed (non-fatal): {e}")
+
+    def _act_on_prediction(self, prediction) -> None:
+        """If prediction confidence > threshold, publish a proactive advisory."""
+        threshold = CONFIG.get("prediction", {}).get("confidence_threshold", 0.7)
+        if prediction.confidence < threshold:
+            return
+
+        predicted = prediction.predicted or {}
+        advisory = {
+            "type": "proactive_prediction",
+            "priority": "medium",
+            "prediction_type": prediction.prediction_type.value if hasattr(prediction.prediction_type, 'value') else str(prediction.prediction_type),
+            "confidence": prediction.confidence,
+            "horizon_minutes": prediction.horizon_minutes,
+            "predicted_values": predicted,
+            "message": f"Predicted {prediction.prediction_type.value}: confidence {prediction.confidence:.0%}",
+        }
+
+        # Escalate to high priority if energy anomaly or equipment degradation
+        if predicted.get("total_power_kw", 0) > 500:
+            advisory["priority"] = "high"
+            advisory["message"] = f"High energy demand predicted ({predicted['total_power_kw']:.0f} kW) in {prediction.horizon_minutes}min"
+
+        self.event_bus.publish({
+            "type": "proactive_advisory",
+            "source": "cognitive_loop",
+            "mode": self.mode.value,
+            "payload": advisory,
+        })
+        logger.info(f"[CognitiveLoop] Proactive advisory: {advisory['message']}")
+
     def run_cycle(self):
         """
         Run the cognitive cycle: Observe -> Reason -> Act
-        
+
         Behavior depends on mode:
         - Residential: Comfort predictions, device suggestions
         - Commercial: Equipment health, alarm analysis, energy insights
@@ -246,7 +370,7 @@ class CognitiveLoop:
                 self._run_residential_cycle()
             else:
                 self._run_commercial_cycle()
-                
+
         except Exception as e:
             logger.error(f"Error in cognitive cycle: {e}")
 
@@ -303,7 +427,34 @@ class CognitiveLoop:
         if self._pm_engine:
             maintenance = self._check_predictive_maintenance()
             suggestions.extend(maintenance)
-        
+
+        # 4.5. Filter degradation trend scan (runs every cycle, lightweight)
+        if self._pm_engine and hasattr(self._pm_engine, "filter_predictor"):
+            try:
+                filter_warnings = self._pm_engine.filter_predictor.scan_all_filters()
+                for fw in filter_warnings:
+                    if fw.risk_level in ("high", "critical"):
+                        suggestions.append({
+                            "type": "filter_degradation",
+                            "priority": fw.risk_level,
+                            "equipment_id": fw.equipment_id,
+                            "message": fw.recommendation,
+                            "projected_days": fw.projected_days_to_threshold,
+                            "confidence": fw.confidence,
+                            "current_dp_pa": fw.current_dp_pa,
+                        })
+            except Exception as e:
+                logger.debug(f"Filter degradation scan skipped: {e}")
+
+        # 4.6. Energy Demand Prediction → Act
+        try:
+            from agent_cognitive.prediction_engine import PredictionType
+            prediction = self.predictor.predict_next_actions({})
+            if hasattr(prediction, 'confidence'):
+                self._act_on_prediction(prediction)
+        except Exception as e:
+            logger.debug(f"Prediction step skipped: {e}")
+
         # 5. Proactive Goal Discovery (NEW)
         if self.goal_discovery:
             # Building ID is needed - assume context graph has it or default
@@ -311,6 +462,13 @@ class CognitiveLoop:
             new_goals = self.goal_discovery.run_discovery_cycle(building_id)
             if new_goals:
                 logger.info(f"Discovered {len(new_goals)} proactive goals")
+
+        # 5.1 Goal Execution Tracking — check status of active goals (read-only)
+        if self.goal_tracker:
+            try:
+                self.goal_tracker.check_all_goals()
+            except Exception as _e:
+                logger.debug(f"[CognitiveLoop] Goal tracker check failed: {_e}")
                 
         # 6. PHASE 4: Background Dreaming — real Monte Carlo What-If via Queen Swarm
         if int(time.time()) % 3600 < 300:
@@ -362,8 +520,71 @@ class CognitiveLoop:
             if reflection.get("calibration", {}).get("verdict") == "overconfident":
                 logger.warning("[CognitiveLoop] Meta-Cognition: Overconfidence detected. Increasing EWC++ importance.")
 
-        # 7. Publish Insights
+        # 7. LLM cross-signal synthesis (when ≥2 distinct signal types present)
+        if len(set(s.get("type") for s in suggestions)) >= 2:
+            self._synthesize_cross_signal_insight(suggestions)
+
+        # 8. Publish Insights
         self._publish_suggestions(suggestions, source="ops_copilot")
+
+    def _synthesize_cross_signal_insight(self, suggestions: List[Dict[str, Any]]) -> None:
+        """
+        Use LLM to synthesize a cross-signal narrative when multiple signal types
+        co-occur (e.g. filter degradation + energy waste + alarm cascade on same
+        equipment), then publish as a 'cross_signal_insight' event.
+
+        Runs synchronously in the cognitive background thread via run_until_complete.
+        Gracefully no-ops if no LLM is available or the call fails.
+        """
+        try:
+            from agent_unified.llm import UnifiedLLM
+            import asyncio
+
+            llm = UnifiedLLM()
+
+            signal_lines = []
+            for s in suggestions[:8]:
+                sig_type = s.get("type", "unknown")
+                equip = s.get("equipment_id", "")
+                msg = s.get("message", "")
+                priority = s.get("priority", "")
+                signal_lines.append(
+                    f"[{priority.upper()}] {sig_type}"
+                    + (f" / {equip}" if equip else "")
+                    + f": {msg}"
+                )
+
+            prompt = (
+                "You are an expert BMS intelligence engine for a large commercial building in Qatar.\n"
+                "The following simultaneous signals were detected this cycle. "
+                "Synthesize them into ONE cohesive insight paragraph (3–5 sentences) for the facility manager. "
+                "If multiple signals point to the same root cause or equipment, say so explicitly. "
+                "Be concise, specific, and action-oriented. Do NOT use bullet points.\n\n"
+                "Signals:\n" + "\n".join(signal_lines)
+            )
+
+            async def _call() -> str:
+                resp = await llm.chat([{"role": "user", "content": prompt}])
+                return (resp.content or "").strip()
+
+            loop = asyncio.get_event_loop()
+            insight_text = loop.run_until_complete(_call())
+
+            if insight_text:
+                self.event_bus.publish({
+                    "type": "cross_signal_insight",
+                    "source": "cognitive_loop_llm",
+                    "mode": self.mode.value,
+                    "payload": {
+                        "insight": insight_text,
+                        "signal_count": len(suggestions),
+                        "signal_types": list({s.get("type") for s in suggestions}),
+                        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    },
+                })
+                logger.info("[CognitiveLoop] Cross-signal LLM insight published.")
+        except Exception as exc:
+            logger.debug("Cross-signal LLM synthesis skipped: %s", exc)
 
     def _check_equipment_health(self) -> List[Dict[str, Any]]:
         """Check equipment health status"""
@@ -521,9 +742,114 @@ class CognitiveLoop:
             })
 
     # ═══════════════════════════════════════════════════════════════════════
+    # CHECKPOINTING & WARM-START
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def save_checkpoint(self, db=None) -> bool:
+        """Persist cognitive state for warm-start recovery."""
+        try:
+            import json
+            import sqlite3
+
+            if db is None:
+                from agent_commercial.database import get_database
+                db = get_database()
+
+            conn = sqlite3.connect(str(db.db_path))
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS cognitive_checkpoints (
+                    component TEXT PRIMARY KEY,
+                    state_json TEXT NOT NULL,
+                    timestamp TEXT NOT NULL
+                )
+            """)
+
+            now = time.strftime("%Y-%m-%dT%H:%M:%S")
+
+            # Save energy baselines from predictor
+            if hasattr(self.predictor, '_energy_baseline'):
+                conn.execute(
+                    "INSERT OR REPLACE INTO cognitive_checkpoints (component, state_json, timestamp) VALUES (?, ?, ?)",
+                    ("energy_baseline", json.dumps(self.predictor._energy_baseline), now),
+                )
+
+            # Save performance baselines
+            if hasattr(self.predictor, '_performance_baselines'):
+                conn.execute(
+                    "INSERT OR REPLACE INTO cognitive_checkpoints (component, state_json, timestamp) VALUES (?, ?, ?)",
+                    ("performance_baselines", json.dumps(self.predictor._performance_baselines), now),
+                )
+
+            # Save transition patterns
+            if hasattr(self.predictor, '_transition_patterns'):
+                conn.execute(
+                    "INSERT OR REPLACE INTO cognitive_checkpoints (component, state_json, timestamp) VALUES (?, ?, ?)",
+                    ("transition_patterns", json.dumps(self.predictor._transition_patterns), now),
+                )
+
+            # Save meta-cognition state
+            if self.meta_cognition:
+                meta_state = {
+                    "ewc_weights": getattr(self.meta_cognition, '_ewc_weights', {}),
+                    "decision_count": getattr(self.meta_cognition, '_decision_count', 0),
+                }
+                conn.execute(
+                    "INSERT OR REPLACE INTO cognitive_checkpoints (component, state_json, timestamp) VALUES (?, ?, ?)",
+                    ("meta_cognition", json.dumps(meta_state, default=str), now),
+                )
+
+            conn.commit()
+            conn.close()
+            logger.info("Cognitive checkpoint saved")
+            return True
+        except Exception as e:
+            logger.error(f"Checkpoint save failed: {e}")
+            return False
+
+    def load_checkpoint(self, db=None) -> bool:
+        """Restore cognitive state from last checkpoint."""
+        try:
+            import json
+            import sqlite3
+
+            if db is None:
+                from agent_commercial.database import get_database
+                db = get_database()
+
+            conn = sqlite3.connect(str(db.db_path))
+            cursor = conn.execute("SELECT component, state_json FROM cognitive_checkpoints")
+            rows = cursor.fetchall()
+            conn.close()
+
+            if not rows:
+                logger.info("No cognitive checkpoint found — cold start")
+                return False
+
+            for component, state_json in rows:
+                state = json.loads(state_json)
+
+                if component == "energy_baseline" and hasattr(self.predictor, '_energy_baseline'):
+                    self.predictor._energy_baseline = state
+                elif component == "performance_baselines" and hasattr(self.predictor, '_performance_baselines'):
+                    self.predictor._performance_baselines = state
+                elif component == "transition_patterns" and hasattr(self.predictor, '_transition_patterns'):
+                    self.predictor._transition_patterns = state
+                elif component == "meta_cognition" and self.meta_cognition:
+                    if hasattr(self.meta_cognition, '_ewc_weights'):
+                        self.meta_cognition._ewc_weights = state.get("ewc_weights", {})
+                    if hasattr(self.meta_cognition, '_decision_count'):
+                        self.meta_cognition._decision_count = state.get("decision_count", 0)
+
+            logger.info(f"Cognitive checkpoint restored ({len(rows)} components)")
+            return True
+        except Exception as e:
+            logger.error(f"Checkpoint load failed: {e}")
+            return False
+
+    # ═══════════════════════════════════════════════════════════════════════
     # BMS ENGINE INJECTION (for testing and external configuration)
     # ═══════════════════════════════════════════════════════════════════════
-    
+
     def set_bms_engines(
         self,
         bms_state=None,
@@ -533,7 +859,7 @@ class CognitiveLoop:
     ):
         """
         Inject BMS engines from external source.
-        
+
         Useful when BMS engines are already initialized elsewhere
         (e.g., in agent_commercial.main).
         """
@@ -545,6 +871,6 @@ class CognitiveLoop:
             self._energy_analyzer = energy_analyzer
         if pm_engine:
             self._pm_engine = pm_engine
-        
+
         logger.info("BMS engines injected into cognitive loop")
 

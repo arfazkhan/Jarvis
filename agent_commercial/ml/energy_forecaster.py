@@ -585,9 +585,92 @@ class EnergyForecaster:
         }
 
 
+    # =========================================================================
+    # MODEL PERSISTENCE (ModelRegistry Integration)
+    # =========================================================================
+
+    def save_model(self, metrics: Optional[Dict] = None) -> Optional[str]:
+        """Save trained models to ModelRegistry."""
+        from agent_commercial.ml.model_registry import get_model_registry
+        registry = get_model_registry()
+
+        model_state = {
+            "prophet_trained": self.prophet_trained,
+            "lgbm_trained": self.lgbm_trained,
+            "prophet_weight": self.prophet_weight,
+            "lgbm_weight": self.lgbm_weight,
+            "training_mean": self.training_mean,
+            "training_std": self.training_std,
+            "feature_names": self.feature_names,
+            "building_id": self.building_id,
+        }
+
+        extra = {}
+        if self.prophet_model and self.prophet_trained:
+            extra["prophet_model"] = self.prophet_model
+        if self.lgbm_model and self.lgbm_trained:
+            extra["lgbm_model"] = self.lgbm_model
+
+        save_metrics = metrics or {"prophet_trained": self.prophet_trained, "lgbm_trained": self.lgbm_trained}
+        version = registry.save_model("energy_forecaster", model_state, save_metrics, extra_artifacts=extra or None)
+        logger.info(f"Energy forecaster saved: energy_forecaster/{version}")
+        return version
+
+    def load_model(self) -> bool:
+        """Load trained models from ModelRegistry."""
+        from agent_commercial.ml.model_registry import get_model_registry
+        registry = get_model_registry()
+
+        model_state, metadata = registry.load_model("energy_forecaster")
+        if model_state is None:
+            return False
+
+        self.prophet_trained = model_state.get("prophet_trained", False)
+        self.lgbm_trained = model_state.get("lgbm_trained", False)
+        self.prophet_weight = model_state.get("prophet_weight", 0.4)
+        self.lgbm_weight = model_state.get("lgbm_weight", 0.6)
+        self.training_mean = model_state.get("training_mean", 0.0)
+        self.training_std = model_state.get("training_std", 1.0)
+        self.feature_names = model_state.get("feature_names", [])
+
+        prophet = registry.load_artifact("energy_forecaster", "prophet_model")
+        if prophet:
+            self.prophet_model = prophet
+
+        lgbm = registry.load_artifact("energy_forecaster", "lgbm_model")
+        if lgbm:
+            self.lgbm_model = lgbm
+
+        logger.info(f"Energy forecaster loaded (prophet={self.prophet_trained}, lgbm={self.lgbm_trained})")
+        return True
+
+    async def retrain(self, data: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
+        """Retrain pipeline for RetrainScheduler integration."""
+        if data is None:
+            logger.warning("No training data provided for energy forecaster retrain")
+            return {"status": "skipped", "reason": "no_data"}
+
+        result = self.train(data)
+        if result.get("status") != "failed":
+            self.save_model(result)
+        return result
+
+
 # =============================================================================
-# CONVENIENCE FUNCTION
+# SINGLETON & CONVENIENCE
 # =============================================================================
+
+_forecaster_instance: Optional[EnergyForecaster] = None
+
+
+def get_energy_forecaster(building_id: str = "default") -> EnergyForecaster:
+    """Get or create energy forecaster with model loading."""
+    global _forecaster_instance
+    if _forecaster_instance is None or _forecaster_instance.building_id != building_id:
+        _forecaster_instance = EnergyForecaster(building_id)
+        _forecaster_instance.load_model()
+    return _forecaster_instance
+
 
 def forecast_energy(
     building_id: str = "default",
@@ -597,7 +680,7 @@ def forecast_energy(
     """
     Generate energy forecast - LLM tool handler.
     """
-    forecaster = EnergyForecaster(building_id)
+    forecaster = get_energy_forecaster(building_id)
     result = forecaster.predict(horizon_hours, outdoor_temps)
     return result.to_dict()
 

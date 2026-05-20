@@ -15,7 +15,23 @@ from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 
 # Configuration (In production, use environment variables)
-SECRET_KEY = os.getenv("ARVIS_AUTH_SECRET", "arvis_omega_infinity_2026_top_secret_key")
+_secret = os.getenv("ARVIS_AUTH_SECRET")
+if not _secret:
+    import sys
+    # In production crash hard — a missing secret means tokens can be forged.
+    # In development, allow a loud warning + generated ephemeral secret so the
+    # server still starts without requiring env setup.
+    if os.getenv("ARVIS_ENV", "development").lower() == "production":
+        print("FATAL: ARVIS_AUTH_SECRET env var not set. Refusing to start in production.", file=sys.stderr)
+        sys.exit(1)
+    import secrets as _secrets
+    _secret = _secrets.token_hex(32)
+    import logging as _logging
+    _logging.getLogger("arvis.auth").warning(
+        "ARVIS_AUTH_SECRET not set — generated ephemeral secret. "
+        "Tokens will be invalidated on restart. Set ARVIS_AUTH_SECRET for production."
+    )
+SECRET_KEY = _secret
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
 

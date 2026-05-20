@@ -538,13 +538,21 @@ def is_qatar_working_day(dt: datetime) -> bool:
 
 
 def is_ramadan(dt: datetime) -> bool:
-    """Check if date is during Ramadan (approximate)"""
-    # Ramadan dates shift each year - this is approximate
-    # In a production system, use hijri calendar library
-    # For 2024, Ramadan is approximately March 10 - April 9
-    ramadan_start = datetime(dt.year, 3, 10)
-    ramadan_end = datetime(dt.year, 4, 9)
-    return ramadan_start <= dt <= ramadan_end
+    """Check if date falls during Ramadan using Hijri calendar conversion."""
+    try:
+        from hijri_converter import Hijri, Gregorian
+        hijri_date = Gregorian(dt.year, dt.month, dt.day).to_hijri()
+        return hijri_date.month == 9  # Ramadan is the 9th month in Hijri calendar
+    except ImportError:
+        # Fallback: approximate using known Ramadan dates (shifts ~11 days/year)
+        # Base: 2024 Ramadan started March 11
+        base_year = 2024
+        base_start_day = 71  # March 11 = day 71 of year
+        years_diff = dt.year - base_year
+        approx_start_day = base_start_day - int(years_diff * 10.8)
+        approx_start_day = approx_start_day % 365
+        day_of_year = dt.timetuple().tm_yday
+        return approx_start_day <= day_of_year <= approx_start_day + 29
 
 
 def is_summer(dt: datetime) -> bool:

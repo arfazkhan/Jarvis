@@ -46,7 +46,7 @@ class LLMAgent:
         
         # Initialize Groq client if API key exists
         groq_key = os.getenv("GROQ_API_KEY")
-        if groq_key:
+        if groq_key and groq_key.strip():
             try:
                 from groq import Groq
                 self._groq_client = Groq(api_key=groq_key)
@@ -68,8 +68,8 @@ class LLMAgent:
                 logger.error(f"Groq API error: {e}")
                 return f'{"error": "LLM call failed"}'
         
-        # Fallback: return mock response
-        return '{"status": "ok", "confidence": 0.85}'
+        logger.warning("No LLM provider available — returning fallback error")
+        return '{"error": "no_provider_configured", "fallback": true}'
     
     async def ask_tool(
         self,

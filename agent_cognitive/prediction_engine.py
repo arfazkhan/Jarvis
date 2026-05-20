@@ -96,18 +96,24 @@ class DriftReport:
     # Trend
     error_trend: str = "stable"  # "improving", "stable", "worsening"
     
+    # ML lineage (M5.2)
+    model_id: Optional[str] = None
+
     # Recommendation
     needs_retraining: bool = False
     alerts: List[str] = field(default_factory=list)
     
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "building_id": self.building_id,
             "drift_score": round(self.drift_score, 3),
             "error_trend": self.error_trend,
             "needs_retraining": self.needs_retraining,
             "alerts": self.alerts,
         }
+        if self.model_id is not None:
+            d["model_id"] = self.model_id
+        return d
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -435,6 +441,7 @@ class PredictionEngine:
                 building_id=self.building_id,
                 time_window_hours=time_window_hours,
                 alerts=["Insufficient validation data for drift analysis"],
+                model_id=f"prediction_engine:{self.building_id}",
             )
         
         # Compute errors
@@ -456,6 +463,7 @@ class PredictionEngine:
                 building_id=self.building_id,
                 time_window_hours=time_window_hours,
                 alerts=["No errors computed in validation data"],
+                model_id=f"prediction_engine:{self.building_id}",
             )
         
         mean_error = np.mean(errors)
@@ -495,7 +503,7 @@ class PredictionEngine:
         if needs_retraining:
             alerts.append("Model retraining recommended")
         
-        return DriftReport(
+        report = DriftReport(
             building_id=self.building_id,
             time_window_hours=time_window_hours,
             mean_error=round(mean_error, 2),
@@ -506,7 +514,23 @@ class PredictionEngine:
             error_trend=error_trend,
             needs_retraining=needs_retraining,
             alerts=alerts,
+            model_id=f"prediction_engine:{self.building_id}",
         )
+
+        # M4.2: Feed drift into RetrainScheduler — immediate trigger if threshold breached
+        if needs_retraining:
+            try:
+                from agent_commercial.ml.retrain_scheduler import get_retrain_scheduler
+                _scheduler = get_retrain_scheduler()
+                await _scheduler.on_drift_detected(
+                    model_id=f"prediction_engine:{self.building_id}",
+                    drift_score=drift_score,
+                )
+                logger.info(f"[PredictionEngine] Drift {drift_score:.3f} → immediate retrain triggered")
+            except Exception as _e:
+                logger.debug(f"[PredictionEngine] RetrainScheduler feed failed: {_e}")
+
+        return report
     
     # ═══════════════════════════════════════════════════════════════════════
     # LEARNING & ADAPTATION
@@ -678,11 +702,92 @@ class PredictionEngine:
             if not p.validated_at and p.created_at > cutoff
         ]
     
+    # ═══════════════════════════════════════════════════════════════════════
+    # PERSISTENCE (Warm-Start)
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def save_baselines(self, db=None) -> bool:
+        """Persist baselines to DB for warm-start recovery."""
+        try:
+            if db is None:
+                from agent_commercial.database import get_database
+                db = get_database()
+
+            import sqlite3
+            conn = sqlite3.connect(str(db.db_path))
+            cursor = conn.cursor()
+
+            cursor.execute("DELETE FROM prediction_baselines WHERE building_id = ?", (self.building_id,))
+
+            for hour, value in self._energy_baseline.items():
+                cursor.execute(
+                    "INSERT INTO prediction_baselines (building_id, hour, metric, value, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    (self.building_id, int(hour), "energy_kw", value, datetime.now().isoformat()),
+                )
+
+            for eq_id, metrics in self._performance_baselines.items():
+                for metric_name, value in metrics.items():
+                    cursor.execute(
+                        "INSERT INTO prediction_baselines (building_id, hour, metric, value, updated_at) VALUES (?, ?, ?, ?, ?)",
+                        (self.building_id, -1, f"perf_{eq_id}_{metric_name}", value, datetime.now().isoformat()),
+                    )
+
+            conn.commit()
+            conn.close()
+            logger.info(f"Saved {len(self._energy_baseline)} energy baselines + {len(self._performance_baselines)} performance baselines")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to save baselines: {e}")
+            return False
+
+    def load_baselines(self, db=None) -> bool:
+        """Load baselines from DB on startup (warm-start)."""
+        try:
+            if db is None:
+                from agent_commercial.database import get_database
+                db = get_database()
+
+            import sqlite3
+            conn = sqlite3.connect(str(db.db_path))
+            cursor = conn.cursor()
+
+            cursor.execute(
+                "SELECT hour, metric, value FROM prediction_baselines WHERE building_id = ?",
+                (self.building_id,),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+
+            if not rows:
+                logger.info("No stored baselines found — cold start")
+                return False
+
+            energy_count = 0
+            perf_count = 0
+            for hour, metric, value in rows:
+                if metric == "energy_kw":
+                    self._energy_baseline[str(hour)] = value
+                    energy_count += 1
+                elif metric.startswith("perf_"):
+                    parts = metric[5:].rsplit("_", 1)
+                    if len(parts) == 2:
+                        eq_id, metric_name = parts
+                        if eq_id not in self._performance_baselines:
+                            self._performance_baselines[eq_id] = {}
+                        self._performance_baselines[eq_id][metric_name] = value
+                        perf_count += 1
+
+            logger.info(f"Warm-start: loaded {energy_count} energy baselines, {perf_count} performance baselines")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to load baselines: {e}")
+            return False
+
     def get_stats(self) -> Dict[str, Any]:
         """Get prediction engine statistics."""
         validated = [p for p in self._prediction_history if p.validated_at]
         errors = [p.error for p in validated if p.error is not None]
-        
+
         return {
             "total_predictions": len(self._prediction_history),
             "validated_predictions": len(validated),

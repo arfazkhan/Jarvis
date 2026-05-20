@@ -1,0 +1,50 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# ARVIS Lite Mode — Minimal Footprint for Pilot Deployments
+# ═══════════════════════════════════════════════════════════════════════════════
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.lite.yml up -d
+#
+# Disables:
+#   - Cognitive Loop (no background predictions)
+#   - Swarm (single-agent mode, no multi-agent consensus)
+#   - ML Models (rule-based fallbacks only)
+#   - Fleet Intelligence (single building)
+#   - Learning Engine (no periodic learning cycles)
+#   - Prometheus/Grafana monitoring stack
+#
+# Estimated footprint: ~512MB RAM, 1 CPU core
+# ═══════════════════════════════════════════════════════════════════════════════
+
+version: '3.8'
+
+services:
+  arvis-api:
+    environment:
+      - ARVIS_LITE=true
+      - ARVIS_VERTICAL=COMMERCIAL
+      - LOG_LEVEL=INFO
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+
+  # Disable monitoring in lite mode
+  prometheus:
+    profiles:
+      - never
+
+  grafana:
+    profiles:
+      - never
+
+  # Lighter Redis config
+  redis:
+    command: redis-server --appendonly yes --maxmemory 64mb --maxmemory-policy allkeys-lru
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 64M

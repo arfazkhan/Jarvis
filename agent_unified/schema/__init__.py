@@ -30,25 +30,34 @@ class ToolCall(BaseModel):
     type: str = "function"
     function: Function
 
+class UsageInfo(BaseModel):
+    """Token usage and cost from a single LLM call."""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    model_id: str = ""
+    cost_usd: float = 0.0
+
+
 class Message(BaseModel):
     role: str
     content: Optional[str] = None
     tool_calls: Optional[List[ToolCall]] = None
     tool_call_id: Optional[str] = None
     name: Optional[str] = None
-    
+    usage: Optional[UsageInfo] = None
+
     @classmethod
     def user_message(cls, content: str) -> "Message":
         return cls(role=Role.USER, content=content)
-    
+
     @classmethod
     def system_message(cls, content: str) -> "Message":
         return cls(role=Role.SYSTEM, content=content)
-    
+
     @classmethod
-    def assistant_message(cls, content: Optional[str] = None, tool_calls: Optional[List[ToolCall]] = None) -> "Message":
-        return cls(role=Role.ASSISTANT, content=content, tool_calls=tool_calls)
-    
+    def assistant_message(cls, content: Optional[str] = None, tool_calls: Optional[List[ToolCall]] = None, usage: Optional["UsageInfo"] = None) -> "Message":
+        return cls(role=Role.ASSISTANT, content=content, tool_calls=tool_calls, usage=usage)
+
     @classmethod
     def tool_message(cls, content: str, tool_call_id: str, name: str) -> "Message":
         return cls(role=Role.TOOL, content=content, tool_call_id=tool_call_id, name=name)

@@ -263,7 +263,7 @@ class VirtualOccupancySensor:
         schedule_status: str,
         occupancy_estimate: OccupancyEstimate,
         zone_load_kw: float = 2.0,
-        energy_rate: float = 0.18,
+        energy_rate: float = 0.14,  # Kahramaa commercial marginal top-tier (2024)
     ) -> Optional[GhostOperationAlert]:
         """
         Detect if a zone is being conditioned while empty ("Ghost Operation").
@@ -420,3 +420,290 @@ def estimate_zone_occupancy(
         light_status=light_status,
     )
     return estimate.to_dict()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# VIRTUAL SUPPLY AIR TEMPERATURE SENSOR
+# ═══════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class SATEstimate:
+    """Virtual supply air temperature sensor result."""
+    equipment_id: str
+    estimated_sat_c: float
+    confidence: float
+    method: str
+    inputs_used: Dict[str, float]
+    timestamp: datetime = field(default_factory=datetime.now)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "equipment_id": self.equipment_id,
+            "estimated_sat_c": round(self.estimated_sat_c, 2),
+            "confidence": round(self.confidence, 2),
+            "method": self.method,
+            "inputs_used": {k: round(v, 2) for k, v in self.inputs_used.items()},
+            "timestamp": self.timestamp.isoformat(),
+        }
+
+
+class VirtualSATSensor:
+    """
+    Derives supply air temperature from existing BMS data — no new probe needed.
+
+    Two derivation methods (used in order of input availability):
+
+    Method 1: Energy Balance
+        SAT = MAT - (Q_cooling / (m_dot * Cp_air))
+        where:
+          MAT = mixed air temperature (°C)
+          Q_cooling = cooling_valve_pct/100 * rated_cooling_kw * 3600 (kJ/h)
+          m_dot = airflow_m3h * rho_air (kg/h)
+          Cp_air = 1.006 kJ/(kg·K)
+
+    Method 2: Zone Thermal Inference
+        When zone return air temp and fan speed are available but MAT is not.
+        SAT ≈ zone_rat - (zone_rat - design_sat) * (fan_speed/100)
+        This is a simplified steady-state approximation.
+
+    Confidence degrades gracefully as inputs are unavailable.
+    """
+
+    CP_AIR = 1.006        # kJ/(kg·K)
+    RHO_AIR = 1.2         # kg/m³ at ~20°C
+    DESIGN_SAT_C = 13.0   # Typical AHU design SAT for commercial buildings
+    DEFAULT_RATED_KW = 50.0  # Default AHU rated cooling capacity (kW)
+
+    def estimate_sat(
+        self,
+        equipment_id: str,
+        mixed_air_temp_c: Optional[float] = None,
+        cooling_valve_pct: Optional[float] = None,
+        airflow_m3h: Optional[float] = None,
+        rated_cooling_kw: Optional[float] = None,
+        return_air_temp_c: Optional[float] = None,
+        fan_speed_pct: Optional[float] = None,
+        actual_sat_c: Optional[float] = None,
+    ) -> SATEstimate:
+        """
+        Estimate supply air temperature from available BMS inputs.
+
+        Args:
+            equipment_id: AHU identifier
+            mixed_air_temp_c: Mixed air temperature at AHU inlet (°C)
+            cooling_valve_pct: Cooling coil valve position (0-100%)
+            airflow_m3h: Supply fan airflow rate (m³/h)
+            rated_cooling_kw: AHU rated cooling capacity (kW)
+            return_air_temp_c: Return air temperature (°C)
+            fan_speed_pct: Supply fan speed (%)
+            actual_sat_c: Actual SAT if available — used to calibrate confidence
+
+        Returns:
+            SATEstimate with derived SAT and confidence level
+        """
+        inputs_used: Dict[str, float] = {}
+
+        # ── Method 1: Energy Balance ──────────────────────────────────────
+        if mixed_air_temp_c is not None and cooling_valve_pct is not None:
+            inputs_used["mixed_air_temp_c"] = mixed_air_temp_c
+            inputs_used["cooling_valve_pct"] = cooling_valve_pct
+
+            q_kw = (cooling_valve_pct / 100.0) * (rated_cooling_kw or self.DEFAULT_RATED_KW)
+
+            if airflow_m3h and airflow_m3h > 0:
+                inputs_used["airflow_m3h"] = airflow_m3h
+                m_dot_kg_s = (airflow_m3h * self.RHO_AIR) / 3600.0
+                delta_t = q_kw / (m_dot_kg_s * self.CP_AIR * 1000.0)
+                confidence = 0.85
+            else:
+                # Default to typical AHU airflow (5000 m³/h)
+                m_dot_kg_s = (5000 * self.RHO_AIR) / 3600.0
+                delta_t = q_kw / (m_dot_kg_s * self.CP_AIR * 1000.0)
+                confidence = 0.65
+
+            estimated_sat = mixed_air_temp_c - delta_t
+
+            # Calibrate confidence against actual if provided
+            if actual_sat_c is not None:
+                error = abs(estimated_sat - actual_sat_c)
+                calibration_penalty = min(0.3, error * 0.05)
+                confidence = max(0.3, confidence - calibration_penalty)
+
+            return SATEstimate(
+                equipment_id=equipment_id,
+                estimated_sat_c=round(float(estimated_sat), 2),
+                confidence=confidence,
+                method="energy_balance",
+                inputs_used=inputs_used,
+            )
+
+        # ── Method 2: Zone Thermal Inference ─────────────────────────────
+        if return_air_temp_c is not None and fan_speed_pct is not None:
+            inputs_used["return_air_temp_c"] = return_air_temp_c
+            inputs_used["fan_speed_pct"] = fan_speed_pct
+
+            # Steady-state approximation: higher fan speed → SAT closer to design
+            fan_ratio = min(1.0, fan_speed_pct / 100.0)
+            estimated_sat = return_air_temp_c - (return_air_temp_c - self.DESIGN_SAT_C) * fan_ratio * 0.6
+            confidence = 0.50
+
+            if cooling_valve_pct is not None:
+                inputs_used["cooling_valve_pct"] = cooling_valve_pct
+                valve_correction = (cooling_valve_pct / 100.0) * 2.0
+                estimated_sat -= valve_correction
+                confidence = 0.58
+
+            return SATEstimate(
+                equipment_id=equipment_id,
+                estimated_sat_c=round(float(estimated_sat), 2),
+                confidence=confidence,
+                method="zone_thermal_inference",
+                inputs_used=inputs_used,
+            )
+
+        # ── Fallback: Design default ──────────────────────────────────────
+        return SATEstimate(
+            equipment_id=equipment_id,
+            estimated_sat_c=self.DESIGN_SAT_C,
+            confidence=0.20,
+            method="design_default",
+            inputs_used=inputs_used,
+        )
+
+
+def estimate_virtual_sat(
+    equipment_id: str,
+    mixed_air_temp_c: Optional[float] = None,
+    cooling_valve_pct: Optional[float] = None,
+    airflow_m3h: Optional[float] = None,
+    rated_cooling_kw: Optional[float] = None,
+    return_air_temp_c: Optional[float] = None,
+    fan_speed_pct: Optional[float] = None,
+) -> Dict[str, Any]:
+    """LLM tool handler for virtual SAT estimation."""
+    sensor = VirtualSATSensor()
+    result = sensor.estimate_sat(
+        equipment_id=equipment_id,
+        mixed_air_temp_c=mixed_air_temp_c,
+        cooling_valve_pct=cooling_valve_pct,
+        airflow_m3h=airflow_m3h,
+        rated_cooling_kw=rated_cooling_kw,
+        return_air_temp_c=return_air_temp_c,
+        fan_speed_pct=fan_speed_pct,
+    )
+    return result.to_dict()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# VIRTUAL SENSOR REGISTRY
+# ═══════════════════════════════════════════════════════════════════════════
+
+class VirtualSensorRegistry:
+    """
+    Central registry for all ARVIS virtual sensors.
+    Register sensors once on startup; query them by ID from API or tool handlers.
+    """
+
+    def __init__(self):
+        self._sensors: Dict[str, Dict[str, Any]] = {}
+
+    def register(
+        self,
+        sensor_id: str,
+        sensor_obj: Any,
+        sensor_type: str,
+        description: str,
+        equipment_ids: List[str],
+    ) -> None:
+        """
+        Register a virtual sensor.
+
+        Args:
+            sensor_id: Unique identifier (e.g. 'vsat_AHU-01', 'vocc_ZONE-01')
+            sensor_obj: Sensor instance (VirtualSATSensor or VirtualOccupancySensor)
+            sensor_type: 'sat' or 'occupancy'
+            description: Human-readable description
+            equipment_ids: List of equipment/zone IDs served by this sensor
+        """
+        self._sensors[sensor_id] = {
+            "sensor_id": sensor_id,
+            "sensor_obj": sensor_obj,
+            "sensor_type": sensor_type,
+            "description": description,
+            "equipment_ids": equipment_ids,
+            "registered_at": datetime.now().isoformat(),
+        }
+        logger.debug(f"Virtual sensor registered: {sensor_id} (type={sensor_type})")
+
+    def get_all_registered(self) -> List[Dict[str, Any]]:
+        """Return metadata for all registered sensors (no sensor object included)."""
+        result = []
+        for entry in self._sensors.values():
+            result.append({
+                "sensor_id": entry["sensor_id"],
+                "sensor_type": entry["sensor_type"],
+                "description": entry["description"],
+                "equipment_ids": entry["equipment_ids"],
+                "registered_at": entry["registered_at"],
+            })
+        return result
+
+    def read(self, sensor_id: str, **kwargs) -> Dict[str, Any]:
+        """
+        Read a registered virtual sensor.
+
+        Calls the appropriate sensor method based on sensor_type:
+          - 'sat'       → VirtualSATSensor.estimate_sat(equipment_id, **kwargs)
+          - 'occupancy' → VirtualOccupancySensor.estimate_occupancy(zone_id, **kwargs)
+
+        Returns:
+            Result dict from the sensor, or error dict if sensor not found / call fails.
+        """
+        entry = self._sensors.get(sensor_id)
+        if entry is None:
+            return {"error": f"Virtual sensor '{sensor_id}' not registered"}
+
+        sensor_obj = entry["sensor_obj"]
+        sensor_type = entry["sensor_type"]
+        equipment_ids = entry["equipment_ids"]
+
+        # Resolve the primary equipment / zone ID
+        primary_id = equipment_ids[0] if equipment_ids else sensor_id
+
+        try:
+            if sensor_type == "sat":
+                equipment_id = kwargs.pop("equipment_id", primary_id)
+                result = sensor_obj.estimate_sat(equipment_id=equipment_id, **kwargs)
+                return result.to_dict()
+
+            elif sensor_type == "occupancy":
+                zone_id = kwargs.pop("zone_id", primary_id)
+                result = sensor_obj.estimate_occupancy(zone_id=zone_id, **kwargs)
+                return result.to_dict()
+
+            else:
+                return {"error": f"Unknown sensor_type '{sensor_type}' for sensor '{sensor_id}'"}
+
+        except Exception as exc:
+            logger.error(f"VirtualSensorRegistry.read({sensor_id}) failed: {exc}")
+            return {"error": str(exc), "sensor_id": sensor_id}
+
+    def __len__(self) -> int:
+        return len(self._sensors)
+
+    def __contains__(self, sensor_id: str) -> bool:
+        return sensor_id in self._sensors
+
+
+# ── Module-level singleton ────────────────────────────────────────────────
+
+_registry_instance: Optional[VirtualSensorRegistry] = None
+
+
+def get_registry() -> VirtualSensorRegistry:
+    """Return the module-level VirtualSensorRegistry singleton."""
+    global _registry_instance
+    if _registry_instance is None:
+        _registry_instance = VirtualSensorRegistry()
+        logger.debug("VirtualSensorRegistry singleton created")
+    return _registry_instance

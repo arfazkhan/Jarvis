@@ -61,7 +61,8 @@ You have access to real-time BMS data through these tools:
 - forecast_energy: ML-based energy forecasting
 - detect_equipment_faults: ML-based fault detection
 - simulate_change: Predict impact of changes
-- query_skillbook: Access building knowledge
+- query_skillbook: Recall prior fault patterns for same equipment type
+- add_to_skillbook: Record confirmed fault signatures and resolution steps after diagnosis
 
 ## Guidelines
 1. Always use tools to get real data before answering
@@ -134,7 +135,8 @@ OPS_COPILOT_SYSTEM_PROMPT_ARABIC = """أنت ARVIS Ops Copilot، مساعد خب
 - forecast_energy: التنبؤ بالطاقة باستخدام ML
 - detect_equipment_faults: اكتشاف الأعطال باستخدام ML
 - simulate_change: التنبؤ بتأثير التغييرات
-- query_skillbook: الوصول إلى معرفة المبنى
+- query_skillbook: استدعاء أنماط الأعطال السابقة لنفس المعدات
+- add_to_skillbook: تسجيل أنماط الأعطال المؤكدة وخطوات الحل بعد التشخيص
 
 ## إرشادات
 1. استخدم الأدوات دائماً للحصول على بيانات حقيقية قبل الإجابة

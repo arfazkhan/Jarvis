@@ -413,14 +413,15 @@ class FailurePrediction:
     risk_level: str                 # "low" | "medium" | "high" | "critical"
     predicted_rul_days: int         # Remaining Useful Life in days (-1 if unknown)
     confidence: float               # Model confidence 0.0 - 1.0
-    
+
     recommendation: str             # Actionable recommendation
     contributing_factors: List[Dict[str, Any]] = field(default_factory=list)
-    
+    failure_probability_horizons: Dict[str, float] = field(default_factory=dict)
+
     predicted_at: datetime = field(default_factory=datetime.now)
-    
+
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "equipment_id": self.equipment_id,
             "failure_probability": round(self.failure_probability, 3),
             "risk_level": self.risk_level,
@@ -430,6 +431,11 @@ class FailurePrediction:
             "contributing_factors": self.contributing_factors,
             "predicted_at": self.predicted_at.isoformat(),
         }
+        if self.failure_probability_horizons:
+            d["failure_probability_horizons"] = {
+                k: round(v, 3) for k, v in self.failure_probability_horizons.items()
+            }
+        return d
 
 
 @dataclass 

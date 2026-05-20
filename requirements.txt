@@ -40,10 +40,17 @@ pandas                      # Data manipulation for sensors
 # Phase 5: Personality (Emotional AI)
 transformers                # Advanced sentiment models
 
+# Qatar Calendar Support
+hijri-converter             # Accurate Islamic calendar for Ramadan detection
+
 # Phase 6: Missions (Long-running Autonomy)
 apscheduler                 # Mission scheduling
 python-crontab              # Cron-style scheduling
 croniter==2.0.1             # Existing croniter dependency
+
+# BMS Protocol Adapters
+pymodbus>=3.5.0              # Modbus TCP/RTU async client
+aiohttp>=3.9.0               # Async HTTP (CAFM: Maximo, Planon, REST)
 
 # Phase 7: Web UI (Reasoning Console)
 flask                       # Web framework
@@ -65,3 +72,8 @@ pytest-mock==3.12.0
 requests-mock==1.11.0
 faker==20.1.0
 croniter==2.0.1
+python-jose[cryptography]>=3.3.0
+bacpypes3>=0.0.85
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+boto3>=1.34.0

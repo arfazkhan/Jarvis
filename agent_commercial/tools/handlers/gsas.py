@@ -22,6 +22,23 @@ try:
 except ImportError:
     generate_gord_pdf = None
 
+try:
+    from agent_commercial.gsas_occupancy_context import OccupancyContextProvider
+    from agent_commercial.gsas_comfort_predictor import ComfortPredictor
+    from agent_commercial.gsas_financial_impact import FinancialImpactCalculator
+    from agent_commercial.gsas_simulation import GSASSimulator
+    from agent_commercial.gsas_execution_governor import GSASExecutionGovernor
+    from agent_commercial.gsas_outcome_tracker import GSASOutcomeTracker
+    from agent_commercial.gsas_audit_readiness import GSASAuditReadinessChecker
+except ImportError:
+    OccupancyContextProvider = None
+    ComfortPredictor = None
+    FinancialImpactCalculator = None
+    GSASSimulator = None
+    GSASExecutionGovernor = None
+    GSASOutcomeTracker = None
+    GSASAuditReadinessChecker = None
+
 
 class GSASHandlerMixin:
     """Mixin providing GSAS-related tool handlers."""
@@ -34,6 +51,16 @@ class GSASHandlerMixin:
             "get_gsas_improvement_priorities": instance._handle_get_gsas_improvement_priorities,
             "optimize_recommendations_for_gsas": instance._handle_optimize_recommendations_for_gsas,
             "generate_gord_report": instance._handle_generate_gord_report,
+            "get_zone_occupancy": instance._handle_get_zone_occupancy,
+            "predict_comfort_impact": instance._handle_predict_comfort_impact,
+            "get_financial_projection": instance._handle_get_financial_projection,
+            "get_gsas_contextual_recommendations": instance._handle_get_gsas_contextual_recommendations,
+            "simulate_gsas_impact": instance._handle_simulate_gsas_impact,
+            "classify_gsas_action_risk": instance._handle_classify_gsas_action_risk,
+            "record_gsas_action_outcome": instance._handle_record_gsas_action_outcome,
+            "get_gsas_success_rates": instance._handle_get_gsas_success_rates,
+            "check_gsas_audit_readiness": instance._handle_check_gsas_audit_readiness,
+            "detect_gsas_score_drift": instance._handle_detect_gsas_score_drift,
         }
     
     async def _handle_get_gsas_status(self, args: Dict) -> Dict:
@@ -201,3 +228,151 @@ class GSASHandlerMixin:
             report["note"] = "PDF generation requires report_generator module"
         
         return report
+
+    async def _handle_get_zone_occupancy(self, args: Dict) -> Dict:
+        """Get contextual occupancy data for a zone"""
+        zone_id = args.get("zone_id")
+        if not zone_id:
+            return {"error": "zone_id is required."}
+        if not OccupancyContextProvider:
+            return {"error": "OccupancyContextProvider not available."}
+        provider = OccupancyContextProvider(self.bms_state)
+        context = provider.get_zone_occupancy(zone_id)
+        return {
+            "zone_id": zone_id,
+            "occupancy_context": context,
+        }
+
+    async def _handle_predict_comfort_impact(self, args: Dict) -> Dict:
+        """Predict comfort impact of an action"""
+        action = args.get("action", {})
+        zone_id = args.get("zone_id")
+        if not action or not zone_id:
+            return {"error": "Both 'action' and 'zone_id' are required."}
+        if not ComfortPredictor:
+            return {"error": "ComfortPredictor not available."}
+        predictor = ComfortPredictor(self.bms_state)
+        prediction = predictor.predict_impact(action, zone_id)
+        return {
+            "action": action,
+            "zone_id": zone_id,
+            "prediction": prediction,
+        }
+
+    async def _handle_get_financial_projection(self, args: Dict) -> Dict:
+        """Project financial savings for an action"""
+        action = args.get("action", {})
+        energy_delta = args.get("energy_delta_kwh", 0.0)
+        water_delta = args.get("water_delta_m3", 0.0)
+        
+        if not FinancialImpactCalculator:
+            return {"error": "FinancialImpactCalculator not available."}
+        calculator = FinancialImpactCalculator()
+        projection = calculator.calculate_savings(action, energy_delta, water_delta)
+        return {
+            "action": action,
+            "projection": projection,
+        }
+
+    async def _handle_get_gsas_contextual_recommendations(self, args: Dict) -> Dict:
+        """Get raw contextual recommendations from the optimizer"""
+        limit = args.get("limit", 5)
+        
+        if not getattr(self, "gsas_reporter", None):
+            return {"error": "GSAS Reporter not configured in this agent."}
+            
+        from agent_commercial.gsas_optimizer import GSASOptimizer
+        llm = getattr(self, "llm", None)
+        optimizer = GSASOptimizer(self.gsas_reporter, self.bms_state, llm_provider=llm)
+        recommendations = await optimizer.generate_recommendations(max_recommendations=limit)
+        
+        return {
+            "recommendations": [rec.to_dict() for rec in recommendations],
+            "note": "These are raw context dicts. Please synthesize a natural language reasoning chain from these."
+        }
+
+    async def _handle_simulate_gsas_impact(self, args: Dict) -> Dict:
+        """Simulates the impact of a BMS action on the GSAS score."""
+        action = args.get("action", {})
+        
+        if not getattr(self, "gsas_reporter", None):
+            return {"error": "GSAS Reporter not configured in this agent. Simulation requires a reporter instance."}
+            
+        if not GSASSimulator:
+            return {"error": "GSASSimulator not available."}
+            
+        simulator = GSASSimulator(self.gsas_reporter)
+        result = simulator.simulate_impact(action)
+        return result
+
+    async def _handle_classify_gsas_action_risk(self, args: Dict) -> Dict:
+        """Returns the governance tier for a proposed action."""
+        action = args.get("action", {})
+        simulation_result = args.get("simulation_result", {})
+        
+        if not simulation_result:
+            logger.warning("classify_gsas_action_risk called without simulation_result — GSAS score checks skipped")
+        
+        if not GSASExecutionGovernor:
+            return {"error": "GSASExecutionGovernor not available."}
+            
+        return GSASExecutionGovernor.classify_action_risk(action, simulation_result)
+
+    async def _handle_record_gsas_action_outcome(self, args: Dict) -> Dict:
+        """Record the outcome of an FM decision."""
+        action = args.get("action", {})
+        decision = args.get("decision", "").upper()
+        notes = args.get("notes", "")
+        
+        if decision not in ("APPROVED", "REJECTED", "MODIFIED"):
+            return {"error": f"Invalid decision '{decision}'. Must be APPROVED, REJECTED, or MODIFIED."}
+        
+        if not GSASOutcomeTracker:
+            return {"error": "GSASOutcomeTracker not available."}
+            
+        # Get DB connection if available
+        db = get_database() if get_database else None
+        tracker = GSASOutcomeTracker(db)
+        
+        return tracker.record_action_outcome(action, decision, notes)
+
+    async def _handle_get_gsas_success_rates(self, args: Dict) -> Dict:
+        """Get the historical approval rate for GSAS actions."""
+        action_type = args.get("action_type")
+        
+        if not GSASOutcomeTracker:
+            return {"error": "GSASOutcomeTracker not available."}
+            
+        db = get_database() if get_database else None
+        tracker = GSASOutcomeTracker(db)
+        
+        return tracker.get_success_rates(action_type)
+
+    async def _handle_check_gsas_audit_readiness(self, args: Dict) -> Dict:
+        """Evaluates whether the building could pass a GSAS audit right now."""
+        if not getattr(self, "gsas_reporter", None):
+            return {"error": "GSAS Reporter not configured in this agent. Audit readiness check requires a reporter instance."}
+            
+        if not GSASAuditReadinessChecker:
+            return {"error": "GSASAuditReadinessChecker not available."}
+            
+        survey_manager = getattr(self, "survey_manager", None)
+        checker = GSASAuditReadinessChecker(self.gsas_reporter, survey_manager)
+        return checker.check_readiness()
+
+    async def _handle_detect_gsas_score_drift(self, args: Dict) -> Dict:
+        """Detects if the GSAS score is drifting downwards over a window of time."""
+        window_days = args.get("window_days", 30)
+        
+        if not getattr(self, "gsas_reporter", None):
+            return {"error": "GSAS Reporter not configured in this agent."}
+            
+        # Call the new detect_drift method on the reporter
+        drift_result = self.gsas_reporter.detect_drift(window_days)
+        
+        if drift_result:
+            return drift_result
+        return {
+            "alert_level": "normal",
+            "message": "No negative drift detected. Score is stable or improving."
+        }

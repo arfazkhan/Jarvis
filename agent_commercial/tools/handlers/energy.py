@@ -20,14 +20,20 @@ except ImportError:
 
 try:
     from agent_commercial.virtual_sensors import (
-        VirtualOccupancySensor, 
+        VirtualOccupancySensor,
         estimate_zone_occupancy,
-        OccupancyLevel
+        OccupancyLevel,
+        VirtualSATSensor,
+        estimate_virtual_sat,
+        get_registry as get_virtual_sensor_registry,
     )
 except ImportError:
     VirtualOccupancySensor = None
     estimate_zone_occupancy = None
     OccupancyLevel = None
+    VirtualSATSensor = None
+    estimate_virtual_sat = None
+    get_virtual_sensor_registry = None
 
 try:
     from agent_commercial.database import get_database
@@ -48,6 +54,8 @@ class EnergyHandlerMixin:
             "get_burn_rate": instance._handle_get_burn_rate,
             "find_ghost_spaces": instance._handle_find_ghost_spaces,
             "estimate_zone_occupancy": instance._handle_estimate_zone_occupancy,
+            "estimate_virtual_sat": instance._handle_estimate_virtual_sat,
+            "get_virtual_sensor_reading": instance._handle_get_virtual_sensor_reading,
         }
     
     async def _handle_analyze_energy(self, args: Dict) -> Dict:
@@ -223,3 +231,116 @@ class EnergyHandlerMixin:
         except Exception as e:
             logger.error(f"Error in estimate_zone_occupancy: {e}")
             return {"error": f"Occupancy estimation error: {str(e)}"}
+
+    async def _handle_estimate_virtual_sat(self, args: Dict) -> Dict:
+        """Derive supply air temperature from existing BMS data (no new sensor needed)."""
+        equipment_id = args.get("equipment_id")
+        if not equipment_id:
+            return {"error": "equipment_id is required"}
+
+        if VirtualSATSensor is None:
+            return {"error": "Virtual sensors module not available"}
+
+        # Try to enrich from live BMS state if available
+        bms_state = getattr(self, "bms_state", None)
+        enriched = dict(args)
+
+        if bms_state and hasattr(bms_state, "get_points_by_equipment"):
+            try:
+                import asyncio
+                points = await bms_state.get_points_by_equipment(equipment_id)
+                for p in points:
+                    pid = p.point_id.split("/")[-1].upper()
+                    if p.value is None:
+                        continue
+                    if pid == "MAT":
+                        enriched.setdefault("mixed_air_temp_c", p.value)
+                    elif pid == "RAT":
+                        enriched.setdefault("return_air_temp_c", p.value)
+                    elif pid in ("CLG_VLV", "COOL_VLV", "CV"):
+                        enriched.setdefault("cooling_valve_pct", p.value)
+                    elif pid in ("SF_SPD", "FAN_SPD", "FAN_SPEED"):
+                        enriched.setdefault("fan_speed_pct", p.value)
+                    elif pid in ("SA_FLOW", "SAF", "AIRFLOW"):
+                        enriched.setdefault("airflow_m3h", p.value)
+                    elif pid == "SAT":
+                        enriched["actual_sat_c"] = p.value
+            except Exception as e:
+                logger.debug(f"BMS enrichment for virtual SAT failed: {e}")
+
+        try:
+            return estimate_virtual_sat(
+                equipment_id=equipment_id,
+                mixed_air_temp_c=enriched.get("mixed_air_temp_c"),
+                cooling_valve_pct=enriched.get("cooling_valve_pct"),
+                airflow_m3h=enriched.get("airflow_m3h"),
+                rated_cooling_kw=enriched.get("rated_cooling_kw"),
+                return_air_temp_c=enriched.get("return_air_temp_c"),
+                fan_speed_pct=enriched.get("fan_speed_pct"),
+            )
+        except Exception as e:
+            logger.error(f"Virtual SAT estimation error: {e}")
+            return {"error": f"Virtual SAT estimation failed: {str(e)}"}
+
+    async def _handle_get_virtual_sensor_reading(self, args: Dict) -> Dict:
+        """Query any registered virtual sensor by ID via the VirtualSensorRegistry."""
+        sensor_id = args.get("sensor_id")
+        if not sensor_id:
+            return {"error": "sensor_id is required"}
+
+        if get_virtual_sensor_registry is None:
+            return {"error": "Virtual sensors module not available"}
+
+        registry = get_virtual_sensor_registry()
+
+        if sensor_id not in registry:
+            return {"error": f"Virtual sensor '{sensor_id}' not registered", "sensor_id": sensor_id}
+
+        # Build kwargs for the read call
+        kwargs: Dict[str, Any] = {}
+        equipment_id_override = args.get("equipment_id")
+        if equipment_id_override:
+            kwargs["equipment_id"] = equipment_id_override
+
+        # Enrich from live BMS state where possible
+        bms_state = getattr(self, "bms_state", None)
+        all_meta = {m["sensor_id"]: m for m in registry.get_all_registered()}
+        meta = all_meta.get(sensor_id, {})
+        primary_equipment = equipment_id_override or (meta.get("equipment_ids") or [None])[0]
+
+        if bms_state and primary_equipment and hasattr(bms_state, "get_points_by_equipment"):
+            try:
+                import asyncio
+                points = await bms_state.get_points_by_equipment(primary_equipment)
+                sensor_type = meta.get("sensor_type", "")
+                for p in points:
+                    if p.value is None:
+                        continue
+                    pid = p.point_id.split("/")[-1].upper()
+                    if sensor_type == "sat":
+                        if pid == "MAT":
+                            kwargs.setdefault("mixed_air_temp_c", p.value)
+                        elif pid == "RAT":
+                            kwargs.setdefault("return_air_temp_c", p.value)
+                        elif pid in ("CLG_VLV", "COOL_VLV", "CV"):
+                            kwargs.setdefault("cooling_valve_pct", p.value)
+                        elif pid in ("SF_SPD", "FAN_SPD", "FAN_SPEED"):
+                            kwargs.setdefault("fan_speed_pct", p.value)
+                        elif pid in ("SA_FLOW", "SAF", "AIRFLOW"):
+                            kwargs.setdefault("airflow_m3h", p.value)
+                    elif sensor_type == "occupancy":
+                        if pid == "CO2":
+                            kwargs.setdefault("co2_ppm", p.value)
+                        elif pid in ("VAV", "VAV_PCT", "DAMPER"):
+                            kwargs.setdefault("vav_damper_pct", p.value)
+                        elif pid in ("LIGHT", "LIGHTS"):
+                            kwargs.setdefault("light_status", bool(p.value))
+            except Exception as e:
+                logger.debug(f"BMS enrichment for virtual sensor {sensor_id} failed: {e}")
+
+        try:
+            result = registry.read(sensor_id, **kwargs)
+            return result
+        except Exception as e:
+            logger.error(f"get_virtual_sensor_reading error for {sensor_id}: {e}")
+            return {"error": f"Virtual sensor read failed: {str(e)}", "sensor_id": sensor_id}

@@ -48,6 +48,7 @@ def get_energy_agent() -> SwarmNode:
     
     return SwarmNode(
         name="Energy_Agent",
+        llm_channel="tool",
         role=(
             "You are the Energy Optimization & Compliance Agent for ARVIS.\n"
             "Your primary responsibilities:\n"
@@ -83,6 +84,7 @@ def get_alarm_agent() -> SwarmNode:
     
     return SwarmNode(
         name="Alarm_Agent",
+        llm_channel="tool",
         role=(
             "You are the Fault Detection & Alarm Intelligence Agent for ARVIS.\n"
             "Your primary responsibilities:\n"
@@ -119,6 +121,7 @@ def get_maintenance_agent() -> SwarmNode:
     
     return SwarmNode(
         name="Maintenance_Agent",
+        llm_channel="tool",
         role=(
             "You are the Predictive Maintenance & Equipment Lifecycle Agent for ARVIS.\n"
             "Your primary responsibilities:\n"
@@ -151,10 +154,13 @@ def get_comfort_agent() -> SwarmNode:
         t for t in SOVEREIGN_TOOLS if t["name"] == "simulate_change"
     ] + [
         t for t in ENERGY_TOOLS if t["name"] == "estimate_zone_occupancy"
+    ] + [
+        t for t in GSAS_TOOLS if t["name"] in ("predict_comfort_impact", "get_zone_occupancy")
     ]
     
     return SwarmNode(
         name="Comfort_Agent",
+        llm_channel="tool",
         role=(
             "You are the Thermal Comfort & Occupant Safety Agent for ARVIS.\n"
             "Your primary responsibilities:\n"
@@ -191,6 +197,7 @@ def get_sensor_fusion_agent() -> SwarmNode:
     
     return SwarmNode(
         name="Sensor_Fusion_Agent",
+        llm_channel="tool",
         role=(
             "You are the Sensor Intelligence & Data Quality Agent for ARVIS.\n"
             "Your primary responsibilities:\n"
@@ -226,10 +233,14 @@ def get_strategic_agent() -> SwarmNode:
     ] + [
         t for t in ADVISORY_TOOLS 
         if t["name"] in ("get_advisory_recommendations", "check_goals", "get_trust_metrics")
+    ] + [
+        t for t in GSAS_TOOLS 
+        if t["name"] in ("get_financial_projection", "get_gsas_contextual_recommendations", "simulate_gsas_impact")
     ]
     
     return SwarmNode(
         name="Strategic_Agent",
+        llm_channel="reasoning",
         role=(
             "You are the Strategic Intelligence Agent — the building's prefrontal cortex.\n"
             "Your primary responsibilities:\n"
@@ -264,10 +275,13 @@ def get_planning_agent() -> SwarmNode:
         if t["name"] in ("simulate_change",)
     ] + [
         t for t in ADVISORY_TOOLS if t["name"] == "get_advisory_recommendations"
+    ] + [
+        t for t in GSAS_TOOLS if t["name"] in ("simulate_gsas_impact", "classify_gsas_action_risk")
     ]
     
     return SwarmNode(
         name="Planning_Agent",
+        llm_channel="reasoning",
         role=(
             "You are the Autonomous Planning Agent for ARVIS.\n"
             "Your primary responsibilities:\n"
@@ -278,7 +292,8 @@ def get_planning_agent() -> SwarmNode:
             "5. Estimate time, cost, and risk for each plan step\n\n"
             "CONSTRAINTS:\n"
             "- Every plan MUST have a rollback strategy for each step\n"
-            "- Safety-critical steps require explicit FM confirmation (cannot be autonomous)\n"
+            "- ALWAYS call classify_gsas_action_risk to determine if an action requires FM approval\n"
+            "- Safety-critical and REQUIRE_APPROVAL steps require explicit FM confirmation (cannot be autonomous)\n"
             "- Maximum plan depth: 5 steps (deeper plans must be broken into phases)\n"
             "- Always simulate the cumulative impact of all steps before presenting the plan"
         ),
@@ -299,10 +314,13 @@ def get_memory_agent() -> SwarmNode:
         t for t in ML_TOOLS if t["name"] == "find_similar_skills"
     ] + [
         t for t in ADVISORY_TOOLS if t["name"] == "submit_feedback"
+    ] + [
+        t for t in GSAS_TOOLS if t["name"] in ("get_gsas_success_rates", "record_gsas_action_outcome")
     ]
     
     return SwarmNode(
         name="Memory_Agent",
+        llm_channel="reflect",
         role=(
             "You are the Institutional Memory Agent for ARVIS — the building's long-term memory.\n"
             "Your primary responsibilities:\n"
@@ -316,7 +334,9 @@ def get_memory_agent() -> SwarmNode:
             "2. CONFIDENCE MANAGEMENT: If past patterns indicate a performance decay or failure history for a retrieved skill, clearly flag this as a '[DOWNGRADE_REQUIRED]' event in your summary.\n"
             "3. Never overwrite a high-confidence skill (>0.8) without explicit evidence.\n"
             "4. Tag new skills with equipment_id and skill_type for retrieval.\n"
-            "5. Use semantic context to identify 'hidden' failure patterns not captured by labels."
+            "5. Use semantic context to identify 'hidden' failure patterns not captured by labels.\n"
+            "6. ALWAYS call get_gsas_success_rates to understand historical FM preferences before suggesting a recurring action type\n"
+            "7. Call record_gsas_action_outcome when you process explicit FM feedback on a proposed action"
         ),
         tools=tools
     )
@@ -341,6 +361,7 @@ def get_briefing_agent() -> SwarmNode:
     
     return SwarmNode(
         name="Briefing_Agent",
+        llm_channel="narrative",
         role=(
             "You are the Communication & Briefing Agent for ARVIS.\n"
             "Your primary responsibilities:\n"
@@ -368,6 +389,7 @@ def get_voice_agent() -> SwarmNode:
     """
     return SwarmNode(
         name="Voice_Agent",
+        llm_channel="classify",
         role=(
             "You are the Voice Interface Agent for ARVIS — the building's voice.\n"
             "Your primary responsibilities:\n"
@@ -394,6 +416,7 @@ def get_persona_agent() -> SwarmNode:
     """
     return SwarmNode(
         name="Persona_Agent",
+        llm_channel="narrative",
         role=(
             "You are the Personality & Tone Agent for ARVIS.\n"
             "Your primary responsibilities:\n"
@@ -429,6 +452,7 @@ def get_mission_agent() -> SwarmNode:
     
     return SwarmNode(
         name="Mission_Agent",
+        llm_channel="reasoning",
         role=(
             "You are the Autonomous Mission Executor for ARVIS.\n"
             "Your primary responsibilities:\n"

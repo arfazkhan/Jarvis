@@ -27,6 +27,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from agent_commercial.gsas_occupancy_context import OccupancyContextProvider
+from agent_commercial.gsas_comfort_predictor import ComfortPredictor
+from agent_commercial.gsas_financial_impact import FinancialImpactCalculator
+
 logger = logging.getLogger("arvis.gsas.optimizer")
 
 
@@ -80,6 +84,9 @@ class GSASRecommendation:
     status: str = "proposed"  # proposed, accepted, implemented, verified
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     
+    # Contextual Reasoning (Phase 4) - Replaced string templates with raw data for LLM
+    raw_context: Optional[Dict[str, Any]] = None
+    
     def to_dict(self) -> Dict[str, Any]:
         return {
             "recommendation_id": self.recommendation_id,
@@ -95,6 +102,7 @@ class GSASRecommendation:
             "effort_estimate": self.effort_estimate,
             "status": self.status,
             "created_at": self.created_at,
+            "raw_context": self.raw_context,
         }
 
 
@@ -231,18 +239,27 @@ class GSASOptimizer:
         gsas_reporter: Any,
         bms_state: Optional[Any] = None,
         target_rating: int = 4,  # Default target: 4 stars
+        occupancy_provider: Optional[OccupancyContextProvider] = None,
+        comfort_predictor: Optional[ComfortPredictor] = None,
+        financial_calculator: Optional[FinancialImpactCalculator] = None,
+        llm_provider: Optional[Any] = None,
     ):
         from agent_commercial.gsas_reporter import GSASStarRating
         
         self.gsas_reporter = gsas_reporter
         self.bms_state = bms_state
         
+        self.occupancy_provider = occupancy_provider or OccupancyContextProvider(bms_state_engine=bms_state)
+        self.comfort_predictor = comfort_predictor or ComfortPredictor()
+        self.financial_calculator = financial_calculator or FinancialImpactCalculator()
+        self.llm_provider = llm_provider
+
         # Convert int to GSASStarRating enum if needed
         if isinstance(target_rating, int):
             self.target_rating = GSASStarRating(target_rating)
         else:
             self.target_rating = target_rating
-        
+
         self._recommendations: List[GSASRecommendation] = []
         self._implemented: List[str] = []
         self._recommendation_counter = 0
@@ -314,8 +331,11 @@ class GSASOptimizer:
         
         recommendations = []
         
+        current_score = self.gsas_reporter.get_status().get("overall_score", 0.0)
+        target_score = self._target_score_for_rating(self.target_rating)
+        
         for gap in controllable_gaps[:max_recommendations]:
-            recs = await self._generate_recommendations_for_gap(gap)
+            recs = await self._generate_recommendations_for_gap(gap, current_score, target_score)
             recommendations.extend(recs)
         
         # Sort by estimated impact
@@ -330,6 +350,8 @@ class GSASOptimizer:
     async def _generate_recommendations_for_gap(
         self,
         gap: GSASGap,
+        current_score: float,
+        target_score: float,
     ) -> List[GSASRecommendation]:
         """Generate specific recommendations for a single gap."""
         if gap.criterion_id not in self.BMS_CONTROLLABLE:
@@ -343,22 +365,61 @@ class GSASOptimizer:
             self._recommendation_counter += 1
             rec_id = f"GSAS-REC-{self._recommendation_counter:04d}"
             
-            # Estimate impact
+            # --- Contextual Reasoning (Phase 4) ---
+            # 1. Get Occupancy Context
+            target_eq = self._infer_target_equipment(action)
+            zone_id = action.get("primary_zone", f"{gap.category.lower()}_zone_default")
+            occ_context = self.occupancy_provider.get_zone_occupancy(zone_id)
+            
+            # 2. Get Comfort Prediction
+            comfort_pred = self.comfort_predictor.predict_impact(action, zone_id)
+            
+            # 3. Estimate Impact
             base_impact = gap.gap_points * action.get("impact_factor", 0.2)
             confidence = await self._estimate_confidence(gap, action)
+            
+            # Boost confidence if occupancy data strongly supports it
+            if occ_context.get("confidence", 0) > 0.8:
+                confidence = min(0.95, confidence + 0.1)
+                
             estimated_points = base_impact * confidence
             
+            # 4. Get Financial Projection
+            # Mock energy delta based on gap priority/impact
+            energy_delta_kwh = estimated_points * 1000  # simplistic correlation
+            water_delta_m3 = estimated_points * 100 if gap.category == "W" else 0
+            fin_proj = self.financial_calculator.calculate_savings(action, energy_delta_kwh, water_delta_m3)
+            
             # Estimate star impact
-            current_score = self.gsas_reporter.get_status().get("overall_score", 0.0)
-            target_score = self._target_score_for_rating(self.target_rating)
             star_impact = estimated_points / (target_score - current_score) if (target_score - current_score) > 0 else 0
             
+            # 5. Build Raw Context for LLM Synthesis
+            raw_context = {
+                "gap_data": gap.to_dict(),
+                "occupancy_data": occ_context,
+                "comfort_prediction": comfort_pred,
+                "financial_projection": fin_proj,
+                "base_impact": base_impact,
+                "confidence_adjustments": {
+                    "base": 0.7,
+                    "occupancy_boost": 0.1 if occ_context.get("confidence", 0) > 0.8 else 0,
+                    "final_confidence": confidence
+                }
+            }
+            
+            description = await self._synthesize_description(
+                action=action,
+                gap=gap,
+                occ_context=occ_context,
+                comfort_pred=comfort_pred,
+                fin_proj=fin_proj,
+                confidence=confidence,
+            )
+
             recommendations.append(GSASRecommendation(
                 recommendation_id=rec_id,
                 title=action.get("description", f"Improve {gap.criterion_name}"),
-                description=f"Action to improve GSAS criterion {gap.criterion_id} ({gap.criterion_name}). "
-                           f"Current: {gap.current_points:.1f}/{gap.max_points:.1f} points. "
-                           f"Gap: {gap.gap_points:.1f} points.",
+                description=description,
                 category=gap.category,
                 target_criterion=gap.criterion_id,
                 estimated_points_gain=estimated_points,
@@ -367,14 +428,71 @@ class GSASOptimizer:
                 bms_actions=[{
                     "action_type": action.get("type"),
                     "params": action.get("params", {}),
-                    "target_equipment": self._infer_target_equipment(action),
+                    "target_equipment": target_eq,
                 }],
                 cost_estimate=self._estimate_cost(action),
                 effort_estimate=self._estimate_effort(action),
+                raw_context=raw_context,
             ))
         
         return recommendations
     
+    async def _synthesize_description(
+        self,
+        action: Dict[str, Any],
+        gap: "GSASGap",
+        occ_context: Dict[str, Any],
+        comfort_pred: Dict[str, Any],
+        fin_proj: Dict[str, Any],
+        confidence: float,
+    ) -> str:
+        """
+        LLM synthesis of a contextual, operator-language recommendation description.
+
+        Falls back to a structured template when llm_provider is unavailable so the
+        system degrades gracefully without an API key.
+        """
+        fallback = (
+            f"Action to improve GSAS criterion {gap.criterion_id} ({gap.criterion_name}). "
+            f"Current: {gap.current_points:.1f}/{gap.max_points:.1f} points. "
+            f"Gap: {gap.gap_points:.1f} points ({gap.gap_percentage:.0f}%). "
+            f"Projected monthly saving: {fin_proj.get('monthly_savings', 0):.0f} QAR. "
+            f"Comfort risk: {comfort_pred.get('comfort_risk', 'low')}."
+        )
+
+        if self.llm_provider is None:
+            return fallback
+
+        occ_zone = occ_context.get("zone_id", "building")
+        occ_status = "occupied" if occ_context.get("is_occupied") else "unoccupied"
+        monthly_saving = fin_proj.get("monthly_savings", 0)
+        comfort_risk = comfort_pred.get("comfort_risk", "low")
+
+        prompt = (
+            "You are an expert facility-management advisor for a large commercial building in Qatar.\n"
+            "Write ONE concise paragraph (3–4 sentences, operator-level language) explaining why this BMS "
+            "action is recommended right now. Be specific: reference the GSAS criterion, the current gap, "
+            "occupancy status, financial upside, and comfort risk. Do NOT use bullet points.\n\n"
+            f"GSAS criterion: {gap.criterion_id} — {gap.criterion_name}\n"
+            f"Current points: {gap.current_points:.1f} / {gap.max_points:.1f} (gap: {gap.gap_points:.1f})\n"
+            f"Recommended action: {action.get('description', action.get('type'))}\n"
+            f"Zone occupancy: {occ_zone} is currently {occ_status} "
+            f"(confidence {occ_context.get('confidence', 0):.0%})\n"
+            f"Estimated monthly saving: {monthly_saving:.0f} QAR\n"
+            f"Comfort risk: {comfort_risk}\n"
+            f"Recommendation confidence: {confidence:.0%}"
+        )
+
+        try:
+            response = await self.llm_provider.chat(
+                [{"role": "user", "content": prompt}]
+            )
+            text = (response.content or "").strip()
+            return text if text else fallback
+        except Exception as exc:
+            logger.debug("LLM description synthesis failed: %s", exc)
+            return fallback
+
     async def _estimate_confidence(
         self,
         gap: GSASGap,

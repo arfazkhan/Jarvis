@@ -17,9 +17,9 @@
   },
   "hallucination_penalty_rule": {
     "description": "EWC tracking for hallucination_penalty_rule",
-    "weight_adjustment": -0.5009561903222763,
+    "weight_adjustment": -0.5009233610341642,
     "created_at": "2026-03-02T04:43:08.406723",
-    "fisher_information": 247.70999999999447
+    "fisher_information": 256.50999999999397
   },
   "veto_Energy_Agent_Maintenance_Agent": {
     "description": "EWC tracking for veto_Energy_Agent_Maintenance_Agent",

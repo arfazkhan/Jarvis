@@ -21,29 +21,42 @@ class TruthValidator:
         Validates the generated advice against the provided context.
         Returns a dict with 'score' (0.0 to 1.0) and 'reasoning'.
         """
+        # Safety veto responses still validated — no auto-pass
         if advice.startswith("I simulated your proposed action. I **STRONGLY ADVISE AGAINST IT**"):
-            logger.info("[Validator] BFT Safety Veto detected. Bypassing grounding check. Auto-Approve.")
-            return {"score": 1.0, "reasoning": "BFT Safety Veto approved."}
-            
-        # SAFETY PASS: If advice is about Thermal Breaches and data exists in context
+            logger.info("[Validator] BFT Safety Veto detected. Will validate but apply relaxed hurdle.")
+
+        # Thermal safety: note for relaxed scoring but no auto-pass
+        _thermal_boost = False
         if "GROUNDING_THERMAL_SAFETY" in (context or {}) and len(context["GROUNDING_THERMAL_SAFETY"]) > 0:
             breach_keywords = ["high temp", "thermal", "breach", "critical temp", "supply air", "overheating"]
             if any(kw in advice.lower() for kw in breach_keywords):
-                logger.info("[Validator] Safety-critical advice detected with grounding data. Applying relaxed hurdle.")
-                # We still run the LLM check but we'll be more lenient or use this as a booster
+                _thermal_boost = True
+                logger.info("[Validator] Safety-critical advice with grounding data. Eligible for +0.1 boost (not auto-pass).")
             
         logger.info("[Validator] Running Truth-Score evaluation on final advice...")
         
+        # M3.3: Build ML fallback penalty instruction if context carries _ml_evidence_summary
+        ml_fallback_tools = (context or {}).get("_ml_fallback_tools", [])
+        ml_penalty_clause = ""
+        if ml_fallback_tools:
+            tools_str = ", ".join(ml_fallback_tools)
+            ml_penalty_clause = (
+                f"\nML FALLBACK PENALTY: The following tools returned ML_UNAVAILABLE (models not loaded): {tools_str}. "
+                "If the advice cites specific numeric values (probabilities, fault scores, confidence percentages, forecast numbers) "
+                "that can only come from these unavailable ML models, score 0.0 immediately — these values are fabricated."
+            )
+
         prompt = (
             "You are a strict Truth-Score Validator.\n"
             "Read the generated advice and compare it to the ground truth context.\n"
             "If the advice invents a metric, building name, or alarm that is NOT in the context, your score is 0.0.\n"
-            "MATH TOLERANCE: Allow for minor calculation variances (<5%) if the advice is clearly summarizing data present in the context. Focus on 'Object Hallucinations' (names, ids) rather than 'Calculation Drift'.\n"
+            "NUMERIC EXACTNESS: Every number in the advice must appear VERBATIM in the context data. No rounding, no arithmetic, no estimation. If a number in the advice does not match a number in the context exactly, score 0.0.\n"
             "If the advice is strictly grounded in the context (modulo minor math), your score is 1.0.\n"
+            f"{ml_penalty_clause}\n"
             "IMPORTANT: Your output MUST be EXACTLY a valid JSON object. Do NOT include ANY conversational text, tags, markdown formatting, or explanations.\n"
             "Format your response EXACTLY as follows:\n{\n  \"score\": 1.0,\n  \"reasoning\": \"Your reasoning here.\"\n}"
         )
-        
+
         user_msg = (
             f"Context Data: {context}\n\n"
             f"Generated Advice: {advice}\n\n"
@@ -66,12 +79,11 @@ class TruthValidator:
                 
             score = float(result.get("score", 0.0))
             
-            # BOOSTER: If it's a safety alert and we have grounding data, boost the score
-            if "GROUNDING_THERMAL_SAFETY" in (context or {}) and len(context["GROUNDING_THERMAL_SAFETY"]) > 0:
-                 breach_keywords = ["high temp", "thermal", "breach", "critical temp", "supply air", "overheating"]
-                 if any(kw in advice.lower() for kw in breach_keywords):
-                     logger.info(f"[Validator] Boosting safety score from {score} to 1.0 due to GROUNDING_THERMAL_SAFETY.")
-                     score = 1.0
+            # Thermal safety boost: capped at +0.1, never auto-1.0
+            if _thermal_boost:
+                boosted = min(score + 0.1, 1.0)
+                logger.info(f"[Validator] Thermal safety boost: {score:.2f} → {boosted:.2f} (capped +0.1)")
+                score = boosted
             
             # PHASE 4: EWC++ Penalty for Hallucination
             if score < 0.95:

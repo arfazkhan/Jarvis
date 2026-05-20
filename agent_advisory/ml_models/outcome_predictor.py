@@ -286,23 +286,37 @@ class OutcomePredictor:
             actual_outcome
         )
     
-    def save(self, path: Optional[str] = None):
+    def save(self, path: Optional[str] = None) -> Optional[str]:
         """Save model to disk"""
         if self.model is None:
             logger.warning("No model to save")
-            return
-        
-        # Resolve path
+            return None
+
+        try:
+            from agent_commercial.ml.model_registry import get_model_registry
+            registry = get_model_registry()
+            version = registry.save_model(
+                name="outcome_predictor",
+                model=self.model,
+                metrics={"is_trained": self.is_trained, "n_features": len(self.feature_names)},
+                extra_artifacts={"feature_names": self.feature_names},
+            )
+            logger.info("OutcomePredictor saved via ModelRegistry: %s", version)
+            return version
+        except Exception as e:
+            logger.warning("ModelRegistry save failed, falling back to pickle: %s", e)
+
+        # Pickle fallback
         if path is None:
             path = self.model_path
         if path is None:
             path = "outcome_predictor.pkl"
-        
+
         p = Path(path)
         if p.is_dir() or (not p.exists() and not p.suffix):
             p.mkdir(parents=True, exist_ok=True)
             p = p / "outcome_predictor.pkl"
-        
+
         data = {
             "model": self.model,
             "feature_names": self.feature_names,
@@ -311,15 +325,35 @@ class OutcomePredictor:
         with open(p, 'wb') as f:
             pickle.dump(data, f)
         logger.info("OutcomePredictor saved to %s", p)
-    
-    def load(self, path: str):
+        return str(p)
+
+    def load(self, path: Optional[str] = None) -> bool:
         """Load model from disk"""
+        try:
+            from agent_commercial.ml.model_registry import get_model_registry
+            registry = get_model_registry()
+            model, metadata = registry.load_model("outcome_predictor")
+            if model is not None:
+                self.model = model
+                self.is_trained = metadata.get("metrics", {}).get("is_trained", True)
+                feature_names_artifact = registry.load_artifact("outcome_predictor", "feature_names")
+                if feature_names_artifact is not None:
+                    self.feature_names = feature_names_artifact
+                logger.info("OutcomePredictor loaded via ModelRegistry")
+                return True
+        except Exception as e:
+            logger.debug("ModelRegistry load failed, trying pickle fallback: %s", e)
+
+        # Pickle fallback
+        if path is None:
+            return False
         with open(path, 'rb') as f:
             data = pickle.load(f)
         self.model = data["model"]
         self.feature_names = data["feature_names"]
         self.is_trained = data.get("is_trained", True)
         logger.info("OutcomePredictor loaded from %s", path)
+        return True
     
     def _heuristic_predict(
         self,

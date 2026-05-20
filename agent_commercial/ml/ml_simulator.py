@@ -271,11 +271,9 @@ class MLSimulator:
         baseline_kwh = self.building_area * 0.15  # 150 Wh/m²/day
         energy_delta_kwh = baseline_kwh * energy_mean / 100
         
-        # Cost calculation (average rate)
-        # CALIBRATION: Avoid negative QAR (it's either a cost or a saving)
-        # energy_delta_kwh can be negative (savings), but cost impact should be absolute
-        # or clearly signed. We'll use signed: + is cost, - is saving.
-        cost_mean = energy_delta_kwh * 0.05  # QAR 0.05/kWh average
+        # Cost at Kahramaa Tier 3 marginal rate (large commercial, >15,000 kWh/month).
+        # Signed: positive = cost increase, negative = saving.
+        cost_mean = energy_delta_kwh * 0.14  # QAR 0.14/kWh
         
         # SUPPRESSION: If impact is tiny, round to 0 to avoid "rubbish" noise
         if abs(cost_mean) < 0.1:
@@ -383,7 +381,8 @@ class MLSimulator:
                 revert = True
             
             # Trigger 2: Extreme weather + insufficient comfort
-            if temp_variation > 42 and delta > 0:  # Raised setpoint in extreme heat
+            # Threshold 48°C = T3 High-Ambient design limit; 42°C is now normal Doha summer.
+            if temp_variation > 48 and delta > 0:
                 if np.random.random() < 0.3:
                     revert = True
             
@@ -400,8 +399,8 @@ class MLSimulator:
         # Identify risk factors
         if delta > 2:
             risk_factors.append("Large setpoint change (>2°C)")
-        if outdoor_temp > 42:
-            risk_factors.append("Extreme outdoor temperature")
+        if outdoor_temp > 48:
+            risk_factors.append("Extreme outdoor temperature (above T3 High-Ambient limit)")
         if comfort_mean > 5:
             risk_factors.append("Predicted comfort complaints")
         
@@ -435,9 +434,61 @@ class MLSimulator:
         return similar[:top_k]
 
 
+    # =========================================================================
+    # MODEL PERSISTENCE (ModelRegistry Integration)
+    # =========================================================================
+
+    def save_model(self, metrics: Optional[Dict] = None) -> Optional[str]:
+        """Save learned simulation parameters to ModelRegistry."""
+        from agent_commercial.ml.model_registry import get_model_registry
+        registry = get_model_registry()
+
+        model_state = {
+            "change_history": self.change_history,
+            "building_id": self.building_id,
+        }
+        save_metrics = metrics or {"history_size": len(self.change_history)}
+        version = registry.save_model("ml_simulator", model_state, save_metrics)
+        logger.info(f"ML simulator saved: ml_simulator/{version}")
+        return version
+
+    def load_model(self) -> bool:
+        """Load simulation history from ModelRegistry."""
+        from agent_commercial.ml.model_registry import get_model_registry
+        registry = get_model_registry()
+
+        model_state, metadata = registry.load_model("ml_simulator")
+        if model_state is None:
+            return False
+
+        self.change_history = model_state.get("change_history", [])
+        logger.info(f"ML simulator loaded: {len(self.change_history)} historical changes")
+        return True
+
+    async def retrain(self, outcomes: Optional[List[Dict]] = None) -> Dict[str, Any]:
+        """Incorporate new outcomes and re-save for RetrainScheduler."""
+        if outcomes:
+            for outcome in outcomes:
+                self.add_historical_change(outcome)
+        self.save_model()
+        return {"status": "success", "history_size": len(self.change_history)}
+
+
 # =============================================================================
-# CONVENIENCE FUNCTION
+# SINGLETON & CONVENIENCE
 # =============================================================================
+
+_simulator_instance: Optional["MLSimulator"] = None
+
+
+def get_simulator(building_id: str = "default") -> "MLSimulator":
+    """Get or create ML simulator with model loading."""
+    global _simulator_instance
+    if _simulator_instance is None or _simulator_instance.building_id != building_id:
+        _simulator_instance = MLSimulator(building_id)
+        _simulator_instance.load_model()
+    return _simulator_instance
+
 
 def simulate_with_ml(
     change_type: str,
@@ -449,14 +500,14 @@ def simulate_with_ml(
     """
     ML-enhanced simulation - LLM tool handler.
     """
-    simulator = MLSimulator(building_id)
-    
+    simulator = get_simulator(building_id)
+
     result = simulator.simulate_with_uncertainty({
         "change_type": change_type,
         "current_value": current_value,
         "proposed_value": proposed_value,
     }, outdoor_temp=outdoor_temp)
-    
+
     return result.to_dict()
 
 

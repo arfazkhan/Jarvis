@@ -32,17 +32,12 @@ import pandas as pd
 
 logger = logging.getLogger("arvis.ml.fdd")
 
-# TensorFlow import with fallback
 try:
-    import tensorflow as tf
-    from tensorflow import keras
-    from tensorflow.keras import layers, Model
-    TF_AVAILABLE = True
-    # Suppress TF warnings
-    tf.get_logger().setLevel('ERROR')
+    import torch
+    import torch.nn as nn
+    TORCH_AVAILABLE = True
 except ImportError:
-    TF_AVAILABLE = False
-    warnings.warn("TensorFlow not installed. Run: pip install tensorflow")
+    TORCH_AVAILABLE = False
 
 try:
     from sklearn.preprocessing import StandardScaler
@@ -163,41 +158,58 @@ class FaultDetection:
 
 
 # =============================================================================
-# VAE CUSTOM LAYERS
+# VAE PYTORCH MODULES
 # =============================================================================
 
-if TF_AVAILABLE:
-    class Sampling(layers.Layer):
-        """Uses (z_mean, z_log_var) to sample z, the vector encoding a digit."""
-        def call(self, inputs):
-            z_mean, z_log_var = inputs
-            from tensorflow.keras import backend as K
-            batch = K.shape(z_mean)[0]
-            dim = K.int_shape(z_mean)[1]
-            epsilon = K.random_normal(shape=(batch, dim))
-            return z_mean + K.exp(0.5 * z_log_var) * epsilon
-else:
-    class Sampling:
-        """Dummy Sampling layer when TensorFlow not available."""
-        pass
-
-if TF_AVAILABLE:
-    class KLLossLayer(layers.Layer):
-        """Adds KL divergence to model loss."""
-else:
-    class KLLossLayer:
-        """Dummy KL loss layer when TensorFlow not available."""
-        pass
-
-if TF_AVAILABLE:
-    def call(self, inputs):
-        z_mean, z_log_var = inputs
-        from tensorflow.keras import backend as K
-        kl_loss = -0.5 * K.mean(
-            1 + z_log_var - K.square(z_mean) - K.exp(z_log_var)
+class _VAEEncoder(nn.Module if TORCH_AVAILABLE else object):
+    def __init__(self, input_dim, latent_dim):
+        if not TORCH_AVAILABLE:
+            return
+        super().__init__()
+        self.fc_mu = nn.Linear(input_dim, latent_dim)
+        self.fc_log_var = nn.Linear(input_dim, latent_dim)
+        self.encoder = nn.Sequential(
+            nn.Linear(input_dim, 64), nn.ReLU(),
+            nn.Linear(64, 32), nn.ReLU(),
         )
-        self.add_loss(0.01 * kl_loss)
-        return inputs
+
+    def forward(self, x):
+        h = self.encoder(x)
+        return self.fc_mu(h), self.fc_log_var(h)
+
+
+class _VAEDecoder(nn.Module if TORCH_AVAILABLE else object):
+    def __init__(self, latent_dim, output_dim):
+        if not TORCH_AVAILABLE:
+            return
+        super().__init__()
+        self.decoder = nn.Sequential(
+            nn.Linear(latent_dim, 32), nn.ReLU(),
+            nn.Linear(32, 64), nn.ReLU(),
+            nn.Linear(64, output_dim),
+        )
+
+    def forward(self, z):
+        return self.decoder(z)
+
+
+class _VAE(nn.Module if TORCH_AVAILABLE else object):
+    def __init__(self, input_dim, latent_dim=8):
+        if not TORCH_AVAILABLE:
+            return
+        super().__init__()
+        self.encoder = _VAEEncoder(input_dim, latent_dim)
+        self.decoder = _VAEDecoder(latent_dim, input_dim)
+
+    def reparameterise(self, mu, log_var):
+        std = torch.exp(0.5 * log_var)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def forward(self, x):
+        mu, log_var = self.encoder(x)
+        z = self.reparameterise(mu, log_var)
+        return self.decoder(z), mu, log_var
 
 
 class FDDAutoencoder:
@@ -259,10 +271,9 @@ class FDDAutoencoder:
         # Scaler for normalization
         self.scaler = StandardScaler() if SKLEARN_AVAILABLE else None
         
-        # Autoencoder model
-        self.encoder = None
-        self.decoder = None
-        self.autoencoder = None
+        # VAE model (PyTorch)
+        self._vae = None
+        self._vae_optimizer = None
         
         # Anomaly threshold (learned from training)
         self.threshold = 0.1
@@ -270,102 +281,45 @@ class FDDAutoencoder:
         self.std_loss = 0.01
         
         self.is_trained = False
-        
+
+        # sklearn fallback autoencoder (used when TF is not available)
+        self._sklearn_ae = None
+        self._sklearn_threshold = 0.1
+        self._sklearn_mean_loss = 0.0
+        self._sklearn_std_loss = 0.01
+
         logger.info(f"FDDAutoencoder initialized for {equipment_type} with {self.n_features} features")
     
     def _build_model(self) -> None:
         """Build the VAE architecture."""
-        if not TF_AVAILABLE:
-            logger.warning("TensorFlow not available, using rule-based FDD only")
+        if not TORCH_AVAILABLE:
+            logger.warning("[FDD] PyTorch unavailable — VAE not built. ASHRAE rules only.")
+            self._vae = None
             return
-        
-        input_shape = (self.sequence_length, self.n_features)
-        
-        # ─────────────────────────────────────────────────────────────────
-        # Encoder
-        # ─────────────────────────────────────────────────────────────────
-        encoder_input = keras.Input(shape=input_shape, name="encoder_input")
-        
-        # LSTM for temporal patterns
-        x = layers.LSTM(64, return_sequences=True)(encoder_input)
-        x = layers.LSTM(32, return_sequences=False)(x)
-        x = layers.BatchNormalization()(x)
-        x = layers.Dense(16, activation='relu')(x)
-        
-        # Latent space (VAE: mean and log variance)
-        z_mean = layers.Dense(self.latent_dim, name='z_mean')(x)
-        z_log_var = layers.Dense(self.latent_dim, name='z_log_var')(x)
-        
-        # Sample latent space using global Sampling layer
-        z = Sampling(name='z')([z_mean, z_log_var])
-        
-        # Add KL loss term using global KLLossLayer
-        _ = KLLossLayer(name='kl_loss')([z_mean, z_log_var])
-        
-        self.encoder = Model(encoder_input, [z_mean, z_log_var, z], name='encoder')
-        
-        # ─────────────────────────────────────────────────────────────────
-        # Decoder
-        # ─────────────────────────────────────────────────────────────────
-        decoder_input = keras.Input(shape=(self.latent_dim,), name="decoder_input")
-        
-        x = layers.Dense(16, activation='relu')(decoder_input)
-        x = layers.Dense(32, activation='relu')(x)
-        x = layers.BatchNormalization()(x)
-        
-        # Reshape for sequence output
-        x = layers.RepeatVector(self.sequence_length)(x)
-        x = layers.LSTM(32, return_sequences=True)(x)
-        x = layers.LSTM(64, return_sequences=True)(x)
-        
-        decoder_output = layers.TimeDistributed(
-            layers.Dense(self.n_features, activation='linear')
-        )(x)
-        
-        self.decoder = Model(decoder_input, decoder_output, name='decoder')
-        
-        # ─────────────────────────────────────────────────────────────────
-        # Full Autoencoder
-        # ─────────────────────────────────────────────────────────────────
-        encoder_output = self.encoder(encoder_input)
-        z = encoder_output[2]
-        decoder_output = self.decoder(z)
-        
-        self.autoencoder = Model(encoder_input, decoder_output, name='vae')
-        
-        # Standard compile - KL loss is already added via KLLossLayer.add_loss
-        self.autoencoder.compile(
-            optimizer=keras.optimizers.Adam(learning_rate=0.001),
-            loss='mse'
-        )
-        
-        logger.info("VAE model built successfully")
+        input_dim = len(self.feature_names) if hasattr(self, 'feature_names') and self.feature_names else self.n_features
+        self._vae = _VAE(input_dim=input_dim, latent_dim=self.latent_dim)
+        self._vae_optimizer = torch.optim.Adam(self._vae.parameters(), lr=1e-3)
+        logger.info(f"[FDD] PyTorch VAE built (input_dim={input_dim})")
     
     def _physics_constraint_loss(self, y_true, y_pred) -> Any:
         """
         Physics-informed loss to ensure thermodynamic consistency.
-        
+
         For AHU: SAT should be between MAT and cooling coil capacity
         For Chiller: Evap approach should be positive
         """
-        if not TF_AVAILABLE:
+        if not TORCH_AVAILABLE:
             return 0.0
-        
+
         if self.equipment_type == "ahu":
-            from tensorflow.keras import backend as K
-            # SAT should generally be lower than RAT when cooling
             sat_idx = self.features.index("sat") if "sat" in self.features else 0
             rat_idx = self.features.index("rat") if "rat" in self.features else 1
-            
-            sat_pred = y_pred[:, -1, sat_idx]
-            rat_pred = y_pred[:, -1, rat_idx]
-            
-            # Penalize if SAT > RAT (usually wrong for cooling)
-            violation = K.maximum(0.0, sat_pred - rat_pred)
-            return K.mean(violation)
-        
-        from tensorflow.keras import backend as K
-        return K.constant(0.0)
+            sat_pred = y_pred[:, sat_idx]
+            rat_pred = y_pred[:, rat_idx]
+            violation = torch.clamp(sat_pred - rat_pred, min=0.0)
+            return violation.mean()
+
+        return torch.tensor(0.0)
     
     def train(self, 
               historical_data: pd.DataFrame,
@@ -412,40 +366,99 @@ class FDDAutoencoder:
         # Build model
         self._build_model()
         
-        if not TF_AVAILABLE or self.autoencoder is None:
-            self.is_trained = False
-            return {"status": "failed", "error": "tensorflow_not_available"}
+        if self._vae is not None and TORCH_AVAILABLE:
+            # ── PyTorch VAE training path ─────────────────────────────────────
+            try:
+                import torch
+                X_tensor = torch.tensor(
+                    X.reshape(len(X), self.sequence_length * self.n_features),
+                    dtype=torch.float32,
+                )
+                self._vae.train()
+                for _ in range(epochs):
+                    perm = torch.randperm(len(X_tensor))
+                    for start in range(0, len(X_tensor), batch_size):
+                        idx = perm[start:start + batch_size]
+                        xb = X_tensor[idx]
+                        recon, mu, log_var = self._vae(xb)
+                        recon_loss = ((xb - recon) ** 2).mean()
+                        kl_loss = -0.5 * (1 + log_var - mu ** 2 - log_var.exp()).mean()
+                        loss = recon_loss + 0.01 * kl_loss
+                        self._vae_optimizer.zero_grad()
+                        loss.backward()
+                        self._vae_optimizer.step()
+
+                self._vae.eval()
+                with torch.no_grad():
+                    recon_all, mu_all, lv_all = self._vae(X_tensor)
+                reconstruction_errors = ((X_tensor - recon_all) ** 2).mean(dim=1).numpy()
+                self.mean_loss = float(np.mean(reconstruction_errors))
+                self.std_loss = float(np.std(reconstruction_errors))
+                self.threshold = self.mean_loss + 2 * self.std_loss
+                self.is_trained = True
+                logger.info(f"[FDD] PyTorch VAE trained: threshold={self.threshold:.4f}")
+                return {
+                    "status": "trained",
+                    "backend": "pytorch",
+                    "samples": len(X),
+                    "features": self.features,
+                    "threshold": self.threshold,
+                    "mean_reconstruction_error": self.mean_loss,
+                }
+            except Exception as pt_err:
+                logger.warning(f"[FDD] PyTorch VAE training failed: {pt_err}")
+                self._vae = None
+
+        if self._vae is None:
+            # ── sklearn autoencoder fallback ──────────────────────────────────
+            try:
+                from sklearn.neural_network import MLPRegressor
+                X_flat = X.reshape(len(X), self.sequence_length * self.n_features)
+                sklearn_ae = MLPRegressor(
+                    hidden_layer_sizes=(64, 32, 8, 32, 64),
+                    activation="relu",
+                    max_iter=200,
+                    random_state=42,
+                    verbose=False,
+                )
+                sklearn_ae.fit(X_flat, X_flat)
+                reconstructions = sklearn_ae.predict(X_flat)
+                mse_per_sample = np.mean(np.square(X_flat - reconstructions), axis=1)
+                sk_mean = float(np.mean(mse_per_sample))
+                sk_std = float(np.std(mse_per_sample))
+                sk_threshold = sk_mean + 2 * sk_std
+
+                self._sklearn_ae = sklearn_ae
+                self._sklearn_mean_loss = sk_mean
+                self._sklearn_std_loss = sk_std
+                self._sklearn_threshold = sk_threshold
+                # Use the same top-level threshold attrs so get_health_score is consistent
+                self.mean_loss = sk_mean
+                self.std_loss = sk_std
+                self.threshold = sk_threshold
+                self.is_trained = True
+
+                logger.info(
+                    f"FDD sklearn autoencoder trained: threshold={sk_threshold:.4f}"
+                )
+                return {
+                    "status": "trained",
+                    "backend": "sklearn",
+                    "samples": len(X),
+                    "features": self.features,
+                    "threshold": sk_threshold,
+                    "mean_reconstruction_error": sk_mean,
+                }
+            except ImportError:
+                logger.warning("sklearn not available; falling back to rule-based FDD only")
+                self.is_trained = False
+                return {"status": "failed", "error": "sklearn_not_available"}
+            except Exception as sk_err:
+                logger.warning(f"sklearn autoencoder training failed: {sk_err}")
+                self.is_trained = False
+                return {"status": "failed", "error": f"sklearn_training_failed: {sk_err}"}
         
-        # Train
-        history = self.autoencoder.fit(
-            X, X,
-            epochs=epochs,
-            batch_size=batch_size,
-            validation_split=0.2,
-            verbose=0,
-        )
-        
-        # Calculate reconstruction errors for threshold
-        reconstructions = self.autoencoder.predict(X, verbose=0)
-        mse = np.mean(np.square(X - reconstructions), axis=(1, 2))
-        
-        self.mean_loss = float(np.mean(mse))
-        self.std_loss = float(np.std(mse))
-        self.threshold = self.mean_loss + 2 * self.std_loss  # 2 sigma
-        
-        self.is_trained = True
-        
-        metrics = {
-            "status": "trained",
-            "samples": len(X),
-            "features": self.features,
-            "final_loss": float(history.history['loss'][-1]),
-            "threshold": self.threshold,
-            "mean_reconstruction_error": self.mean_loss,
-        }
-        
-        logger.info(f"FDD Autoencoder trained: threshold={self.threshold:.4f}")
-        return metrics
+        return {"status": "failed", "error": "no_backend_available"}
     
     def detect(self, 
                current_data: pd.DataFrame,
@@ -458,43 +471,94 @@ class FDDAutoencoder:
         faults = []
         
         # ─────────────────────────────────────────────────────────────────
-        # 1. Autoencoder-based detection
+        # 1. PyTorch VAE-based detection
         # ─────────────────────────────────────────────────────────────────
-        if self.is_trained and len(current_data) >= self.sequence_length:
+        if self._vae is not None and TORCH_AVAILABLE and self.is_trained and len(current_data) >= self.sequence_length:
             available_features = [f for f in self.features if f in current_data.columns]
-            
+
             if len(available_features) == self.n_features:
                 data = current_data[self.features].values[-self.sequence_length:]
-                
+
                 if self.scaler:
                     data = self.scaler.transform(data)
-                
-                X = data.reshape(1, self.sequence_length, self.n_features)
-                reconstruction = self.autoencoder.predict(X, verbose=0)
-                mse = np.mean(np.square(X - reconstruction))
-                
+
+                X_flat = data.reshape(1, self.sequence_length * self.n_features)
+                import torch as _torch
+                x_tensor = _torch.tensor(X_flat, dtype=_torch.float32)
+                with _torch.no_grad():
+                    recon, mu, log_var = self._vae(x_tensor)
+                reconstruction_errors = ((x_tensor - recon) ** 2).mean(dim=1).numpy()
+                mse = float(reconstruction_errors[0])
+
                 if mse > self.threshold:
-                    # Find which features contribute most to error
-                    feature_errors = np.mean(np.square(X - reconstruction), axis=1)[0]
-                    top_feature_idx = np.argmax(feature_errors)
+                    feature_errors = ((x_tensor - recon) ** 2).numpy().reshape(
+                        self.sequence_length, self.n_features
+                    ).mean(axis=0)
+                    top_feature_idx = int(np.argmax(feature_errors))
                     top_feature = self.features[top_feature_idx]
-                    
+
                     severity = "high" if mse > self.threshold * 2 else "medium"
-                    
+
                     faults.append(FaultDetection(
                         fault_id=f"ae_{equipment_id}_{datetime.now().strftime('%H%M%S')}",
                         equipment_id=equipment_id,
                         fault_type="RECONSTRUCTION_ANOMALY",
                         severity=severity,
-                        confidence=(mse - self.mean_loss) / (3 * self.std_loss),
+                        confidence=(mse - self.mean_loss) / (3 * self.std_loss + 1e-8),
                         description=f"Abnormal {top_feature} pattern detected",
                         detected_value=mse,
                         expected_range=(0, self.threshold),
                         recommendation=f"Investigate {top_feature} readings",
                     ))
+        elif self._vae is None and TORCH_AVAILABLE and self.is_trained:
+            logger.debug("[FDD] PyTorch VAE unavailable — using ASHRAE rules (fallback=True)")
         
         # ─────────────────────────────────────────────────────────────────
-        # 2. ASHRAE rule-based detection
+        # 2. sklearn autoencoder detection (when PyTorch VAE not available)
+        # ─────────────────────────────────────────────────────────────────
+        if (
+            self._vae is None
+            and self._sklearn_ae is not None
+            and len(current_data) >= self.sequence_length
+        ):
+            try:
+                available_features = [f for f in self.features if f in current_data.columns]
+                if len(available_features) == self.n_features:
+                    data = current_data[self.features].values[-self.sequence_length:]
+                    if self.scaler:
+                        data = self.scaler.transform(data)
+                    X_flat = data.reshape(1, self.sequence_length * self.n_features)
+                    reconstruction = self._sklearn_ae.predict(X_flat)
+                    mse = float(np.mean(np.square(X_flat - reconstruction)))
+
+                    if mse > self._sklearn_threshold:
+                        feature_errors = np.square(X_flat - reconstruction).reshape(
+                            self.sequence_length, self.n_features
+                        ).mean(axis=0)
+                        top_feature_idx = int(np.argmax(feature_errors))
+                        top_feature = self.features[top_feature_idx]
+                        severity = "high" if mse > self._sklearn_threshold * 2 else "medium"
+                        confidence = min(
+                            1.0,
+                            (mse - self._sklearn_mean_loss)
+                            / (3 * self._sklearn_std_loss + 1e-8),
+                        )
+                        faults.append(FaultDetection(
+                            fault_id=f"sk_{equipment_id}_{datetime.now().strftime('%H%M%S')}",
+                            equipment_id=equipment_id,
+                            fault_type="RECONSTRUCTION_ANOMALY",
+                            severity=severity,
+                            confidence=confidence,
+                            description=f"Abnormal {top_feature} pattern detected (sklearn)",
+                            detected_value=mse,
+                            expected_range=(0.0, self._sklearn_threshold),
+                            recommendation=f"Investigate {top_feature} readings",
+                        ))
+            except Exception as sk_err:
+                logger.debug(f"sklearn detection error: {sk_err}")
+
+        # ─────────────────────────────────────────────────────────────────
+        # 3. ASHRAE rule-based detection
         # ─────────────────────────────────────────────────────────────────
         rules = ASHRAE_FAULT_RULES.get(self.equipment_type, {})
         current_values = current_data.iloc[-1].to_dict() if len(current_data) > 0 else {}
@@ -521,34 +585,137 @@ class FDDAutoencoder:
     def get_health_score(self, current_data: pd.DataFrame) -> float:
         """
         Calculate equipment health score (0-100).
-        
+
         Based on reconstruction error distance from normal.
+        Uses the TF VAE when available, falls back to the sklearn autoencoder.
         """
         if not self.is_trained or len(current_data) < self.sequence_length:
             return 80.0  # Default healthy
-        
+
         available_features = [f for f in self.features if f in current_data.columns]
         if len(available_features) != self.n_features:
             return 80.0
-        
+
         data = current_data[self.features].values[-self.sequence_length:]
         if self.scaler:
             data = self.scaler.transform(data)
-        
-        X = data.reshape(1, self.sequence_length, self.n_features)
-        reconstruction = self.autoencoder.predict(X, verbose=0)
-        mse = np.mean(np.square(X - reconstruction))
-        
-        # Score: 100 if mse=0, 0 if mse = 3*threshold
-        z_score = (mse - self.mean_loss) / (self.std_loss + 1e-8)
-        score = 100 * np.exp(-0.5 * max(0, z_score))
-        
-        return float(np.clip(score, 0, 100))
+
+        # ── PyTorch VAE path ──────────────────────────────────────────────
+        if self._vae is not None and TORCH_AVAILABLE:
+            try:
+                import torch as _torch
+                X_flat = data.reshape(1, self.sequence_length * self.n_features)
+                x_tensor = _torch.tensor(X_flat, dtype=_torch.float32)
+                with _torch.no_grad():
+                    recon, mu, log_var = self._vae(x_tensor)
+                mse = float(((x_tensor - recon) ** 2).mean(dim=1).numpy()[0])
+                z_score = (mse - self.mean_loss) / (self.std_loss + 1e-8)
+                score = 100 * np.exp(-0.5 * max(0, z_score))
+                return float(np.clip(score, 0, 100))
+            except Exception:
+                return 80.0
+
+        # ── sklearn path (PyTorch VAE not available) ──────────────────────
+        if self._sklearn_ae is not None:
+            try:
+                X_flat = data.reshape(1, self.sequence_length * self.n_features)
+                reconstruction = self._sklearn_ae.predict(X_flat)
+                mse = float(np.mean(np.square(X_flat - reconstruction)))
+                z_score = (mse - self._sklearn_mean_loss) / (self._sklearn_std_loss + 1e-8)
+                score = 100 * np.exp(-0.5 * max(0, z_score))
+                return float(np.clip(score, 0, 100))
+            except Exception:
+                return 80.0
+
+        return 80.0
+
+
+    # =========================================================================
+    # MODEL PERSISTENCE (ModelRegistry Integration)
+    # =========================================================================
+
+    def save_model(self, metrics: Optional[Dict] = None) -> Optional[str]:
+        """Save trained model to ModelRegistry."""
+        if not self.is_trained:
+            logger.warning("Cannot save untrained model")
+            return None
+
+        from agent_commercial.ml.model_registry import get_model_registry
+        registry = get_model_registry()
+
+        model_state = {
+            "threshold": self.threshold,
+            "mean_loss": self.mean_loss,
+            "std_loss": self.std_loss,
+            "features": self.features,
+            "equipment_type": self.equipment_type,
+            "sequence_length": self.sequence_length,
+            "latent_dim": self.latent_dim,
+            "is_trained": True,
+        }
+
+        save_metrics = metrics or {"threshold": self.threshold, "mean_loss": self.mean_loss}
+        extra = {"scaler": self.scaler} if self.scaler else None
+
+        version = registry.save_model(
+            f"fdd_{self.equipment_type}",
+            model_state,
+            save_metrics,
+            extra_artifacts=extra,
+        )
+        logger.info(f"FDD model saved: fdd_{self.equipment_type}/{version}")
+        return version
+
+    def load_model(self) -> bool:
+        """Load trained model from ModelRegistry."""
+        from agent_commercial.ml.model_registry import get_model_registry
+        registry = get_model_registry()
+
+        model_state, metadata = registry.load_model(f"fdd_{self.equipment_type}")
+        if model_state is None:
+            return False
+
+        self.threshold = model_state.get("threshold", 0.1)
+        self.mean_loss = model_state.get("mean_loss", 0.0)
+        self.std_loss = model_state.get("std_loss", 0.01)
+        self.features = model_state.get("features", self.features)
+        self.n_features = len(self.features)
+        self.is_trained = model_state.get("is_trained", False)
+
+        scaler = registry.load_artifact(f"fdd_{self.equipment_type}", "scaler")
+        if scaler:
+            self.scaler = scaler
+
+        logger.info(f"FDD model loaded: fdd_{self.equipment_type}")
+        return True
+
+    async def retrain(self, data: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
+        """Retrain pipeline for RetrainScheduler integration."""
+        if data is None:
+            logger.warning("No training data provided for FDD retrain")
+            return {"status": "skipped", "reason": "no_data"}
+
+        result = self.train(data)
+        if result.get("status") == "trained":
+            self.save_model(result)
+        return result
 
 
 # =============================================================================
-# CONVENIENCE FUNCTION
+# SINGLETON & CONVENIENCE
 # =============================================================================
+
+_fdd_engines: Dict[str, "FDDAutoencoder"] = {}
+
+
+def get_fdd_engine(equipment_type: str = "ahu") -> FDDAutoencoder:
+    """Get or create FDD engine with model loading."""
+    if equipment_type not in _fdd_engines:
+        engine = FDDAutoencoder(equipment_type)
+        engine.load_model()
+        _fdd_engines[equipment_type] = engine
+    return _fdd_engines[equipment_type]
+
 
 def detect_equipment_faults(
     equipment_type: str,
@@ -558,9 +725,9 @@ def detect_equipment_faults(
     """
     Detect faults in equipment - LLM tool handler.
     """
-    fdd = FDDAutoencoder(equipment_type)
+    fdd = get_fdd_engine(equipment_type)
     df = pd.DataFrame([readings])
-    
+
     faults = fdd.detect(df, equipment_id)
     return [f.to_dict() for f in faults]
 

@@ -25,6 +25,14 @@ try:
 except Exception as e:
     logger.warning(f"[DeviceAliasResolver] sentence-transformers not available ({type(e).__name__}), using fallback matching")
 
+# Module-level singleton — prevents repeated 90MB model loads across resolver instances.
+_ALIAS_MODEL_CACHE: dict = {}
+
+def _get_alias_model(model_name: str):
+    if model_name not in _ALIAS_MODEL_CACHE and EMBEDDINGS_AVAILABLE:
+        _ALIAS_MODEL_CACHE[model_name] = SentenceTransformer(model_name)
+    return _ALIAS_MODEL_CACHE.get(model_name)
+
 # Try to import ChromaDB for learned aliases
 try:
     import chromadb
@@ -91,8 +99,8 @@ class DeviceAliasResolver:
     def _init_embeddings(self, model_name: str):
         """Initialize sentence transformer and compute device embeddings."""
         try:
-            logger.info(f"[DeviceAliasResolver] Loading embedding model: {model_name}")
-            self.embedding_model = SentenceTransformer(model_name)
+            logger.info(f"[DeviceAliasResolver] Loading embedding model: {model_name} (singleton)")
+            self.embedding_model = _get_alias_model(model_name)
             
             # Pre-compute embeddings for all known devices
             # Convert device IDs to natural language for better matching

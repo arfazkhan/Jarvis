@@ -6,6 +6,7 @@ Provides a synchronous interface for the async BMSToolHandler.
 """
 
 import asyncio
+import concurrent.futures
 import logging
 from typing import Dict, Any
 
@@ -19,26 +20,19 @@ class BMSToolHandlerSync(BMSToolHandler):
     Synchronous wrapper for BMSToolHandler.
     Used by the mode dispatcher for unified tool execution.
     """
-    
+
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Synchronous tool execution for mode dispatcher"""
-        
-        # Get or create event loop
+        """Synchronous tool execution — safe in both sync and async call sites."""
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # If already in async context, just run directly
-                try:
-                    import nest_asyncio
-                    nest_asyncio.apply()
-                    return loop.run_until_complete(self.execute(tool_name, args))
-                except ImportError:
-                    # nest_asyncio not available, create new loop
-                    new_loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(new_loop)
-                    return new_loop.run_until_complete(self.execute(tool_name, args))
-            else:
-                return loop.run_until_complete(self.execute(tool_name, args))
+            loop = asyncio.get_running_loop()
         except RuntimeError:
-            # No event loop, create one
+            loop = None
+
+        if loop is not None and loop.is_running():
+            # Already inside an event loop (e.g. called from sync code under uvicorn).
+            # Offload to a fresh thread so asyncio.run() gets a clean loop.
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(asyncio.run, self.execute(tool_name, args))
+                return future.result(timeout=30)
+        else:
             return asyncio.run(self.execute(tool_name, args))

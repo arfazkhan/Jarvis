@@ -1,6 +1,10 @@
 """
 Memory Orchestrator - Unified memory interface
 Single entry point for all memory operations.
+
+BMS 7-tier façade methods are at the bottom of this file (query, write,
+archive_investigation, recall_for_investigation, get_conversation).
+Existing home-automation API (remember/recall/forget/etc.) is preserved.
 """
 
 import logging
@@ -13,6 +17,10 @@ from .observation_store import ObservationStore
 from .conversation_buffer import ConversationBuffer
 from .context_builder import ContextBuilder
 from .pattern_store import PatternStore
+from .types import (
+    MemoryTier, MemoryHit, MemoryRecord, RecallBundle,
+    ConversationContext, StoreHealth,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -376,10 +384,227 @@ class MemoryOrchestrator:
         memory_id = args.get('memory_id')
         memory_type = args.get('memory_type')
         confirm = args.get('confirm', False)
-        
+
         if not confirm:
             return "Deletion not confirmed. Set confirm=true to delete."
-        
+
         success = self.forget(memory_id=memory_id, memory_type=memory_type)
-        
+
         return "Memory deleted" if success else "Memory not found"
+
+    # ── BMS 7-Tier Façade ────────────────────────────────────────────────────
+    # These methods are the unified interface for the ARVIS production pipeline.
+    # Adapters (arvis_core/memory/adapters/) implement the actual tier I/O.
+
+    def _get_adapter(self, tier: MemoryTier):
+        """Return adapter for tier, or None if not yet wired."""
+        return getattr(self, "_adapters", {}).get(tier)
+
+    def register_adapter(self, tier: MemoryTier, adapter) -> None:
+        """Register a tier adapter. Called during app startup."""
+        if not hasattr(self, "_adapters"):
+            self._adapters: Dict[MemoryTier, Any] = {}
+        self._adapters[tier] = adapter
+        logger.info(f"[MemoryOrchestrator] Adapter registered for {tier.value}")
+
+    async def query(
+        self,
+        query: str,
+        building_id: str = "",
+        tiers: Optional[List[MemoryTier]] = None,
+        equipment_filter: Optional[List[str]] = None,
+        top_k: int = 5,
+        min_relevance: float = 0.4,
+    ) -> List[MemoryHit]:
+        """
+        Federated query across selected tiers, ranked by confidence.
+        tiers=None queries all registered adapters.
+        Returns empty list (never raises) if adapters not wired yet.
+        """
+        active_tiers = tiers or list(getattr(self, "_adapters", {}).keys())
+        hits: List[MemoryHit] = []
+        for tier in active_tiers:
+            adapter = self._get_adapter(tier)
+            if adapter is None:
+                continue
+            try:
+                tier_hits = await adapter.query(
+                    query=query,
+                    building_id=building_id,
+                    equipment_filter=equipment_filter,
+                    top_k=top_k,
+                )
+                hits.extend(tier_hits)
+            except Exception as e:
+                logger.debug(f"[MemoryOrchestrator] Tier {tier.value} query failed (non-fatal): {e}")
+
+        hits.sort(key=lambda h: h.confidence, reverse=True)
+        return [h for h in hits[:top_k] if h.confidence >= min_relevance]
+
+    async def write(
+        self,
+        tier: MemoryTier,
+        record: MemoryRecord,
+        evidence_ids: Optional[List[str]] = None,
+    ) -> str:
+        """
+        Write to a tier. All writes pass through conflict resolver for T3+T5.
+        Returns the new record ID, or "" if adapter not wired.
+        """
+        if evidence_ids:
+            record.evidence_ids = evidence_ids
+
+        # Conflict resolution gate for procedural + institutional tiers
+        if record.conflict_check and tier in (MemoryTier.T3_PROCEDURAL, MemoryTier.T5_INSTITUTIONAL):
+            try:
+                from agent_advisory.memory_conflict_resolver import MemoryConflictResolver
+                from agent_advisory.goal_generator import ProactiveGoal as _PG
+                from datetime import datetime as _dt
+                _resolver = MemoryConflictResolver()
+                _goal = _PG(
+                    goal_id=f"mem_write_{id(record)}",
+                    title=record.content[:120],
+                    description=record.content,
+                    goal_type="optimization" if tier == MemoryTier.T3_PROCEDURAL else "efficiency",
+                    priority="medium",
+                    score=record.confidence,
+                    source_engine="memory_orchestrator",
+                    building_id=record.building_id or "",
+                    equipment_ids=[],
+                    potential_savings_qar=0.0,
+                    risk_reduction="",
+                    timestamp=_dt.now(),
+                )
+                _resolution = _resolver.resolve_conflicts([_goal], building_id=record.building_id or "")
+                _suppressed = bool(getattr(_resolution, "suppressed_goals", []))
+                if _suppressed:
+                    logger.info(
+                        f"[MemoryOrchestrator] Write suppressed by conflict resolver "
+                        f"(tier={tier.value}): {record.content[:80]}"
+                    )
+                    # Log suppression decision to T2 audit_spans
+                    try:
+                        _t2 = self._get_adapter(MemoryTier.T2_EPISODIC)
+                        if _t2 and hasattr(_t2, "_db") and _t2._db:
+                            await _t2._db.save_conversation_turn(
+                                operator_id="system",
+                                building_id=record.building_id or "",
+                                role="system",
+                                content=(
+                                    f"[CONFLICT_GATE] Write suppressed: tier={tier.value}, "
+                                    f"content={record.content[:200]}, "
+                                    f"conflicts={len(getattr(_resolution, 'conflicts', []))}"
+                                ),
+                            )
+                    except Exception:
+                        pass
+                    return ""
+                # Log allowed write with conflict annotations if any
+                if getattr(_resolution, "conflicts", []):
+                    logger.info(
+                        f"[MemoryOrchestrator] {len(_resolution.conflicts)} conflict(s) noted "
+                        f"but write allowed for: {record.content[:60]}"
+                    )
+            except Exception as e:
+                logger.debug(f"[MemoryOrchestrator] Conflict check skipped (non-fatal): {e}")
+
+        adapter = self._get_adapter(tier)
+        if adapter is None:
+            logger.debug(f"[MemoryOrchestrator] No adapter for {tier.value} — write skipped")
+            return ""
+        try:
+            return await adapter.write(record)
+        except Exception as e:
+            logger.error(f"[MemoryOrchestrator] Write to {tier.value} failed: {e}")
+            return ""
+
+    async def archive_investigation(self, plan) -> str:
+        """
+        Persist completed InvestigationPlan to T2 Episodic store.
+        Called by queen.execute_swarm() at completion.
+        Returns plan.id on success, "" if adapter not wired.
+        """
+        adapter = self._get_adapter(MemoryTier.T2_EPISODIC)
+        if adapter is None:
+            logger.debug("[MemoryOrchestrator] T2 adapter not wired — archive skipped")
+            return ""
+        try:
+            return await adapter.archive_plan(plan)
+        except Exception as e:
+            logger.error(f"[MemoryOrchestrator] archive_investigation failed: {e}")
+            return ""
+
+    async def recall_for_investigation(self, plan) -> RecallBundle:
+        """
+        Auto-recall before any node runs. Queries T2+T3+T5+T6 in parallel.
+        Returns RecallBundle (always safe — empty if adapters not wired).
+        """
+        import asyncio
+
+        query = getattr(plan, "query", "")
+        building_id = getattr(plan, "building_id", "")
+
+        async def _safe_query(tier, top_k=3):
+            try:
+                return await self.query(query, building_id=building_id, tiers=[tier], top_k=top_k)
+            except Exception:
+                return []
+
+        results = await asyncio.gather(
+            _safe_query(MemoryTier.T2_EPISODIC, top_k=3),
+            _safe_query(MemoryTier.T5_INSTITUTIONAL, top_k=5),
+            _safe_query(MemoryTier.T3_PROCEDURAL, top_k=5),
+            _safe_query(MemoryTier.T6_IDENTITY, top_k=3),
+            _safe_query(MemoryTier.T7_RESOLUTION, top_k=10),
+            return_exceptions=True,
+        )
+
+        def _safe(r):
+            return r if isinstance(r, list) else []
+
+        alias_map: Dict[str, str] = {}
+        for h in _safe(results[4]):
+            if h.metadata.get("alias") and h.metadata.get("canonical_id"):
+                alias_map[h.metadata["alias"]] = h.metadata["canonical_id"]
+
+        return RecallBundle(
+            similar_investigations=_safe(results[0]),
+            applicable_skills=_safe(results[1]),
+            matching_patterns=_safe(results[2]),
+            operator_prefs=_safe(results[3]),
+            alias_map=alias_map,
+        )
+
+    async def get_conversation(
+        self,
+        operator_id: str,
+        building_id: str,
+    ) -> ConversationContext:
+        """
+        Load T1 working memory for chat(). Returns ConversationContext with
+        persisted turns + rolling summary. Empty context if adapter not wired.
+        """
+        adapter = self._get_adapter(MemoryTier.T1_WORKING)
+        if adapter is None:
+            return ConversationContext(operator_id=operator_id, building_id=building_id)
+        try:
+            return await adapter.load_conversation(operator_id, building_id)
+        except Exception as e:
+            logger.debug(f"[MemoryOrchestrator] get_conversation failed (non-fatal): {e}")
+            return ConversationContext(operator_id=operator_id, building_id=building_id)
+
+    async def save_conversation_turn(
+        self,
+        operator_id: str,
+        building_id: str,
+        role: str,
+        content: str,
+    ) -> None:
+        """Append one turn to T1 working memory."""
+        adapter = self._get_adapter(MemoryTier.T1_WORKING)
+        if adapter is None:
+            return
+        try:
+            await adapter.append_turn(operator_id, building_id, role, content)
+        except Exception as e:
+            logger.debug(f"[MemoryOrchestrator] save_conversation_turn failed (non-fatal): {e}")

@@ -215,7 +215,7 @@ class BMSLearningEngine:
             
             # 4. Store lessons in database
             for pattern in local_patterns:
-                self._store_lesson(pattern)
+                await self._store_lesson(pattern)
                 results["lessons_stored"] += 1
             
             logger.info(
@@ -411,12 +411,29 @@ Return as JSON array.
     # LESSON STORAGE
     # ═══════════════════════════════════════════════════════════════════════════
     
-    def _store_lesson(self, pattern: Dict):
-        """Store a learned pattern as a lesson in database."""
+    async def _store_lesson(self, pattern: Dict):
+        """Store a learned pattern as a lesson in the suggested_actions table."""
         try:
-            # Use GSAS scores table to store lessons (reuse existing structure)
-            # Or we could add a lessons table later
-            logger.debug(f"[LearningEngine] Stored lesson: {pattern['type']}")
+            import json
+            import uuid
+            suggestion_id = f"learn_{uuid.uuid4().hex[:8]}"
+            conn = await self.db._get_async_connection()
+            await conn.execute(
+                """INSERT OR IGNORE INTO suggested_actions
+                   (suggestion_id, type, target, action, reason, status, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    suggestion_id,
+                    pattern.get("type", "unknown"),
+                    pattern.get("equipment_id", pattern.get("target", "")),
+                    json.dumps(pattern.get("suggestion", "")),
+                    json.dumps(pattern),
+                    "pending",
+                    datetime.now().isoformat(),
+                ),
+            )
+            await conn.commit()
+            logger.debug(f"[LearningEngine] Stored lesson: {pattern['type']} -> {suggestion_id}")
         except Exception as e:
             logger.error(f"[LearningEngine] Failed to store lesson: {e}")
     
@@ -427,10 +444,120 @@ Return as JSON array.
     def get_pending_suggestions(self) -> List[Dict]:
         """Get pending optimization suggestions."""
         return self._pending_suggestions.copy()
-    
+
     def clear_suggestions(self):
         """Clear pending suggestions after they've been acted on."""
         self._pending_suggestions = []
+
+    async def apply_suggestion(self, suggestion_id: str) -> Dict[str, Any]:
+        """
+        Execute a learning suggestion (with operator notification).
+
+        Marks it as applied and records the application timestamp.
+        """
+        import json
+        try:
+            conn = await self.db._get_async_connection()
+            async with conn.execute(
+                "SELECT type, target, action, reason FROM suggested_actions WHERE suggestion_id = ?",
+                (suggestion_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+            if not row:
+                return {"status": "error", "reason": "suggestion not found"}
+
+            stype, target, action_json, reason = row[0], row[1], row[2], row[3]
+
+            await conn.execute(
+                "UPDATE suggested_actions SET status = 'applied', applied_at = ? WHERE suggestion_id = ?",
+                (datetime.now().isoformat(), suggestion_id),
+            )
+            await conn.commit()
+
+            logger.info(f"[LearningEngine] Applied suggestion {suggestion_id}: {stype} on {target}")
+            return {"status": "applied", "suggestion_id": suggestion_id, "type": stype, "target": target}
+        except Exception as e:
+            logger.error(f"[LearningEngine] apply_suggestion failed: {e}")
+            return {"status": "error", "reason": str(e)}
+
+    async def track_suggestion_outcome(self, suggestion_id: str, metrics_after: Optional[Dict] = None) -> Dict[str, Any]:
+        """
+        Check if applied suggestion improved metrics (called 7-30 days later).
+
+        Compares pre/post metrics for affected area and records outcome.
+        """
+        import json
+        try:
+            conn = await self.db._get_async_connection()
+            async with conn.execute(
+                "SELECT type, target, applied_at, reason FROM suggested_actions WHERE suggestion_id = ? AND status = 'applied'",
+                (suggestion_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+            if not row:
+                return {"status": "error", "reason": "suggestion not found or not applied"}
+
+            stype, target, applied_at, reason_json = row[0], row[1], row[2], row[3]
+
+            outcome = "neutral"
+            outcome_metrics = {}
+
+            if metrics_after:
+                outcome_metrics = metrics_after
+                improvement = metrics_after.get("improvement", 0)
+                if improvement > 0.05:
+                    outcome = "improved"
+                elif improvement < -0.05:
+                    outcome = "degraded"
+
+            await conn.execute(
+                "UPDATE suggested_actions SET status = 'validated', outcome = ?, outcome_metrics = ? WHERE suggestion_id = ?",
+                (outcome, json.dumps(outcome_metrics), suggestion_id),
+            )
+            await conn.commit()
+
+            logger.info(f"[LearningEngine] Outcome for {suggestion_id}: {outcome}")
+            return {"status": "tracked", "suggestion_id": suggestion_id, "outcome": outcome}
+        except Exception as e:
+            logger.error(f"[LearningEngine] track_outcome failed: {e}")
+            return {"status": "error", "reason": str(e)}
+
+    async def calibrate_routing(self) -> Dict[str, Any]:
+        """
+        Update MetaCognition weights based on suggestion outcomes.
+
+        Suggestions that helped -> boost related node weights.
+        Suggestions that degraded -> penalize related node weights.
+        """
+        try:
+            conn = await self.db._get_async_connection()
+            async with conn.execute(
+                "SELECT type, outcome FROM suggested_actions WHERE status = 'validated' AND outcome IS NOT NULL",
+            ) as cursor:
+                rows = await cursor.fetchall()
+            if not rows:
+                return {"status": "no_data"}
+
+            from agent_cognitive.meta_cognition import MetaCognition
+            meta = MetaCognition()
+
+            improved = sum(1 for _, o in rows if o == "improved")
+            degraded = sum(1 for _, o in rows if o == "degraded")
+
+            for stype, outcome in rows:
+                weight_delta = 0.1 if outcome == "improved" else (-0.15 if outcome == "degraded" else 0.0)
+                if weight_delta != 0:
+                    meta.update_ewc_weights(
+                        rule_name=f"learning_{stype}",
+                        new_weight=weight_delta,
+                        importance=1.5,
+                    )
+
+            logger.info(f"[LearningEngine] Calibrated routing: {improved} improved, {degraded} degraded")
+            return {"status": "calibrated", "improved": improved, "degraded": degraded, "total": len(rows)}
+        except Exception as e:
+            logger.error(f"[LearningEngine] calibrate_routing failed: {e}")
+            return {"status": "error", "reason": str(e)}
     
     def log_query_success(self, query: str, tool_calls: List[Dict]):
         """Log a successful query for few-shot learning."""

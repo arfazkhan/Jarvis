@@ -31,12 +31,17 @@ ML_TOOLS = [
             },
             "required": []
         },
+        "version": "1.0.0",
+        "cost_class": "expensive",
+        "precedents": [],
+        "produces": ["evidence:energy_forecast"],
         "response_schema": {
             "type": "object",
             "properties": {
                 "forecast": {"type": "array"},
                 "peak_demand": {"type": "number"},
-                "confidence_bounds": {"type": "object"}
+                "confidence_bounds": {"type": "object"},
+                "_ml_lineage": {"type": "object", "description": "ML provenance metadata (model_id, version, drift_score)"}
             }
         }
     },
@@ -60,11 +65,16 @@ ML_TOOLS = [
             },
             "required": ["equipment_id"]
         },
+        "version": "1.0.0",
+        "cost_class": "medium",
+        "precedents": ["get_equipment_status"],
+        "produces": ["evidence:equipment_faults"],
         "response_schema": {
             "type": "object",
             "properties": {
                 "faults": {"type": "array"},
-                "health_score": {"type": "number"}
+                "health_score": {"type": "number"},
+                "_ml_lineage": {"type": "object", "description": "ML provenance metadata (model_id, version, drift_score)"}
             }
         }
     },
@@ -86,6 +96,20 @@ ML_TOOLS = [
                 }
             },
             "required": ["alarm_ids"]
+        },
+        "version": "1.0.0",
+        "cost_class": "expensive",
+        "precedents": ["get_active_alarms"],
+        "produces": ["evidence:root_cause_analysis"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "root_causes": {"type": "array", "description": "Probability-weighted root cause candidates each with equipment_id, probability, and causal_path"},
+                "top_root_cause": {"type": "string", "description": "Most probable root cause equipment"},
+                "confidence": {"type": "number"},
+                "cascade_prediction": {"type": "array", "description": "Alarms predicted to fire next if root cause is not addressed"},
+                "_ml_lineage": {"type": "object", "description": "ML provenance metadata (model_id, version, drift_score)"}
+            }
         }
     },
     {
@@ -122,6 +146,23 @@ ML_TOOLS = [
                 }
             },
             "required": ["change_type", "current_value", "proposed_value"]
+        },
+        "version": "1.0.0",
+        "cost_class": "expensive",
+        "precedents": ["get_equipment_status"],
+        "produces": ["evidence:uncertainty_simulation"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "expected_outcome": {"type": "number", "description": "Mean predicted result value"},
+                "confidence_interval_low": {"type": "number"},
+                "confidence_interval_high": {"type": "number"},
+                "probability_negative_outcome": {"type": "number", "description": "0-1 probability of an adverse result"},
+                "worst_case": {"type": "number"},
+                "energy_delta_kwh": {"type": "number"},
+                "risk_assessment": {"type": "string"},
+                "_ml_lineage": {"type": "object", "description": "ML provenance metadata (model_id, version, drift_score)"}
+            }
         }
     },
     {
@@ -145,6 +186,19 @@ ML_TOOLS = [
                 }
             },
             "required": ["query"]
+        },
+        "version": "1.0.0",
+        "cost_class": "cheap",
+        "precedents": [],
+        "produces": ["evidence:similar_skills"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "skills": {"type": "array", "description": "Matched skillbook entries each with skill_id, title, skill_type, similarity_score, and description"},
+                "total_matches": {"type": "integer"},
+                "query_embedding_used": {"type": "boolean"},
+                "_ml_lineage": {"type": "object", "description": "ML provenance metadata (model_id, version, drift_score)"}
+            }
         }
     },
     {
@@ -165,6 +219,22 @@ ML_TOOLS = [
                 }
             },
             "required": []
+        },
+        "version": "1.0.0",
+        "cost_class": "medium",
+        "precedents": [],
+        "produces": ["evidence:ml_benchmark"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "archetype": {"type": "string", "description": "Building archetype classification (e.g., 'Large Office Cooling-Dominated')"},
+                "percentile_rank": {"type": "number", "description": "Percentile among archetype peers (0-100)"},
+                "eui_kwh_m2": {"type": "number", "description": "Energy Use Intensity in kWh/m²/year"},
+                "peer_average_eui": {"type": "number"},
+                "improvement_recommendations": {"type": "array", "description": "Best practices from top-performing peers"},
+                "comparison_scope": {"type": "string"},
+                "_ml_lineage": {"type": "object", "description": "ML provenance metadata (model_id, version, drift_score)"}
+            }
         }
     },
 ]

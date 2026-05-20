@@ -31,10 +31,34 @@ logger = logging.getLogger("arvis.bms.briefing")
 # =============================================================================
 
 # Qatar-specific timing
-PEAK_HOURS_START = time(12, 0)
-PEAK_HOURS_END = time(18, 0)
 WORK_HOURS_START = time(7, 0)
 WORK_HOURS_END = time(18, 0)
+# Time-of-use tariff window — only relevant for high-voltage bulk meters on ToU contracts.
+# Standard commercial buildings are on volumetric slabs; do NOT issue a financial penalty
+# warning to buildings that haven't confirmed ToU metering.
+_TOU_PEAK_START = time(12, 0)
+_TOU_PEAK_END = time(18, 0)
+
+# Qatar monthly average high temperatures (°C) — used for seasonal fallback
+_QATAR_MONTHLY_AVG_HIGH = {
+    1: 22, 2: 24, 3: 28, 4: 34, 5: 40,
+    6: 43, 7: 44, 8: 44, 9: 41, 10: 36,
+    11: 30, 12: 24,
+}
+# Known Ramadan windows for dynamic is_ramadan detection
+_RAMADAN_WINDOWS = [
+    (datetime(2024, 3, 10), datetime(2024, 4, 9)),
+    (datetime(2025, 3, 1),  datetime(2025, 3, 30)),
+    (datetime(2026, 2, 18), datetime(2026, 3, 19)),
+    (datetime(2027, 2, 8),  datetime(2027, 3, 8)),
+]
+
+def _is_ramadan(dt: datetime) -> bool:
+    """Return True if dt falls within a known Ramadan window."""
+    for start, end in _RAMADAN_WINDOWS:
+        if start <= dt <= end:
+            return True
+    return False
 
 # Arabic greetings by time of day
 ARABIC_GREETINGS = {
@@ -180,110 +204,101 @@ class Briefing:
 class WeatherService:
     """
     Weather data service for Qatar.
-    
-    Integrates with OpenWeatherMap API for real weather data.
+
+    Primary: Open-Meteo (free, no API key, no registration).
+    Doha coordinates: lat=25.2854, lon=51.5310
+    Fallback: seasonal average based on Qatar monthly climatology.
     """
-    
-    def __init__(self, api_key: Optional[str] = None):
-        """
-        Initialize weather service.
-        
-        Args:
-            api_key: WeatherAPI key (from WEATHERAPI_KEY env var)
-        """
-        import os
-        self.api_key = api_key or os.getenv("WEATHERAPI_KEY")
-        self.base_url = "http://api.weatherapi.com/v1"
-        
-        # Default location: Doha, Qatar
-        self.location = "Doha"
-    
+
+    # Doha, Qatar
+    _LAT = 25.2854
+    _LON = 51.5310
+    # WMO weather code → human-readable condition
+    _WMO_CODES = {
+        0: "Clear", 1: "Mainly Clear", 2: "Partly Cloudy", 3: "Overcast",
+        45: "Fog", 48: "Icy Fog",
+        51: "Light Drizzle", 53: "Drizzle", 55: "Heavy Drizzle",
+        61: "Light Rain", 63: "Rain", 65: "Heavy Rain",
+        71: "Light Snow", 73: "Snow", 75: "Heavy Snow",
+        80: "Light Showers", 81: "Showers", 82: "Heavy Showers",
+        95: "Thunderstorm", 96: "Thunderstorm + Hail", 99: "Thunderstorm + Heavy Hail",
+    }
+
+    def __init__(self):
+        self._url = (
+            "https://api.open-meteo.com/v1/forecast"
+            f"?latitude={self._LAT}&longitude={self._LON}"
+            "&current=temperature_2m,apparent_temperature,relative_humidity_2m,"
+            "wind_speed_10m,weathercode"
+            "&wind_speed_unit=kmh&timezone=Asia%2FDoha"
+        )
+
     def get_current_weather(self) -> Dict[str, Any]:
-        """Get current weather for Qatar."""
-        if not self.api_key:
-            return self._fallback_weather()
-        
+        """Fetch current weather from Open-Meteo. Falls back to seasonal heuristic."""
         try:
             import requests
-            response = requests.get(
-                f"{self.base_url}/current.json",
-                params={
-                    "key": self.api_key,
-                    "q": self.location,
-                },
-                timeout=5
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                current = data.get("current", {})
-                
-                # Check for advisories
-                temp = current.get("temp_c", 0)
-                wind = current.get("wind_kph", 0)
-                condition = current.get("condition", {}).get("text", "").lower()
-                
-                advisory = None
-                if temp > 45:
-                    advisory = "Extreme heat warning - limit outdoor activities"
-                elif "dust" in condition or "sand" in condition:
-                    advisory = "Sandstorm advisory - check HVAC filters"
-                elif wind > 27: # roughly 15 mph/24 kph
-                    advisory = "High wind advisory"
-                    
+            resp = requests.get(self._url, timeout=6)
+            if resp.status_code == 200:
+                cur = resp.json().get("current", {})
+                temp = float(cur.get("temperature_2m", 30))
+                feels = float(cur.get("apparent_temperature", temp))
+                humidity = int(cur.get("relative_humidity_2m", 50))
+                wind_kph = float(cur.get("wind_speed_10m", 0))
+                wmo = int(cur.get("weathercode", 0))
+                condition = self._WMO_CODES.get(wmo, "Clear")
                 return {
                     "temp": temp,
-                    "feels_like": current.get("feelslike_c", temp),
-                    "humidity": current.get("humidity", 0),
-                    "condition": current.get("condition", {}).get("text", "Clear"),
-                    "description": condition,
-                    "wind_speed": wind,
-                    "advisory": advisory,
+                    "feels_like": feels,
+                    "humidity": humidity,
+                    "condition": condition,
+                    "wind_speed": wind_kph,
+                    "advisory": self._advisory(temp, wind_kph, condition),
                 }
-            else:
-                logger.warning(f"Weather API error: {response.status_code}")
-                return self._fallback_weather()
-                
-        except Exception as e:
-            logger.warning(f"Weather API failed: {e}")
-            return self._fallback_weather()
-    
+            logger.warning(f"[WeatherService] Open-Meteo HTTP {resp.status_code}")
+        except Exception as exc:
+            logger.warning(f"[WeatherService] Open-Meteo failed: {exc}")
+        return self._fallback_weather()
+
+    def _advisory(self, temp: float, wind_kph: float, condition: str) -> Optional[str]:
+        """
+        Generate weather advisory.
+        Wind threshold: 60 kph (Beaufort 7 — near gale) to avoid chronic alert fatigue.
+        27 kph is a common coastal breeze in Doha, not an advisory event.
+        """
+        cond_lower = condition.lower()
+        if temp > 45:
+            return "Extreme heat warning — limit outdoor activities, inspect condenser cooling"
+        if "dust" in cond_lower or "sand" in cond_lower or "fog" in cond_lower:
+            return "Sandstorm / dust advisory — check HVAC pre-filters and outdoor air dampers"
+        if "thunderstorm" in cond_lower:
+            return "Thunderstorm advisory — monitor roof drainage and lightning protection"
+        if wind_kph >= 60:
+            return f"High wind advisory ({wind_kph:.0f} kph) — secure outdoor equipment"
+        return None
+
     def _fallback_weather(self) -> Dict[str, Any]:
-        """Return heuristic weather block for production failures."""
-        # Simulate typical Qatar weather
-        hour = datetime.now().hour
-        
-        if 10 <= hour <= 16:
-            temp = 38.0  # Hot afternoon
+        """
+        Seasonal-aware fallback using Qatar monthly average highs.
+        Avoids injecting peak-summer temperatures in winter months.
+        """
+        now = datetime.now()
+        month_avg = _QATAR_MONTHLY_AVG_HIGH.get(now.month, 32)
+        hour = now.hour
+        # Diurnal cycle: peak mid-afternoon, trough pre-dawn
+        if 13 <= hour <= 16:
+            temp = float(month_avg)
         elif 6 <= hour <= 9 or 17 <= hour <= 20:
-            temp = 32.0  # Moderate morning/evening
+            temp = float(month_avg) - 4.0
         else:
-            temp = 28.0  # Night
-        
+            temp = float(month_avg) - 8.0
         return {
-            "temp": temp,
-            "feels_like": temp + 3,
-            "humidity": 45,
+            "temp": round(temp, 1),
+            "feels_like": round(temp + 2, 1),
+            "humidity": 55,
             "condition": "Clear",
-            "description": "clear sky",
-            "wind_speed": 5.2,
+            "wind_speed": 12.0,
             "advisory": None,
         }
-    
-    def _check_advisory(self, data: Dict[str, Any]) -> Optional[str]:
-        """Check for weather advisories."""
-        temp = data["main"]["temp"]
-        wind = data["wind"]["speed"]
-        condition = data["weather"][0]["main"].lower()
-        
-        if temp > 45:
-            return "Extreme heat warning - limit outdoor activities"
-        if "sand" in condition or "dust" in condition:
-            return "Sandstorm advisory - check HVAC filters"
-        if wind > 15:
-            return "High wind advisory"
-        
-        return None
 
 
 # =============================================================================
@@ -367,7 +382,7 @@ class BriefingGenerator:
         context = self._get_today_context()
         
         # Generate recommendations
-        recommendations = self._generate_recommendations(context, critical, attention)
+        recommendations = await self._generate_recommendations(context, critical, attention)
         
         # ─────────────────────────────────────────────────────────────────
         # NARRATIVE UPGRADE
@@ -598,21 +613,24 @@ class BriefingGenerator:
         # Get weather
         weather = self.weather_service.get_current_weather()
         
-        # Check if peak hours
         current_time = now.time()
-        is_peak = PEAK_HOURS_START <= current_time <= PEAK_HOURS_END
-        
+        # ToU peak window only meaningful for high-voltage metered buildings
+        is_tou_peak = _TOU_PEAK_START <= current_time <= _TOU_PEAK_END
+
         # Check if weekend (Qatar: Friday-Saturday)
         is_weekend = now.weekday() in [4, 5]  # Friday=4, Saturday=5
-        
-        # Determine tariff
-        tariff = "peak" if is_peak else "standard"
-        
+
+        # Dynamic Ramadan detection via lunar calendar table
+        ramadan = _is_ramadan(now)
+
+        # Tariff label: "tou_peak" only if confirmed ToU meter, else volumetric slab
+        tariff = "tou_peak_window" if is_tou_peak else "volumetric_slab"
+
         return TodayContext(
             date=now,
             is_weekend=is_weekend,
-            is_ramadan=False,  # Would check Islamic calendar
-            is_peak_hours=is_peak,
+            is_ramadan=ramadan,
+            is_peak_hours=is_tou_peak,
             outdoor_temp=weather["temp"],
             feels_like=weather["feels_like"],
             weather_condition=weather["condition"],
@@ -620,41 +638,80 @@ class BriefingGenerator:
             electricity_tariff=tariff,
         )
     
-    def _generate_recommendations(self,
-                                   context: TodayContext,
-                                   critical: List[BriefingItem],
-                                   attention: List[BriefingItem]) -> List[str]:
-        """Generate prioritized recommendations."""
-        recommendations = []
-        
-        # Priority 1: Address critical issues
+    async def _generate_recommendations(
+        self,
+        context: TodayContext,
+        critical: List[BriefingItem],
+        attention: List[BriefingItem],
+    ) -> List[str]:
+        """Generate prioritized recommendations, upgraded with LLM synthesis when available."""
+        # ── Rule-based baseline (always runs) ────────────────────────────────
+        rule_recs: List[str] = []
+
         if critical:
-            recommendations.append(
+            rule_recs.append(
                 f"Address {critical[0].title} first - {critical[0].action or 'investigate immediately'}"
             )
-        
-        # Priority 2: Weather-based
+
         if context.outdoor_temp > 40:
-            recommendations.append(
-                "Extreme heat expected - consider pre-cooling before peak hours"
-            )
-        
+            rule_recs.append("Extreme heat expected - consider pre-cooling before peak hours")
+
         if context.weather_advisory:
-            recommendations.append(context.weather_advisory)
-        
-        # Priority 3: Tariff-based
+            rule_recs.append(context.weather_advisory)
+
         if context.is_peak_hours:
-            recommendations.append(
-                "Peak tariff hours active (12:00-18:00) - minimize discretionary loads"
+            rule_recs.append(
+                "ToU peak window (12:00-18:00) — if this building is on a high-voltage ToU meter, "
+                "consider shifting deferrable loads; standard volumetric slab buildings are unaffected"
             )
-        
-        # Priority 4: Event-based
+
         for event in context.scheduled_events[:2]:
-            recommendations.append(
+            rule_recs.append(
                 f"Pre-condition for {event.get('name', 'event')} at {event.get('time', 'scheduled time')}"
             )
-        
-        return recommendations[:5]  # Max 5 recommendations
+
+        rule_recs = rule_recs[:5]
+
+        # ── LLM synthesis (upgrades rule list when provider available) ────────
+        if not self.llm_provider:
+            return rule_recs
+
+        issues_summary = "; ".join(i.title for i in (critical + attention)[:5]) or "None"
+        events_summary = "; ".join(
+            e.get("name", "event") for e in context.scheduled_events[:3]
+        ) or "None"
+
+        prompt = (
+            "You are an expert facility-management advisor for a large commercial building in Doha, Qatar.\n"
+            "Generate a prioritized list of exactly 5 concise operator recommendations for today. "
+            "Each recommendation must be one sentence, action-oriented, and reference specific building context. "
+            "Return ONLY a numbered list (1. ... 2. ... etc.) with no preamble.\n\n"
+            f"Date/time: {context.date.strftime('%A %d %b %Y, %H:%M')}\n"
+            f"Outdoor temp: {context.outdoor_temp:.0f}°C  ({context.weather_condition})\n"
+            f"Peak tariff active: {context.is_peak_hours}\n"
+            f"Ramadan: {context.is_ramadan}  Weekend: {context.is_weekend}\n"
+            f"Active issues: {issues_summary}\n"
+            f"Scheduled events today: {events_summary}\n"
+            f"Rule-based starting recommendations:\n"
+            + "\n".join(f"  - {r}" for r in rule_recs)
+        )
+
+        try:
+            response = await self.llm_provider.chat([{"role": "user", "content": prompt}])
+            text = (response.content or "").strip()
+            if text:
+                # Parse numbered list back into strings
+                lines = [
+                    line.lstrip("0123456789. ").strip()
+                    for line in text.splitlines()
+                    if line.strip() and line.strip()[0].isdigit()
+                ]
+                if lines:
+                    return lines[:5]
+        except Exception as exc:
+            logger.debug("LLM recommendation synthesis failed: %s", exc)
+
+        return rule_recs
 
 
 # =============================================================================

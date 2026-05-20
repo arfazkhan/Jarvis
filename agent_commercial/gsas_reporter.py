@@ -512,6 +512,54 @@ class GSASReporter:
             logger.info("GSAS compliance restored: Energy and Water scores above disqualification threshold.")
             
         return None
+        
+    def detect_drift(self, window_days: int = 30) -> Optional[Dict[str, Any]]:
+        """
+        Detects if the GSAS score is drifting downwards over a window of time.
+        """
+        if not self.history or len(self.history) < 2:
+            return None
+            
+        current_score = self.calculate_overall_score()
+        cutoff_date = datetime.now() - timedelta(days=window_days)
+        
+        # Filter history by timestamp if available, fallback to all valid entries
+        past_scores = []
+        for entry in self.history:
+            ts = entry.get("timestamp")
+            if ts:
+                try:
+                    entry_dt = datetime.fromisoformat(ts)
+                    if entry_dt >= cutoff_date and "overall_score" in entry:
+                        past_scores.append(entry["overall_score"])
+                except ValueError:
+                    pass  # Malformed timestamp, skip
+            elif "overall_score" in entry:
+                past_scores.append(entry["overall_score"])  # fallback: no timestamp
+        
+        if not past_scores:
+            return None
+            
+        avg_past_score = sum(past_scores) / len(past_scores)
+        drift = avg_past_score - current_score
+        
+        alert_level = "normal"
+        if drift > 0.2:
+            alert_level = "critical"
+        elif drift > 0.1:
+            alert_level = "warning"
+            
+        if alert_level != "normal":
+            return {
+                "alert_level": alert_level,
+                "drift_magnitude": round(drift, 2),
+                "current_score": round(current_score, 2),
+                "past_average": round(avg_past_score, 2),
+                "window_days": window_days,
+                "message": f"GSAS score drift detected: {alert_level.upper()} drop of {drift:.2f} points over the last {window_days} days."
+            }
+            
+        return None
     
     def _add_criterion(
         self,

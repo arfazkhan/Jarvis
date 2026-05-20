@@ -129,8 +129,8 @@ class CausalInferenceEngine:
     """
     
     def __init__(self):
-        # Bayesian Network model
-        self.bn_model: Optional[BayesianNetwork] = None
+        # Bayesian Network model (type annotation is string to avoid NameError when pgmpy absent)
+        self.bn_model: Optional["BayesianNetwork"] = None
         self.inference_engine = None
         
         # Equipment topology graph (Managed by BMSGraph)
@@ -510,9 +510,70 @@ class CausalInferenceEngine:
         return sorted(predictions, key=lambda x: x["probability"], reverse=True)
 
 
+    # =========================================================================
+    # MODEL PERSISTENCE (ModelRegistry Integration)
+    # =========================================================================
+
+    def save_model(self, metrics: Optional[Dict] = None) -> Optional[str]:
+        """Save learned causal structure to ModelRegistry."""
+        from agent_commercial.ml.model_registry import get_model_registry
+        registry = get_model_registry()
+
+        model_state = {
+            "edge_weights": {f"{k[0]}::{k[1]}": v for k, v in self.edge_weights.items()},
+            "learned_edges_count": len(self.edge_weights),
+        }
+        save_metrics = metrics or {"edges": len(self.edge_weights)}
+
+        version = registry.save_model("causal_inference", model_state, save_metrics)
+        logger.info(f"Causal model saved: causal_inference/{version}")
+        return version
+
+    def load_model(self) -> bool:
+        """Load learned causal structure from ModelRegistry."""
+        from agent_commercial.ml.model_registry import get_model_registry
+        registry = get_model_registry()
+
+        model_state, metadata = registry.load_model("causal_inference")
+        if model_state is None:
+            return False
+
+        raw_edges = model_state.get("edge_weights", {})
+        self.edge_weights = {}
+        for key_str, weight in raw_edges.items():
+            parts = key_str.split("::")
+            if len(parts) == 2:
+                self.edge_weights[(parts[0], parts[1])] = weight
+
+        logger.info(f"Causal model loaded: {len(self.edge_weights)} edges")
+        return True
+
+    async def retrain(self, alarm_history: Optional[List[Dict]] = None) -> Dict[str, Any]:
+        """Retrain from alarm history for RetrainScheduler integration."""
+        if not alarm_history:
+            logger.warning("No alarm history provided for causal retrain")
+            return {"status": "skipped", "reason": "no_data"}
+
+        self.learn_structure(alarm_history)
+        self.save_model({"edges": len(self.edge_weights), "samples": len(alarm_history)})
+        return {"status": "success", "edges_learned": len(self.edge_weights)}
+
+
 # =============================================================================
-# CONVENIENCE FUNCTION
+# SINGLETON & CONVENIENCE
 # =============================================================================
+
+_causal_instance: Optional[CausalInferenceEngine] = None
+
+
+def get_causal_engine() -> "CausalInferenceEngine":
+    """Get or create causal engine with model loading."""
+    global _causal_instance
+    if _causal_instance is None:
+        _causal_instance = CausalInferenceEngine()
+        _causal_instance.load_model()
+    return _causal_instance
+
 
 def analyze_cascade(
     alarm_ids: List[str],
@@ -521,9 +582,9 @@ def analyze_cascade(
     """
     Analyze alarm cascade to find root cause - LLM tool handler.
     """
-    engine = CausalInferenceEngine()
+    engine = get_causal_engine()
     chain = engine.infer_cause(alarms)
-    
+
     return {
         "root_cause": chain.root_cause.to_dict(),
         "cascade_path": chain.cascade_path,

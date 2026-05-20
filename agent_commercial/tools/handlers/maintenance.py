@@ -21,6 +21,7 @@ class MaintenanceHandlerMixin:
             "predict_maintenance": instance._handle_predict_maintenance,
             "predict_remaining_life": instance._handle_predict_remaining_life,
             "verify_maintenance_work": instance._handle_verify_maintenance_work,
+            "predict_filter_degradation": instance._handle_predict_filter_degradation,
         }
     
     async def _handle_predict_maintenance(self, args: Dict) -> Dict:
@@ -35,8 +36,9 @@ class MaintenanceHandlerMixin:
                 return {"predictions": [prediction] if isinstance(prediction, dict) else prediction}
                 
             return {
-                "predictions": [{"equipment_id": equipment_id, "next_maintenance": "2026-04-15", "health_score": 85}],
-                "note": "Standard prediction generated"
+                "error": "no_data",
+                "reason": "Predictive engine has no baseline data for this equipment yet. Minimum 2 weeks of sensor history required.",
+                "equipment_id": equipment_id,
             }
         except Exception as e:
             logger.error(f"Maintenance prediction failed: {e}")
@@ -55,18 +57,10 @@ class MaintenanceHandlerMixin:
             if predictive_engine and hasattr(predictive_engine, "predict_rul"):
                 return await predictive_engine.predict_rul(equipment_id, forecast_days)
             
-            # Fallback estimation
             return {
+                "error": "no_data",
+                "reason": "No RUL model available for this equipment. Ensure predictive engine is configured and sensor history exists.",
                 "equipment_id": equipment_id,
-                "health_score": 85,
-                "days_until_predicted_failure": 180,
-                "failure_probability": {
-                    "30_days": 0.05,
-                    "60_days": 0.12,
-                    "90_days": 0.25
-                },
-                "degradation_indicators": ["Normal wear"],
-                "recommendation": "Continue monitoring"
             }
         except Exception as e:
             logger.error(f"RUL prediction failed: {e}")
@@ -125,33 +119,13 @@ class MaintenanceHandlerMixin:
                         logger.warning(f"BMS state history fetch failed: {bse}")
                 
                 if not pre_data or not post_data:
-                    # Fallback to physics-based sample data for demo
-                    sample_data = {
-                        "filter_cleaning": {
-                            "pre": {"static_pressure_drop": 250},
-                            "post": {"static_pressure_drop": 185},
-                        },
-                        "coil_cleaning": {
-                            "pre": {"approach_temperature": 4.2},
-                            "post": {"approach_temperature": 1.8},
-                        },
-                        "belt_replacement": {
-                            "pre": {"fan_vibration": 12.5},
-                            "post": {"fan_vibration": 8.2},
-                        },
-                        "chiller_tube_cleaning": {
-                            "pre": {"condenser_approach": 5.5},
-                            "post": {"condenser_approach": 2.1},
-                        },
+                    return {
+                        "error": "no_data",
+                        "reason": "No pre/post telemetry snapshots found for this work order. Cannot verify maintenance without before/after sensor data.",
+                        "work_order_id": work_order_id,
+                        "equipment_id": equipment_id,
                     }
-                    
-                    data = sample_data.get(task_type, {
-                        "pre": {"metric": 100},
-                        "post": {"metric": 95},
-                    })
-                    pre_data = data["pre"]
-                    post_data = data["post"]
-            
+
             result = await verify_maintenance_work(
                 work_order_id=work_order_id,
                 equipment_id=equipment_id,
@@ -164,3 +138,29 @@ class MaintenanceHandlerMixin:
         except Exception as e:
             logger.error(f"Maintenance verification failed: {e}")
             return {"error": f"Verification failed: {str(e)}"}
+
+    async def _handle_predict_filter_degradation(self, args: Dict) -> Dict:
+        """Predict filter replacement timing via DP trend analysis."""
+        equipment_id = args.get("equipment_id")
+        predictive_engine = getattr(self, "predictive_engine", None)
+
+        if not predictive_engine or not hasattr(predictive_engine, "filter_predictor"):
+            return {"error": "Filter degradation predictor not available"}
+
+        predictor = predictive_engine.filter_predictor
+
+        if equipment_id:
+            result = predictor.predict_degradation(equipment_id)
+            filters = [result.to_dict()]
+        else:
+            results = predictor.scan_all_filters()
+            filters = [r.to_dict() for r in results]
+
+        critical = [f for f in filters if f["risk_level"] in ("critical", "high")]
+        summary = (
+            f"{len(critical)} filter(s) need attention. "
+            f"Most urgent: {critical[0]['equipment_id']} — {critical[0]['recommendation']}"
+            if critical else "All tracked filters within normal parameters."
+        )
+
+        return {"filters": filters, "summary": summary}

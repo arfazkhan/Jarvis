@@ -11,13 +11,13 @@ The "Cost of Comfort" Calculator:
 
 This turns FMs from "blind operators" into "cost-aware decision makers."
 
-Kahramaa Commercial Electricity Rates (2026):
-- Tier 1: 0.13 QAR/kWh (up to 2000 kWh)
-- Tier 2: 0.15 QAR/kWh (2001-4000 kWh) 
-- Tier 3: 0.18 QAR/kWh (4001-8000 kWh)
-- Tier 4: 0.20 QAR/kWh (above 8000 kWh)
+Kahramaa Commercial Electricity Tariff (2024 official):
+- Tier 1: 0.09 QAR/kWh  (1 – 4,000 kWh/month)
+- Tier 2: 0.12 QAR/kWh  (4,001 – 15,000 kWh/month)
+- Tier 3: 0.14 QAR/kWh  (> 15,001 kWh/month)   ← marginal rate for large buildings
 
-Commercial buildings typically operate in Tier 3-4.
+Large commercial buildings exceed 15,000 kWh/month easily; all detected waste
+is billed at the Tier 3 marginal rate of 0.14 QAR/kWh.
 """
 
 import logging
@@ -34,12 +34,11 @@ logger = logging.getLogger("arvis.bms.cost")
 # ═══════════════════════════════════════════════════════════════════════════
 
 class KahramaaRate(Enum):
-    """Kahramaa electricity rate tiers (QAR/kWh)"""
-    TIER_1 = 0.13  # Up to 2000 kWh
-    TIER_2 = 0.15  # 2001-4000 kWh
-    TIER_3 = 0.18  # 4001-8000 kWh
-    TIER_4 = 0.20  # Above 8000 kWh
-    COMMERCIAL_AVG = 0.18  # Default for commercial
+    """Kahramaa commercial electricity tariff tiers (QAR/kWh) — official 2024"""
+    TIER_1 = 0.09   # 1 – 4,000 kWh/month
+    TIER_2 = 0.12   # 4,001 – 15,000 kWh/month
+    TIER_3 = 0.14   # > 15,001 kWh/month (marginal top tier)
+    COMMERCIAL_AVG = 0.14  # Large commercial buildings operate at marginal top tier
 
 
 @dataclass

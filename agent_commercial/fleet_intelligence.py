@@ -43,6 +43,10 @@ class BuildingMetrics:
     active_alarms: int
     mtbf_hours: float  # Mean Time Between Failures
     optimization_savings_qar: float
+    square_footage: float = 10000.0  # m² (GFA)
+    occupancy_type: str = "office"  # office, retail, hospital, mixed, residential
+    gsas_star_rating: float = 0.0  # e.g., 3.0 for 3 stars
+    gsas_disqualification_risk: bool = False  # True if E or W is in warning zone
     timestamp: datetime = field(default_factory=datetime.now)
     
     def to_dict(self) -> Dict[str, Any]:
@@ -56,6 +60,10 @@ class BuildingMetrics:
             "active_alarms": self.active_alarms,
             "mtbf_hours": round(self.mtbf_hours, 0),
             "optimization_savings_qar": round(self.optimization_savings_qar, 0),
+            "square_footage": self.square_footage,
+            "occupancy_type": self.occupancy_type,
+            "gsas_star_rating": round(self.gsas_star_rating, 2),
+            "gsas_disqualification_risk": self.gsas_disqualification_risk,
             "timestamp": self.timestamp.isoformat(),
         }
 
@@ -69,7 +77,7 @@ class BenchmarkResult:
     improvement_opportunities: List[Dict[str, Any]]  # Areas to improve
     potential_savings_qar: float
     fleet_avg: Dict[str, float]
-    flask_best: Dict[str, float]
+    fleet_best: Dict[str, float]
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -79,7 +87,7 @@ class BenchmarkResult:
             "improvement_opportunities": self.improvement_opportunities,
             "potential_savings_qar": round(self.potential_savings_qar, 0),
             "fleet_avg": self.fleet_avg,
-            "fleet_best": self.flask_best,
+            "fleet_best": self.fleet_best,
         }
 
 
@@ -95,6 +103,7 @@ class SharedInsight:
     impact: Dict[str, Any]  # Measured impact
     confidence: float
     applicable_buildings: List[str]
+    gsas_criterion: Optional[str] = None  # Tag insight with GSAS relevance (e.g., "E.1")
     created_at: datetime = field(default_factory=datetime.now)
     
     def to_dict(self) -> Dict[str, Any]:
@@ -108,6 +117,7 @@ class SharedInsight:
             "impact": self.impact,
             "confidence": round(self.confidence, 2),
             "applicable_buildings": self.applicable_buildings,
+            "gsas_criterion": self.gsas_criterion,
             "created_at": self.created_at.isoformat(),
         }
 
@@ -181,9 +191,15 @@ class FleetIntelligence:
                     impact TEXT,
                     confidence REAL,
                     applicable_buildings TEXT,
+                    gsas_criterion TEXT,
                     created_at TEXT
                 )
             """)
+            
+            try:
+                conn.execute("ALTER TABLE fleet_insights ADD COLUMN gsas_criterion TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
             
             conn.commit()
     
@@ -236,15 +252,73 @@ class FleetIntelligence:
             active_alarms=int(metrics.get("active_alarms", 5)),
             mtbf_hours=metrics.get("mtbf_hours", 2000),
             optimization_savings_qar=metrics.get("optimization_savings_qar", 0),
+            square_footage=metrics.get("square_footage", 10000.0),
+            occupancy_type=self._get_occupancy_type(building_id, metrics),
+            gsas_star_rating=metrics.get("gsas_star_rating", 0.0),
+            gsas_disqualification_risk=bool(metrics.get("gsas_disqualification_risk", 0)),
         )
         
         self._metrics_cache[building_id] = building_metrics
         return building_metrics
     
     def _get_building_name(self, building_id: str) -> str:
-        """Get building display name."""
-        # Would query a buildings table in production
+        """Get building display name from DB or derive from ID."""
+        try:
+            with self._get_conn() as conn:
+                cursor = conn.execute(
+                    "SELECT name FROM fleet_buildings WHERE building_id = ?", (building_id,)
+                )
+                row = cursor.fetchone()
+                if row:
+                    return row[0]
+        except Exception:
+            pass
         return building_id.replace("_", " ").title()
+
+    def _get_occupancy_type(self, building_id: str, metrics: Dict[str, float]) -> str:
+        """Get occupancy type from DB or infer from metrics."""
+        try:
+            with self._get_conn() as conn:
+                cursor = conn.execute(
+                    "SELECT occupancy_type FROM fleet_buildings WHERE building_id = ?", (building_id,)
+                )
+                row = cursor.fetchone()
+                if row and row[0]:
+                    return row[0]
+        except Exception:
+            pass
+        return "office"
+
+    def register_building(
+        self,
+        building_id: str,
+        name: str,
+        square_footage: float,
+        occupancy_type: str = "office",
+        location: str = "",
+    ) -> None:
+        """Register a building with its physical characteristics."""
+        with self._get_conn() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS fleet_buildings (
+                    building_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    square_footage REAL NOT NULL,
+                    occupancy_type TEXT DEFAULT 'office',
+                    location TEXT DEFAULT '',
+                    registered_at TEXT
+                )
+            """)
+            conn.execute("""
+                INSERT OR REPLACE INTO fleet_buildings
+                (building_id, name, square_footage, occupancy_type, location, registered_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (building_id, name, square_footage, occupancy_type, location, datetime.now().isoformat()))
+            conn.commit()
+
+        self.update_metrics(building_id, {"square_footage": square_footage})
+        self.add_building(building_id)
+        logger.info(f"Registered building: {name} ({building_id}), {square_footage}m², type={occupancy_type}")
     
     def benchmark_building(self, 
                           building_id: str,
@@ -282,7 +356,7 @@ class FleetIntelligence:
             target_value = getattr(target, metric)
             
             # Calculate percentile (higher is better for GSAS, lower for EUI)
-            if metric in ["gsas_score", "mtbf_hours", "optimization_savings_qar"]:
+            if metric in ["gsas_score", "gsas_star_rating", "mtbf_hours", "optimization_savings_qar"]:
                 # Higher is better
                 percentile = sum(1 for v in values if v <= target_value) / len(values) * 100
                 best_value = max(values)
@@ -325,7 +399,7 @@ class FleetIntelligence:
             improvement_opportunities=sorted(opportunities, key=lambda x: x["percentile"]),
             potential_savings_qar=potential_savings,
             fleet_avg=fleet_avg,
-            flask_best=fleet_best,
+            fleet_best=fleet_best,
         )
     
     def _get_improvement_action(self, 
@@ -345,20 +419,18 @@ class FleetIntelligence:
     def _estimate_savings(self,
                           target: BuildingMetrics,
                           opportunities: List[Dict]) -> float:
-        """Estimate potential savings from improvements."""
+        """Estimate potential savings from improvements using actual building area."""
         savings = 0
-        
+        area = target.square_footage
+
         for opp in opportunities:
             if opp["metric"] == "eui":
-                # EUI reduction = direct energy savings
-                # Assume 10,000 m² building, QAR 0.05/kWh average
                 eui_reduction = abs(opp["gap"])
-                savings += eui_reduction * 10000 * 0.05
+                savings += eui_reduction * area * 0.05  # QAR 0.05/kWh average
             elif opp["metric"] == "water_intensity":
-                # Water savings at QAR 4.8/m³
                 water_reduction = abs(opp["gap"])
-                savings += water_reduction * 10000 * 4.8
-        
+                savings += water_reduction * area * 4.8  # QAR 4.8/m³
+
         return savings
     
     def cross_pollinate_insights(self) -> List[SharedInsight]:
@@ -384,6 +456,11 @@ class FleetIntelligence:
                         # Suggest it to other buildings
                         applicable = [bid for bid in self.building_ids if bid != building_id]
                         
+                        impact = {"savings_qar_month": opt.evidence.get("savings_qar_month", 0)}
+                        gsas_criterion = opt.evidence.get("gsas_criterion")
+                        if gsas_criterion:
+                            impact["gsas_score_delta"] = opt.evidence.get("gsas_score_delta", 0)
+                            
                         insights.append(SharedInsight(
                             insight_id=f"fleet_{opt.skill_id}",
                             source_building=building_id,
@@ -391,9 +468,10 @@ class FleetIntelligence:
                             title=opt.title,
                             description=opt.description,
                             conditions={"equipment_type": opt.equipment_id.split("-")[0] if opt.equipment_id else None},
-                            impact={"savings_qar_month": opt.evidence.get("savings_qar_month", 0)},
+                            impact=impact,
                             confidence=opt.confidence,
                             applicable_buildings=applicable,
+                            gsas_criterion=gsas_criterion,
                         ))
                         
             except Exception as e:
@@ -411,8 +489,8 @@ class FleetIntelligence:
             conn.execute("""
                 INSERT OR REPLACE INTO fleet_insights
                 (insight_id, source_building, insight_type, title, description,
-                 conditions, impact, confidence, applicable_buildings, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 conditions, impact, confidence, applicable_buildings, gsas_criterion, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 insight.insight_id,
                 insight.source_building,
@@ -423,6 +501,7 @@ class FleetIntelligence:
                 json.dumps(insight.impact),
                 insight.confidence,
                 json.dumps(insight.applicable_buildings),
+                insight.gsas_criterion,
                 insight.created_at.isoformat(),
             ))
             conn.commit()
@@ -431,39 +510,131 @@ class FleetIntelligence:
         """Get insights applicable to a specific building."""
         with self._get_conn() as conn:
             cursor = conn.execute("""
-                SELECT * FROM fleet_insights
+                SELECT 
+                    insight_id, source_building, insight_type, title, description,
+                    conditions, impact, confidence, applicable_buildings, created_at,
+                    gsas_criterion
+                FROM fleet_insights
                 WHERE applicable_buildings LIKE ?
                 ORDER BY confidence DESC
             """, (f'%"{building_id}"%',))
             
+            target_archetype = self.detect_archetype(building_id)["archetype"]
+            
             insights = []
             for row in cursor.fetchall():
+                source_building = row[1]
+                base_confidence = row[7]
+                
+                # Transfer confidence adjustment based on archetype match
+                source_archetype = self.detect_archetype(source_building)["archetype"]
+                adjusted_confidence = base_confidence if source_archetype == target_archetype else base_confidence * 0.8
+                
                 insights.append(SharedInsight(
                     insight_id=row[0],
-                    source_building=row[1],
+                    source_building=source_building,
                     insight_type=row[2],
                     title=row[3],
                     description=row[4],
                     conditions=json.loads(row[5]) if row[5] else {},
                     impact=json.loads(row[6]) if row[6] else {},
-                    confidence=row[7],
+                    confidence=adjusted_confidence,
                     applicable_buildings=json.loads(row[8]) if row[8] else [],
                     created_at=datetime.fromisoformat(row[9]),
+                    gsas_criterion=row[10] if len(row) > 10 else None
                 ))
             
-            return insights
+            return sorted(insights, key=lambda x: x.confidence, reverse=True)
     
+    def detect_archetype(self, building_id: str) -> Dict[str, Any]:
+        """
+        Classify building as gulf_tower, mall_retail, hospital_24x7, campus_distributed, or mixed_use.
+        Based on occupancy pattern, cooling demand profile, energy density, water intensity.
+        """
+        metrics = self.get_metrics(building_id)
+        
+        # Simplified classification logic based on available metrics
+        archetype = "mixed_use"
+        defaults = {"temp_setpoint": 23.0, "co2_threshold": 800}
+        
+        if metrics.eui > 300 and metrics.water_intensity > 2.0:
+            archetype = "hospital_24x7"
+            defaults = {"temp_setpoint": 22.0, "co2_threshold": 600}
+        elif metrics.eui > 250:
+            archetype = "mall_retail"
+            defaults = {"temp_setpoint": 24.0, "co2_threshold": 1000}
+        elif metrics.eui < 150 and metrics.equipment_count > 500:
+            archetype = "campus_distributed"
+            defaults = {"temp_setpoint": 24.0, "co2_threshold": 900}
+        elif metrics.equipment_count > 200:
+            archetype = "gulf_tower"
+            defaults = {"temp_setpoint": 23.5, "co2_threshold": 800}
+            
+        return {
+            "building_id": building_id,
+            "archetype": archetype,
+            "optimization_defaults": defaults,
+            "confidence": 0.85
+        }
+    
+    def get_all_metrics(self) -> List[BuildingMetrics]:
+        """Batch-fetch metrics for all buildings in one DB query."""
+        if not self.building_ids:
+            return []
+
+        placeholders = ",".join("?" for _ in self.building_ids)
+        with self._get_conn() as conn:
+            cursor = conn.execute(
+                f"SELECT building_id, metric_name, metric_value FROM fleet_metrics WHERE building_id IN ({placeholders})",
+                self.building_ids,
+            )
+            rows = cursor.fetchall()
+
+        by_building: Dict[str, Dict[str, float]] = {}
+        for bid, metric_name, metric_value in rows:
+            if bid not in by_building:
+                by_building[bid] = {}
+            by_building[bid][metric_name] = metric_value
+
+        results = []
+        for bid in self.building_ids:
+            m = by_building.get(bid, {})
+            bm = BuildingMetrics(
+                building_id=bid,
+                building_name=self._get_building_name(bid),
+                eui=m.get("eui", 150),
+                water_intensity=m.get("water_intensity", 0.5),
+                gsas_score=m.get("gsas_score", 70),
+                equipment_count=int(m.get("equipment_count", 50)),
+                active_alarms=int(m.get("active_alarms", 5)),
+                mtbf_hours=m.get("mtbf_hours", 2000),
+                optimization_savings_qar=m.get("optimization_savings_qar", 0),
+                square_footage=m.get("square_footage", 10000.0),
+                occupancy_type=self._get_occupancy_type(bid, m),
+                gsas_star_rating=m.get("gsas_star_rating", 0.0),
+                gsas_disqualification_risk=bool(m.get("gsas_disqualification_risk", 0)),
+            )
+            self._metrics_cache[bid] = bm
+            results.append(bm)
+        return results
+
     def get_fleet_summary(self) -> Dict[str, Any]:
         """Get summary of fleet performance."""
-        metrics = [self.get_metrics(bid) for bid in self.building_ids]
+        metrics = self.get_all_metrics()
         
         if not metrics:
             return {"buildings": 0, "error": "No buildings in fleet"}
         
+        gsas_compliant_count = sum(1 for m in metrics if m.gsas_star_rating >= 1.0)
+        disqualification_exposure = sum(1 for m in metrics if m.gsas_disqualification_risk)
+        
         return {
             "buildings": len(metrics),
             "avg_eui": round(sum(m.eui for m in metrics) / len(metrics), 1),
-            "avg_gsas": round(sum(m.gsas_score for m in metrics) / len(metrics), 1),
+            "avg_gsas_score": round(sum(m.gsas_score for m in metrics) / len(metrics), 1),
+            "avg_gsas_star_rating": round(sum(m.gsas_star_rating for m in metrics) / len(metrics), 2),
+            "gsas_compliance_coverage_percent": round((gsas_compliant_count / len(metrics)) * 100, 1),
+            "disqualification_exposure_count": disqualification_exposure,
             "total_equipment": sum(m.equipment_count for m in metrics),
             "total_active_alarms": sum(m.active_alarms for m in metrics),
             "total_optimization_savings": round(sum(m.optimization_savings_qar for m in metrics), 0),

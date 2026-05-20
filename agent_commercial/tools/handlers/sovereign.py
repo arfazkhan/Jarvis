@@ -23,89 +23,207 @@ class SovereignHandlerMixin:
             "compare_to_fleet": instance._handle_compare_to_fleet,
             "simulate_change": instance._handle_simulate_change,
             "correlate_events": instance._handle_correlate_events,
+            "replay_investigation": instance._handle_replay_investigation,
         }
     
 
     
     async def _handle_query_skillbook(self, args: Dict) -> Dict:
-        """Query the building's institutional memory"""
+        """Query the building's institutional memory via MemoryOrchestrator (T5)."""
         query = args.get("query")
         equipment_id = args.get("equipment_id")
         skill_type = args.get("skill_type")
         limit = args.get("limit", 5)
-        
+
         if not query:
             return {"error": "query is required"}
-        
-        knowledge_base = getattr(self, "knowledge_base", None)
-        if knowledge_base and hasattr(knowledge_base, "query_skillbook"):
+
+        results = []
+
+        # Mem-8: Primary path — MemoryOrchestrator T5 (institutional)
+        _mo = getattr(self, "memory_orchestrator", None)
+        if _mo is not None:
             try:
-                return await knowledge_base.query_skillbook(
+                from arvis_core.memory.types import MemoryTier
+                hits = await _mo.query(
                     query=query,
-                    equipment_id=equipment_id,
-                    skill_type=skill_type,
-                    limit=limit
+                    tiers=[MemoryTier.T5_INSTITUTIONAL],
+                    top_k=limit,
                 )
+                for h in hits:
+                    results.append({
+                        "chunk_id": h.id,
+                        "title": h.source,
+                        "content": h.content,
+                        "equipment_id": h.metadata.get("equipment_id"),
+                        "skill_type": h.metadata.get("skill_type", skill_type or "pattern"),
+                        "relevance": h.confidence,
+                    })
             except Exception as e:
-                logger.error(f"Error querying skillbook in knowledge_base: {e}")
-        
-        # Fallback: search in tracker if available
-        tracker = getattr(self, "tracker", None)
-        if tracker and hasattr(tracker, "search_skills"):
-            try:
-                return await tracker.search_skills(query, limit=limit)
-            except Exception as e:
-                logger.error(f"Error searching skills in tracker: {e}")
-        
+                logger.debug(f"query_skillbook via orchestrator failed: {e}")
+
+        # Fallback: direct knowledge_base access if orchestrator not wired
+        if not results:
+            knowledge_base = getattr(self, "knowledge_base", None)
+            if knowledge_base and hasattr(knowledge_base, "query_specs"):
+                try:
+                    manual_types = None
+                    if skill_type:
+                        _type_map = {
+                            "pattern": "operator_pattern",
+                            "fault_pattern": "operator_pattern",
+                            "quirk": "operator_pattern",
+                            "maintenance": "operator_pattern",
+                            "optimization": "specs",
+                            "contractor": "operator_pattern",
+                        }
+                        manual_types = [_type_map.get(skill_type, skill_type)]
+                    raw = await knowledge_base.query_specs(
+                        query=query,
+                        equipment_id=equipment_id,
+                        manual_types=manual_types,
+                        limit=limit,
+                    )
+                    for r in raw:
+                        relevance = 1.0 - float(r.get("distance", 0.5))
+                        chunk_id = r.get("id", r.get("metadata", {}).get("id", ""))
+                        results.append({
+                            "chunk_id": chunk_id,
+                            "title": r.get("metadata", {}).get("source", "Operator Pattern"),
+                            "content": r.get("content", ""),
+                            "equipment_id": r.get("metadata", {}).get("equipment_id"),
+                            "skill_type": r.get("metadata", {}).get("manual_type", "pattern"),
+                            "relevance": relevance,
+                        })
+                except Exception as e:
+                    logger.error(f"query_skillbook via query_specs failed: {e}")
+
+            if not results and knowledge_base and hasattr(knowledge_base, "query_skillbook"):
+                try:
+                    return await knowledge_base.query_skillbook(
+                        query=query, equipment_id=equipment_id,
+                        skill_type=skill_type, limit=limit,
+                    )
+                except Exception as e:
+                    logger.error(f"query_skillbook native method failed: {e}")
+
+        # Fallback: search in tracker
+        if not results:
+            tracker = getattr(self, "tracker", None)
+            if tracker and hasattr(tracker, "search_skills"):
+                try:
+                    return await tracker.search_skills(query, limit=limit)
+                except Exception as e:
+                    logger.error(f"Error searching skills in tracker: {e}")
+
+        if not results:
+            return {
+                "query": query,
+                "skills": [],
+                "summary": {"total": 0, "note": "No matching patterns found in institutional memory"},
+            }
+
+        # RAG reranker: cross-encoder post-pass to improve result ordering
+        try:
+            from agent_commercial.ml.rag_optimizer import CrossEncoderReranker
+            _reranker = CrossEncoderReranker()
+            _candidates = results if isinstance(results, list) else results.get("results", [])
+            if _candidates and len(_candidates) > 1:
+                query_text = args.get("query", "") or args.get("spec_type", "")
+                results = _reranker.rerank(query=query_text, candidates=_candidates, top_n=min(5, len(_candidates)))
+                logger.debug(f"[Sovereign] CrossEncoder reranked {len(_candidates)} → {len(results)} results")
+        except Exception as _rerank_err:
+            logger.debug(f"[Sovereign] CrossEncoder reranking skipped: {_rerank_err}")
+
+        # H5: Weak retrieval gate — if all results below confidence threshold, abstain
+        _RETRIEVAL_THRESHOLD = 0.4
+        strong_results = [r for r in results if r.get("relevance", 0) >= _RETRIEVAL_THRESHOLD]
+
+        if results and not strong_results:
+            return {
+                "query": query,
+                "skills": [],
+                "summary": {
+                    "total": 0,
+                    "note": (
+                        "Retrieval confidence too low to cite. "
+                        "All matches scored below threshold — do NOT paraphrase from parametric memory. "
+                        "State that institutional memory has no confident match for this query."
+                    ),
+                    "abstain_reason": "weak_retrieval",
+                    "max_relevance": max(r.get("relevance", 0) for r in results),
+                },
+            }
+
         return {
             "query": query,
-            "results": [],
-            "note": "Skillbook requires knowledge_base module"
+            "skills": strong_results if strong_results else results,
+            "summary": {
+                "total": len(strong_results if strong_results else results),
+                "equipment_filter": equipment_id,
+                "citation_note": "Each result includes chunk_id — cite it inline when referencing this data.",
+            },
         }
     
     async def _handle_add_to_skillbook(self, args: Dict) -> Dict:
-        """Record a new learning in the Skillbook"""
+        """Record a new learning in the Skillbook.
+
+        Writes to TechnicalKnowledgeBase.index_technical_snippet() which is the
+        actual Chroma collection that query_skillbook reads from.
+        """
         title = args.get("title")
         description = args.get("description")
         skill_type = args.get("skill_type")
         equipment_id = args.get("equipment_id")
         confidence = args.get("confidence", 0.5)
         tags = args.get("tags", [])
-        
+
         if not title or not description or not skill_type:
             return {"error": "title, description, and skill_type are required"}
-        
+
         knowledge_base = getattr(self, "knowledge_base", None)
-        if knowledge_base and hasattr(knowledge_base, "add_skill"):
+        written = False
+
+        if knowledge_base and hasattr(knowledge_base, "index_technical_snippet"):
             try:
-                return await knowledge_base.add_skill(
-                    title=title,
-                    description=description,
-                    skill_type=skill_type,
+                _type_map = {
+                    "fault_pattern": "operator_pattern",
+                    "quirk": "operator_pattern",
+                    "maintenance": "operator_pattern",
+                    "contractor": "operator_pattern",
+                    "optimization": "specs",
+                    "pattern": "operator_pattern",
+                }
+                knowledge_base.index_technical_snippet(
+                    content=f"[{skill_type.upper()}] {title}\n\n{description}",
+                    source=f"skillbook/{skill_type}",
                     equipment_id=equipment_id,
-                    confidence=confidence,
-                    tags=tags
+                    manual_type=_type_map.get(skill_type, "operator_pattern"),
+                    chunk_type="procedure",
+                    tags=[skill_type, f"confidence={confidence:.1f}"] + list(tags),
                 )
+                written = True
+                logger.info(f"[Skillbook] Written: '{title}' eq={equipment_id} type={skill_type}")
             except Exception as e:
-                logger.error(f"Error adding skill to knowledge_base: {e}")
-        
-        tracker = getattr(self, "tracker", None)
-        if tracker and hasattr(tracker, "record_skill"):
-            try:
-                return await tracker.record_skill(
-                    title=title,
-                    description=description,
-                    skill_type=skill_type,
-                    equipment_id=equipment_id
-                )
-            except Exception as e:
-                logger.error(f"Error recording skill in tracker: {e}")
-        
+                logger.error(f"add_to_skillbook write failed: {e}")
+
+        if not written:
+            # Fallback: try legacy add_skill if it exists
+            if knowledge_base and hasattr(knowledge_base, "add_skill"):
+                try:
+                    return await knowledge_base.add_skill(
+                        title=title, description=description, skill_type=skill_type,
+                        equipment_id=equipment_id, confidence=confidence, tags=tags,
+                    )
+                except Exception as e:
+                    logger.error(f"add_skill fallback failed: {e}")
+
         return {
-            "status": "recorded",
+            "status": "recorded" if written else "fallback_stored",
             "title": title,
             "skill_type": skill_type,
-            "note": "Skillbook persistence requires knowledge_base module"
+            "equipment_id": equipment_id,
+            "confidence": confidence,
         }
     
     async def _handle_compare_to_fleet(self, args: Dict) -> Dict:
@@ -123,22 +241,10 @@ class SovereignHandlerMixin:
             except Exception as e:
                 logger.error(f"Error in fleet comparison: {e}")
         
-        # Fallback: basic comparison
         return {
+            "error": "no_data",
+            "reason": "Fleet comparison requires world_model with multi-building portfolio data. Not yet available.",
             "building_id": building_id or "default",
-            "metric": metric,
-            "percentile": 65,
-            "fleet_average": 100,
-            "building_value": 85,
-            "best_in_class": {
-                "building_id": "building-A",
-                "value": 70
-            },
-            "improvement_potential": {
-                "qar_savings": 25000,
-                "percentage": 15
-            },
-            "note": "Fleet comparison requires world_model module"
         }
     
     async def _handle_simulate_change(self, args: Dict) -> Dict:
@@ -166,34 +272,11 @@ class SovereignHandlerMixin:
                 logger.error(f"Error in change simulation: {e}")
                 # Fallback to local calculation on error
         
-        # Fallback: simple estimation
-        try:
-            # Safe casting for strings like 'always_on' or 'aligned_with_occupancy'
-            def safe_float(val, default=0.0):
-                if val is None: return default
-                if isinstance(val, (int, float)): return float(val)
-                try:
-                    return float(val)
-                except (ValueError, TypeError):
-                    logger.warning(f"[ToolHandler] Cannot cast '{val}' to float, using 0.0")
-                    return default
-
-            c_val = safe_float(current_value)
-            p_val = safe_float(proposed_value)
-            delta = p_val - c_val
-        except Exception as e:
-            logger.error(f"[ToolHandler] Simulation failed: {e}")
-            delta = 0
-        
         return {
+            "error": "no_data",
+            "reason": "Change simulation requires calibrated world model. Cannot estimate impact without building physics baseline.",
             "change_type": change_type,
             "target": target,
-            "energy_impact_kwh": round(abs(delta) * duration_hours * 0.5, 1),
-            "energy_impact_qar": round(abs(delta) * duration_hours * 0.05, 1),
-            "comfort_impact": "minimal" if abs(delta) <= 1 else "moderate",
-            "risk_level": "low",
-            "fleet_comparison": "Within normal range",
-            "note": "Enhanced simulation requires world_model module"
         }
     
     async def _handle_correlate_events(self, args: Dict) -> Dict:
@@ -225,3 +308,44 @@ class SovereignHandlerMixin:
             "correlations": [],
             "note": "Event correlation requires world_model module"
         }
+
+    async def _handle_replay_investigation(self, args: Dict) -> Dict:
+        """Replay a past investigation from the episodic archive (T2)."""
+        import json as _json
+
+        plan_id = args.get("plan_id")
+        query_filter = args.get("query_filter")
+        limit = args.get("limit", 10)
+
+        db = getattr(self, "db", None)
+        if db is None:
+            return {"error": "Database not available for investigation replay"}
+
+        if plan_id:
+            try:
+                plan_json_str = await db.load_investigation_plan_json(plan_id)
+                if not plan_json_str:
+                    return {"error": f"Investigation {plan_id} not found", "mode": "detail"}
+                plan_data = _json.loads(plan_json_str) if isinstance(plan_json_str, str) else plan_json_str
+                return {
+                    "mode": "detail",
+                    "plan_id": plan_id,
+                    "plan": plan_data,
+                }
+            except Exception as e:
+                logger.error(f"replay_investigation load failed: {e}")
+                return {"error": str(e), "mode": "detail"}
+        else:
+            try:
+                plans = await db.get_investigation_plans(
+                    limit=limit,
+                    query_filter=query_filter,
+                )
+                return {
+                    "mode": "list",
+                    "investigations": plans,
+                    "total": len(plans),
+                }
+            except Exception as e:
+                logger.error(f"replay_investigation list failed: {e}")
+                return {"error": str(e), "mode": "list"}

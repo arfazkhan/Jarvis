@@ -39,6 +39,10 @@ SOVEREIGN_TOOLS = [
             },
             "required": ["query"]
         },
+        "version": "1.0.0",
+        "cost_class": "cheap",
+        "precedents": [],
+        "produces": ["evidence:skillbook_knowledge"],
         "response_schema": {
             "type": "object",
             "properties": {
@@ -83,6 +87,20 @@ SOVEREIGN_TOOLS = [
                 }
             },
             "required": ["title", "description", "skill_type"]
+        },
+        "version": "1.0.0",
+        "cost_class": "cheap",
+        "precedents": [],
+        "produces": ["evidence:skillbook_entry"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "skill_id": {"type": "string", "description": "Assigned ID for the new skillbook entry"},
+                "title": {"type": "string"},
+                "skill_type": {"type": "string"},
+                "confidence": {"type": "number"},
+                "created_at": {"type": "string"}
+            }
         }
     },
     {
@@ -102,6 +120,21 @@ SOVEREIGN_TOOLS = [
                 }
             },
             "required": []
+        },
+        "version": "1.0.0",
+        "cost_class": "medium",
+        "precedents": [],
+        "produces": ["evidence:fleet_comparison"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "percentile_rank": {"type": "number", "description": "Building percentile within fleet (0-100, higher is better)"},
+                "fleet_average": {"type": "number"},
+                "building_value": {"type": "number"},
+                "best_in_class": {"type": "number"},
+                "improvement_opportunities": {"type": "array", "description": "Gap areas with estimated savings_qar"},
+                "best_practices": {"type": "array", "description": "Practices from top-performing fleet buildings"}
+            }
         }
     },
     {
@@ -140,6 +173,10 @@ SOVEREIGN_TOOLS = [
             },
             "required": ["change_type", "target", "current_value", "proposed_value"]
         },
+        "version": "1.0.0",
+        "cost_class": "medium",
+        "precedents": ["get_equipment_status"],
+        "produces": ["evidence:change_simulation"],
         "response_schema": {
             "type": "object",
             "properties": {
@@ -176,6 +213,19 @@ SOVEREIGN_TOOLS = [
                 }
             },
             "required": ["event_type"]
+        },
+        "version": "1.0.0",
+        "cost_class": "medium",
+        "precedents": [],
+        "produces": ["evidence:event_correlations"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "correlations": {"type": "array", "description": "Detected correlations each with event_a, event_b, correlation_coefficient, lag_minutes, and systems"},
+                "primary_cause": {"type": "string", "description": "Most probable causal event"},
+                "timeline": {"type": "array", "description": "Chronological event sequence across all correlated systems"},
+                "confidence": {"type": "number"}
+            }
         }
     },
 ]

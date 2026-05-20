@@ -32,6 +32,16 @@ METADATA_PATH = STORAGE_PATH / "faiss_metadata.pkl"
 MODEL_NAME = EMBEDDING_CONFIG.get("model", "all-MiniLM-L6-v2")
 EMBEDDING_DIM = EMBEDDING_CONFIG.get("embedding_dim", 384)
 
+# Module-level singleton — shared across all EmbeddingsStore instances so the
+# 90 MB SentenceTransformer weights are loaded exactly once per process.
+_MODEL_SINGLETON: "SentenceTransformer | None" = None
+
+def _get_model():
+    global _MODEL_SINGLETON
+    if _MODEL_SINGLETON is None and SentenceTransformer is not None:
+        _MODEL_SINGLETON = SentenceTransformer(MODEL_NAME)
+    return _MODEL_SINGLETON
+
 
 class EmbeddingsStore:
     def __init__(self):
@@ -41,7 +51,7 @@ class EmbeddingsStore:
             return
 
         self.enabled = True
-        self.model = SentenceTransformer(MODEL_NAME)
+        self.model = _get_model()
         self.index = None
         self.metadata = {}  # Map internal ID -> External Event ID / Metadata
         self._load_or_create_index()

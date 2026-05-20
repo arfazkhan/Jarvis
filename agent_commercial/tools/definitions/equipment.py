@@ -20,6 +20,10 @@ EQUIPMENT_TOOLS = [
             },
             "required": ["equipment_id"]
         },
+        "version": "1.0.0",
+        "cost_class": "cheap",
+        "precedents": [],
+        "produces": ["evidence:equipment_status"],
         "response_schema": {
             "type": "object",
             "properties": {
@@ -59,6 +63,10 @@ EQUIPMENT_TOOLS = [
             },
             "required": []
         },
+        "version": "1.0.0",
+        "cost_class": "cheap",
+        "precedents": [],
+        "produces": ["evidence:equipment_list"],
         "response_schema": {
             "type": "object",
             "properties": {
@@ -80,6 +88,20 @@ EQUIPMENT_TOOLS = [
                 }
             },
             "required": ["equipment_id"]
+        },
+        "version": "1.0.0",
+        "cost_class": "cheap",
+        "precedents": ["get_equipment_status"],
+        "produces": ["evidence:equipment_health"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "equipment_id": {"type": "string"},
+                "health_score": {"type": "number", "description": "0-100 health score"},
+                "trend": {"type": "string", "description": "improving, stable, or degrading"},
+                "risk_factors": {"type": "array", "description": "List of identified risk factors"},
+                "recommended_actions": {"type": "array", "description": "Suggested maintenance or operational actions"}
+            }
         }
     },
     {
@@ -99,6 +121,21 @@ EQUIPMENT_TOOLS = [
                 }
             },
             "required": ["point_id"]
+        },
+        "version": "1.0.0",
+        "cost_class": "medium",
+        "precedents": ["get_equipment_status"],
+        "produces": ["evidence:point_history"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "point_id": {"type": "string"},
+                "unit": {"type": "string", "description": "Engineering unit (e.g., °C, %, kW)"},
+                "readings": {"type": "array", "description": "List of {timestamp, value} pairs"},
+                "min": {"type": "number"},
+                "max": {"type": "number"},
+                "avg": {"type": "number"}
+            }
         }
     },
     {
@@ -117,6 +154,21 @@ EQUIPMENT_TOOLS = [
                 }
             },
             "required": ["equipment_id"]
+        },
+        "version": "1.0.0",
+        "cost_class": "cheap",
+        "precedents": [],
+        "produces": ["evidence:equipment_specs"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "equipment_id": {"type": "string"},
+                "manufacturer": {"type": "string"},
+                "model": {"type": "string"},
+                "specs": {"type": "object", "description": "Key-value map of specification fields"},
+                "matched_sections": {"type": "array", "description": "Relevant manual excerpts matching the query"},
+                "source_document": {"type": "string", "description": "Source manual or datasheet filename"}
+            }
         }
     },
     {
@@ -146,6 +198,18 @@ EQUIPMENT_TOOLS = [
                 }
             },
             "required": ["query"]
+        },
+        "version": "1.0.0",
+        "cost_class": "medium",
+        "precedents": [],
+        "produces": ["evidence:knowledge_search"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "results": {"type": "array", "description": "Ranked list of matching knowledge chunks"},
+                "strategy_used": {"type": "string", "description": "Actual retrieval strategy applied (tree/vector/hybrid)"},
+                "total_matches": {"type": "integer"}
+            }
         }
     },
     {
@@ -155,6 +219,23 @@ EQUIPMENT_TOOLS = [
             "type": "object",
             "properties": {},
             "required": []
+        },
+        "version": "1.0.0",
+        "cost_class": "cheap",
+        "precedents": [],
+        "produces": ["evidence:dashboard_overview"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "equipment_summary": {"type": "object", "description": "Counts by status: running, stopped, fault, maintenance"},
+                "active_alarm_count": {"type": "integer"},
+                "critical_alarm_count": {"type": "integer"},
+                "energy_today_kwh": {"type": "number"},
+                "energy_cost_today_qar": {"type": "number"},
+                "gsas_score": {"type": "number"},
+                "pending_insights": {"type": "array", "description": "Unacknowledged proactive recommendations"},
+                "timestamp": {"type": "string"}
+            }
         }
     },
 ]

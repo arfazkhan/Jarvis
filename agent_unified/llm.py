@@ -18,77 +18,135 @@ _REASONING_AGENT = None  # K2 Think (Reasoning Layer)
 _TOOL_AGENT = None       # Primary Execution Layer (Configurable)
 _FALLBACK_TOOL_AGENT = None # Groq Fallback Layer
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# BEDROCK CHANNEL → MODEL ROUTING TABLE
+# Maps semantic channel names to specific Bedrock model IDs.
+# Channels are set per-call-site (see arvis_core/swarm/node.py and swarm_nodes.py).
+# ═══════════════════════════════════════════════════════════════════════════════
+BEDROCK_MODEL_MAP: Dict[str, str] = {
+    # Ultra-cheap classification/planning — Nova Micro
+    "classify":    "amazon.nova-micro-v1:0",
+    "depth_plan":  "amazon.nova-micro-v1:0",
+    "feedback":    "amazon.nova-micro-v1:0",
+
+    # Tool-call execution — Kimi K2.5
+    "tool":        "moonshotai.kimi-k2.5",
+    "tool_call":   "moonshotai.kimi-k2.5",
+
+    # Root cause / deep reasoning — Kimi K2 Thinking
+    "reasoning":   "moonshot.kimi-k2-thinking",
+    "root_cause":  "moonshot.kimi-k2-thinking",
+
+    # Narrative reports / briefings — Nova Lite
+    "narrative":   "amazon.nova-lite-v1:0",
+    "report":      "amazon.nova-lite-v1:0",
+
+    # Structured JSON extraction — GLM 4.7 Flash
+    "extract":     "zai.glm-4.7-flash",
+    "structured":  "zai.glm-4.7-flash",
+
+    # Meta-cognition / continual reflection — MiniMax M2.1
+    "reflect":     "minimax.minimax-m2.1",
+    "meta":        "minimax.minimax-m2.1",
+
+    # Multi-agent consensus / synthesis — Claude Sonnet 4.6
+    "consensus":   "us.anthropic.claude-sonnet-4-6",
+    "synthesis":   "us.anthropic.claude-sonnet-4-6",
+
+    # General swarm node work — Claude Sonnet 4.6
+    "swarm":       "us.anthropic.claude-sonnet-4-6",
+
+    # Chat / default — Claude Sonnet 4.6
+    "chat":        "us.anthropic.claude-sonnet-4-6",
+
+    # Escalation / complex audit — Claude Opus 4.6
+    "escalation":  "us.anthropic.claude-opus-4-6-v1",
+    "audit":       "us.anthropic.claude-opus-4-6-v1",
+}
+
+# Bedrock provider prefix detection
+_BEDROCK_PREFIXES = ("amazon.", "anthropic.", "moonshot.", "moonshotai.", "minimax.",
+                     "zai.", "z-ai.", "mistral.", "meta.", "cohere.", "deepseek.", "qwen.")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# BEDROCK COST METERING — per-model pricing ($/1M tokens: input, output)
+# ═══════════════════════════════════════════════════════════════════════════════
+_BEDROCK_PRICING: Dict[str, tuple] = {
+    "us.anthropic.claude-sonnet-4-6": (3.0, 15.0),
+    "us.anthropic.claude-opus-4-6-v1": (15.0, 75.0),
+    "amazon.nova-micro-v1:0": (0.035, 0.14),
+    "amazon.nova-lite-v1:0": (0.06, 0.24),
+    "moonshotai.kimi-k2.5": (1.0, 4.0),
+    "moonshot.kimi-k2-thinking": (1.0, 4.0),
+    "zai.glm-4.7-flash": (0.3, 0.6),
+    "minimax.minimax-m2.1": (0.5, 1.5),
+}
+
+_LLM_USAGE_LOG: List[Dict[str, Any]] = []
+
+
+def _compute_bedrock_cost(model_id: str, input_tokens: int, output_tokens: int) -> float:
+    """Compute USD cost from token counts using pricing table."""
+    pricing = _BEDROCK_PRICING.get(model_id)
+    if not pricing:
+        for key, val in _BEDROCK_PRICING.items():
+            if model_id.startswith(key.split(".")[0]):
+                pricing = val
+                break
+    if not pricing:
+        pricing = (3.0, 15.0)
+    return (input_tokens * pricing[0] + output_tokens * pricing[1]) / 1_000_000
+
+
+def drain_usage_log() -> List[Dict[str, Any]]:
+    """Drain and return all accumulated LLM usage entries. Thread-safe for single event loop."""
+    global _LLM_USAGE_LOG
+    entries = _LLM_USAGE_LOG[:]
+    _LLM_USAGE_LOG = []
+    return entries
+
 def _robust_extract(content: str) -> tuple[List[str], str]:
     """
-    Ultra-robust multi-tag extractor for modern LLMs.
-    Handles:
-    1. Multi-variation tags (<think>, <thinking>, <final_proposal>)
-    2. Stray tags (closing tags without openers)
-    3. Conversational babble before/after structured blocks
-    4. Fallback to last JSON block if tags are totally missing
+    Extract reasoning tags and return (thoughts, clean_answer).
+
+    Fast path: if content has no XML-like tags, return it directly.
+    Otherwise: strip thinking/reasoning tags into thoughts list,
+    extract answer tags or fall back to remaining content.
     """
     if not content:
         return [], ""
-    
-    import re
+
+    # Fast path: no tags at all — return as-is
+    if "<" not in content:
+        return [], content.strip()
+
     thoughts = []
-    
-    # 1. Primary Extraction: All tagged reasoning blocks
-    thought_tags = ["think", "thinking", "thought", "reasoning", "process", "internal_monologue", "tool_call", "call"]
-    working_content = content
-    
-    for tag in thought_tags:
-        pattern = rf"<{tag}>(.*?)</{tag}>"
-        matches = re.finditer(pattern, working_content, re.DOTALL | re.IGNORECASE)
-        for m in matches:
-            thoughts.append(m.group(1).strip())
-        working_content = re.sub(pattern, " ", working_content, flags=re.DOTALL | re.IGNORECASE)
-    
-    # 2. Secondary Extraction: Known answer/proposal tags
-    answer_tags = ["answer", "final_proposal", "conclusion", "response", "output"]
-    final_answer = ""
-    for tag in answer_tags:
-        pattern = rf"<{tag}>(.*?)</{tag}>"
-        match = re.search(pattern, working_content, re.DOTALL | re.IGNORECASE)
-        if match:
-            final_answer = match.group(1).strip()
-            # Post-extraction: move everything else to thoughts to keep message clean
-            babble = re.sub(pattern, " ", working_content, flags=re.DOTALL | re.IGNORECASE).strip()
-            if babble:
-                # Clean stray XML from babble
-                babble = re.sub(r"</?.*?>", "", babble).strip()
-                if babble:
-                    thoughts.append(babble)
-            working_content = ""
-            break
-            
-    # 3. Tertiary Extraction: Fallback for un-tagged or broken-tag responses
-    if not final_answer:
-        # Check if response ends with a JSON block (common for agents)
-        # We look for the LAST JSON object in the string
-        json_blocks = re.findall(r'(\{.*\})', working_content, re.DOTALL)
-        if json_blocks:
-            final_answer = json_blocks[-1].strip()
-            # Treat everything BEFORE the main JSON block as babble/thoughts
-            pre_babble_idx = working_content.find(json_blocks[-1])
-            pre_babble = working_content[:pre_babble_idx].strip()
-            if pre_babble:
-                pre_babble = re.sub(r"</?.*?>", "", pre_babble).strip()
-                if pre_babble:
-                    thoughts.append(pre_babble)
-        else:
-            # Absolute fallback: just strip tags and return
-            final_answer = re.sub(r"</?.*?>", "", working_content).strip()
-            
-    # Final cleanup of stray tags in thoughts/answer
-    final_answer = re.sub(r"</?.*?>", "", final_answer).strip()
-    clean_thoughts = []
-    for t in thoughts:
-        t_clean = re.sub(r"</?.*?>", "", str(t)).strip()
-        if t_clean:
-            clean_thoughts.append(t_clean)
-            
-    return clean_thoughts, final_answer
+    working = content
+
+    # Strip all thinking-family tags into thoughts
+    think_pattern = re.compile(
+        r"<(think|thinking|thought|reasoning|process|internal_monologue)>(.*?)</\1>",
+        re.DOTALL | re.IGNORECASE,
+    )
+    for m in think_pattern.finditer(working):
+        t = m.group(2).strip()
+        if t:
+            thoughts.append(t)
+    working = think_pattern.sub("", working)
+
+    # Extract answer-family tags
+    answer_pattern = re.compile(
+        r"<(answer|final_proposal|conclusion|response|output)>(.*?)</\1>",
+        re.DOTALL | re.IGNORECASE,
+    )
+    answer_match = answer_pattern.search(working)
+    if answer_match:
+        final_answer = answer_match.group(2).strip()
+    else:
+        # No answer tags — strip any remaining stray tags and return
+        final_answer = re.sub(r"</?[a-zA-Z_]+>", "", working).strip()
+
+    return thoughts, final_answer
 
 def _extract_k2_answer(content: str) -> str:
     """Legacy wrapper for _robust_extract."""
@@ -111,7 +169,16 @@ class UnifiedLLM(BaseModel):
     def __init__(self, **data):
         super().__init__(**data)
         global _REASONING_AGENT, _TOOL_AGENT, _FALLBACK_TOOL_AGENT
-        
+
+        _bedrock_active = bool(
+            os.getenv("BEDROCK_API_KEY")
+            or os.getenv("AWS_ACCESS_KEY_ID")
+            or os.getenv("AWS_PROFILE")
+        )
+        if _bedrock_active:
+            logger.info("[UnifiedLLM] Bedrock active — skipping legacy provider init (K2Think/Groq).")
+            return
+
         # Initialize Reasoning Agent (K2 Think)
         # Initialize Reasoning Agent (Configurable)
         if _REASONING_AGENT is None:
@@ -192,8 +259,8 @@ class UnifiedLLM(BaseModel):
                 _FALLBACK_TOOL_AGENT = _TOOL_AGENT
 
     async def ask(
-        self, 
-        messages: List[Dict[str, str]], 
+        self,
+        messages: List[Dict[str, str]],
         system_msgs: Optional[List[Dict[str, str]]] = None,
         tools: Optional[List[Dict]] = None,
         tool_choice: str = "auto",
@@ -203,20 +270,27 @@ class UnifiedLLM(BaseModel):
         channel: str = "chat"
     ) -> Message:
         """
-        Send a request to the Reasoning Engine (K2 Think).
+        Send a request. If a Bedrock model is mapped for this channel, route to Bedrock.
+        Otherwise fall through to the legacy REASONING_AGENT.
         """
         full_system_prompt = ""
         if system_msgs:
             full_system_prompt = "\n".join([m["content"] for m in system_msgs])
-            
-        # Route to REASONING AGENT
-        # Note: K2 might struggle with tools, so we prefer not sending them unless necessary
-        # But if user insists on tools here, we pass them.
-        # Route to REASONING AGENT
-        # Note: K2 might struggle with tools, so we prefer not sending them unless necessary
-        # But if user insists on tools here, we pass them.
-        
-        # User requested: NO FALLBACK to Groq. If K2 fails,
+
+        bedrock_model = BEDROCK_MODEL_MAP.get(channel)
+        if bedrock_model and (os.getenv("BEDROCK_API_KEY") or os.getenv("AWS_ACCESS_KEY_ID") or os.getenv("AWS_PROFILE")):
+            return await self._ask_bedrock(
+                model_id=bedrock_model,
+                system_prompt=full_system_prompt,
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                max_tokens=max_tokens,
+                channel=channel,
+            )
+
+        if _REASONING_AGENT is None:
+            raise RuntimeError(f"[UnifiedLLM] No Bedrock model for channel '{channel}' and no legacy Reasoning Agent initialised. Check BEDROCK_MODEL_MAP or set LLM_PROVIDER.")
         response = await self._ask_provider(_REASONING_AGENT, full_system_prompt, messages, tools, tool_choice, override_model, max_tokens=max_tokens, stream_as=stream_as, channel=channel)
         if response.content and "LLM Error" in response.content:
             raise RuntimeError(response.content)
@@ -228,27 +302,43 @@ class UnifiedLLM(BaseModel):
 
     async def ask_tool(self, messages, system_msgs, tools, tool_choice, stream_as="think", channel="chat") -> Message:
         """
-        Send a request to the Execution Engine (Groq).
-        Note: Groq/Llama-3 is optimized for function calling and JSON.
+        Send a tool-calling request. Routes to Bedrock if configured, else Groq fallback.
         """
         full_system_prompt = ""
         if system_msgs:
             full_system_prompt = "\n".join([m["content"] for m in system_msgs])
-            
-        # Route to TOOL AGENT
+
+        # Bedrock-first: tool channels always prefer Bedrock if AWS creds present
+        tool_channel = channel if channel in BEDROCK_MODEL_MAP else "tool"
+        bedrock_model = BEDROCK_MODEL_MAP.get(tool_channel)
+        if bedrock_model and (os.getenv("BEDROCK_API_KEY") or os.getenv("AWS_ACCESS_KEY_ID") or os.getenv("AWS_PROFILE")):
+            try:
+                return await self._ask_bedrock(
+                    model_id=bedrock_model,
+                    system_prompt=full_system_prompt,
+                    messages=messages,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    channel=channel,
+                )
+            except Exception as e:
+                logger.warning(f"[UnifiedLLM] Bedrock tool call failed ({bedrock_model}): {e}. Falling back to legacy agent.")
+
+        # Legacy fallback — only if agents were initialised (non-Bedrock mode)
+        if _TOOL_AGENT is None:
+            raise RuntimeError("[UnifiedLLM] No Bedrock model for this channel and no legacy Tool Agent initialised. Check BEDROCK_MODEL_MAP or set TOOL_PROVIDER.")
         try:
             return await self._ask_provider(_TOOL_AGENT, full_system_prompt, messages, tools, tool_choice, stream_as=stream_as, channel=channel)
         except Exception as e:
-            # 🛡️ Groq Fallback safety net
             if _FALLBACK_TOOL_AGENT and _FALLBACK_TOOL_AGENT != _TOOL_AGENT:
-                logger.warning(f"[UnifiedLLM] ⚠️ Primary Tool Agent failed: {e}. Retrying with Groq Fallback...")
+                logger.warning(f"[UnifiedLLM] Primary Tool Agent failed: {e}. Retrying with Groq Fallback...")
                 try:
                     return await self._ask_provider(_FALLBACK_TOOL_AGENT, full_system_prompt, messages, tools, tool_choice, stream_as=stream_as)
                 except Exception as fallback_err:
-                    logger.error(f"[UnifiedLLM] ❌ Both Primary and Fallback Tool Agents failed: {fallback_err}")
+                    logger.error(f"[UnifiedLLM] Both Primary and Fallback Tool Agents failed: {fallback_err}")
                     raise fallback_err
             else:
-                logger.error(f"[UnifiedLLM] ❌ Primary Tool Agent failed and no separate fallback available: {e}")
+                logger.error(f"[UnifiedLLM] Primary Tool Agent failed and no separate fallback available: {e}")
                 raise e
 
     async def ask_streaming(self, messages: List[Dict], system_msgs: Optional[List[Dict]] = None):
@@ -260,97 +350,349 @@ class UnifiedLLM(BaseModel):
             yield response.content
 
     async def ask_json(
-        self, 
-        messages: List[Dict[str, str]], 
+        self,
+        messages: List[Dict[str, str]],
         retries: int = 2,
         system_msgs: Optional[List[Dict[str, str]]] = None,
         stream_as: str = "think",
         channel: str = "chat"
     ) -> Dict[str, Any]:
         """
-        Ask LLM and enforce JSON output with Robust Extraction and Self-Repair Loop.
+        Ask LLM and enforce JSON output.
+
+        Strategy:
+        1. For providers supporting native JSON mode (Groq, OpenAI), use response_format
+        2. Fast-path parse: try json.loads on stripped content
+        3. Fallback: extract JSON from markdown/tags
+        4. Self-repair loop on failure
         """
-        import re
         attempts = 0
-        last_error = None
         current_messages = list(messages)
-        
+
         while attempts <= retries:
             try:
-                response = await self.ask(current_messages, system_msgs=system_msgs, stream_as=stream_as, channel=channel)
+                response = await self.ask(
+                    current_messages,
+                    system_msgs=system_msgs,
+                    stream_as=stream_as,
+                    channel=channel,
+                )
                 content = response.content or "{}"
-                
-                # 1. Clean Markdown and Tags
-                content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
-                content = re.sub(r'</?(?:think|answer)>', '', content)
-                
+
+                # Throttle guard: Bedrock returns error string, not JSON
+                if content.startswith("Bedrock Error") and ("ThrottlingException" in content or "Too Many Requests" in content):
+                    wait_s = 30 * (attempts + 1)
+                    logger.warning(f"[UnifiedLLM] Throttled on ask_json (attempt {attempts+1}) — sleeping {wait_s}s")
+                    await asyncio.sleep(wait_s)
+                    attempts += 1
+                    continue
+
+                # Fast path: direct parse
+                stripped = content.strip()
+                if stripped.startswith(("{", "[")):
+                    try:
+                        return json.loads(stripped)
+                    except json.JSONDecodeError:
+                        pass
+
+                # Strip thinking tags
+                content = re.sub(r"<(?:think|thinking)>.*?</(?:think|thinking)>", "", content, flags=re.DOTALL)
+                content = re.sub(r"</?[a-zA-Z_]+>", "", content)
+
+                # Extract from markdown code fences
                 if "```json" in content:
                     content = content.split("```json")[1].split("```")[0].strip()
                 elif "```" in content:
-                    # Generic markdown block - check if it looks like JSON
-                    blocks = content.split("```")
-                    for b in blocks:
-                        b = b.strip()
-                        if b.startswith('{') or b.startswith('['):
-                            content = b
+                    for block in content.split("```"):
+                        block = block.strip()
+                        if block.startswith(("{", "[")):
+                            content = block
                             break
-                
+
                 content = content.strip()
                 if not content:
                     raise json.JSONDecodeError("Empty content", "", 0)
 
-                # 2. Robust Regex Extraction
-                # Find all potential JSON objects or arrays
-                json_patterns = [
-                    r'(\{.*?\})', # Non-greedy objects
-                    r'(\[.*?\])', # Non-greedy arrays
-                    r'(\{.*\})',   # Greedy objects (most likely the full payload)
-                    r'(\[.*\])'    # Greedy arrays
-                ]
-                
-                candidates = []
-                for pattern in json_patterns:
-                    matches = re.findall(pattern, content, re.DOTALL)
-                    candidates.extend(matches)
-                
-                # Add the raw content as a candidate
-                candidates.append(content)
-                
-                # Sort candidates by length (longest first) to find the most complete JSON
-                candidates.sort(key=len, reverse=True)
-                
-                for cand in candidates:
-                    cand = cand.strip()
-                    if not cand: continue
+                # Try direct parse after cleanup
+                try:
+                    return json.loads(content)
+                except json.JSONDecodeError:
+                    pass
+
+                # Greedy extraction: find the largest JSON object/array
+                obj_match = re.search(r"(\{.*\})", content, re.DOTALL)
+                if obj_match:
                     try:
-                        return json.loads(cand)
+                        return json.loads(obj_match.group(1))
                     except json.JSONDecodeError:
-                        continue
-                
-                # If regex fails, try one last attempt with literal json.loads
-                return json.loads(content)
-                
+                        pass
+
+                arr_match = re.search(r"(\[.*\])", content, re.DOTALL)
+                if arr_match:
+                    try:
+                        return json.loads(arr_match.group(1))
+                    except json.JSONDecodeError:
+                        pass
+
+                raise json.JSONDecodeError("No valid JSON found", content[:100], 0)
+
             except json.JSONDecodeError as e:
                 attempts += 1
-                last_error = e
-                logger.error(f"[UnifiedLLM] ⚠️ JSON Parse Error (Attempt {attempts}/{retries+1}): {e}")
-                
+                logger.warning(f"[UnifiedLLM] JSON parse failed (attempt {attempts}/{retries+1}): {e}")
+
                 if attempts <= retries:
-                    # 3. SELF-REPAIR: Ask LLM to fix it
-                    repair_prompt = f"Your previous response was not valid JSON. Error: {str(e)}. Return ONLY the valid JSON object. No conversational text."
-                    
-                    # Prevent circular error loops where model apologizes for failing but doesn't fix it
-                    if len(current_messages) > 10: # Prune history if it gets too long
-                         current_messages = current_messages[:2] + current_messages[-4:]
-                         
+                    repair_prompt = "Your previous response was not valid JSON. Return ONLY the valid JSON object. No markdown, no explanation."
+                    if len(current_messages) > 10:
+                        current_messages = current_messages[:2] + current_messages[-4:]
                     current_messages.append({"role": "assistant", "content": response.content})
                     current_messages.append({"role": "user", "content": repair_prompt})
-                    
-        raise ValueError(f"Failed to get valid JSON after {retries} retries. Last content snippet: {content[:100]!r}")
+
+        raise ValueError(f"Failed to get valid JSON after {retries} retries. Last content: {content[:100]!r}")
 
     # ═══════════════════════════════════════════════════════════
     # ADAPTERS
     # ═══════════════════════════════════════════════════════════
+
+    async def _ask_bedrock(
+        self,
+        model_id: str,
+        system_prompt: str,
+        messages: List[Dict],
+        tools: Optional[List[Dict]] = None,
+        tool_choice: str = "auto",
+        max_tokens: Optional[int] = None,
+        channel: str = "chat",
+    ) -> Message:
+        """
+        AWS Bedrock Converse API adapter.
+        Auth priority: BEDROCK_API_KEY (httpx) → boto3 (AWS_ACCESS_KEY_ID / AWS_PROFILE).
+        Supports all Bedrock models: Claude, Nova, Kimi, MiniMax, GLM, etc.
+        """
+        import asyncio
+
+        region = os.getenv("AWS_BEDROCK_REGION", os.getenv("AWS_DEFAULT_REGION", "us-east-1"))
+
+        # ── Build shared Converse payload ─────────────────────────────────────
+        def _build_payload() -> Dict[str, Any]:
+            converse_msgs = []
+            for m in messages:
+                role = m.get("role", "user")
+                content = m.get("content", "")
+                if role == "system":
+                    continue
+                if role == "tool":
+                    converse_msgs.append({
+                        "role": "user",
+                        "content": [{
+                            "toolResult": {
+                                "toolUseId": m.get("tool_call_id", "unknown"),
+                                "content": [{"text": str(content)}],
+                            }
+                        }]
+                    })
+                elif role == "assistant":
+                    tool_calls = m.get("tool_calls") or []
+                    content_blocks = []
+                    if content:
+                        content_blocks.append({"text": content})
+                    for tc in tool_calls:
+                        if isinstance(tc, dict):
+                            try:
+                                inp = json.loads(tc["function"]["arguments"]) if isinstance(tc["function"]["arguments"], str) else (tc["function"]["arguments"] or {})
+                            except Exception:
+                                inp = {}
+                            content_blocks.append({
+                                "toolUse": {
+                                    "toolUseId": tc.get("id", "call_unknown"),
+                                    "name": tc["function"]["name"],
+                                    "input": inp,
+                                }
+                            })
+                    if content_blocks:
+                        converse_msgs.append({"role": "assistant", "content": content_blocks})
+                else:
+                    if content:
+                        converse_msgs.append({"role": role, "content": [{"text": str(content)}]})
+
+            if converse_msgs and converse_msgs[0]["role"] != "user":
+                converse_msgs.insert(0, {"role": "user", "content": [{"text": "Begin."}]})
+
+            # Bedrock requires strict user/assistant alternation — merge consecutive same-role turns
+            merged: list = []
+            for msg in converse_msgs:
+                if merged and merged[-1]["role"] == msg["role"]:
+                    merged[-1]["content"].extend(msg["content"])
+                else:
+                    merged.append({"role": msg["role"], "content": list(msg["content"])})
+            converse_msgs = merged
+
+            payload: Dict[str, Any] = {"modelId": model_id, "messages": converse_msgs}
+            if system_prompt:
+                payload["system"] = [{"text": system_prompt}]
+            if max_tokens:
+                payload["inferenceConfig"] = {"maxTokens": max_tokens}
+            if tools:
+                tool_specs = []
+                for t in tools:
+                    fn = t.get("function", t)
+                    params = fn.get("parameters", {"type": "object", "properties": {}})
+                    tool_specs.append({
+                        "toolSpec": {
+                            "name": fn.get("name", "unknown"),
+                            "description": fn.get("description", ""),
+                            "inputSchema": {"json": params},
+                        }
+                    })
+                payload["toolConfig"] = {
+                    "tools": tool_specs,
+                    "toolChoice": {"any": {}} if tool_choice == "required" else {"auto": {}},
+                }
+            return payload
+
+        payload = _build_payload()
+
+        # ── Auth path 1: BEDROCK_API_KEY via httpx ────────────────────────────
+        # Cross-region inference IDs (us./eu./ap. prefix) require boto3 path — httpx URL can't route them.
+        api_key = os.getenv("BEDROCK_API_KEY")
+        _is_cross_region = model_id.startswith(("us.", "eu.", "ap."))
+        if api_key and not _is_cross_region:
+            import httpx
+            url = f"https://bedrock-runtime.{region}.amazonaws.com/model/{model_id}/converse"
+            headers = {
+                "x-api-key": api_key,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            }
+            try:
+                async with httpx.AsyncClient(timeout=120.0) as client:
+                    resp = await client.post(url, headers=headers, json=payload)
+                    if resp.status_code != 200:
+                        logger.warning(f"[Bedrock] API key auth failed ({resp.status_code}): {resp.text[:200]}. Falling back to boto3.")
+                    else:
+                        response = resp.json()
+                        return self._parse_bedrock_response(response, model_id, channel)
+            except Exception as e:
+                logger.warning(f"[Bedrock] httpx call failed: {e}. Falling back to boto3.")
+
+        # ── Auth path 2: boto3 (IAM / profile) ───────────────────────────────
+        try:
+            import boto3
+        except ImportError:
+            return Message.assistant_message(
+                "Error: Neither BEDROCK_API_KEY nor boto3 available. "
+                "Set BEDROCK_API_KEY or run: pip install boto3"
+            )
+
+        def _call_boto3():
+            from botocore.config import Config
+            client = boto3.client(
+                "bedrock-runtime",
+                region_name=region,
+                config=Config(
+                    read_timeout=180,
+                    connect_timeout=10,
+                    retries={"max_attempts": 6, "mode": "adaptive"},
+                ),
+            )
+            return client.converse(**payload)
+
+        try:
+            response = await asyncio.to_thread(_call_boto3)
+        except Exception as e:
+            error_str = str(e)
+            # Adaptive mode handles most throttling; this catches residual bursts
+            if "ThrottlingException" in error_str or "Too Many Requests" in error_str:
+                for backoff_s in [10, 30, 60]:
+                    logger.warning(f"[Bedrock] ThrottlingException — retrying in {backoff_s}s ({model_id})")
+                    await asyncio.sleep(backoff_s)
+                    try:
+                        response = await asyncio.to_thread(_call_boto3)
+                        return self._parse_bedrock_response(response, model_id, channel)
+                    except Exception as retry_e:
+                        if "ThrottlingException" not in str(retry_e) and "Too Many Requests" not in str(retry_e):
+                            return Message.assistant_message(f"Bedrock Error ({model_id}): {str(retry_e)}")
+                        error_str = str(retry_e)
+                logger.error(f"[Bedrock] Still throttled after 3 backoff retries ({model_id})")
+            return Message.assistant_message(f"Bedrock Error ({model_id}): {error_str}")
+
+        return self._parse_bedrock_response(response, model_id, channel)
+
+    def _parse_bedrock_response(self, response: Dict[str, Any], model_id: str, channel: str) -> Message:
+        """Parse Bedrock Converse API response into a Message."""
+        output = response.get("output", {}).get("message", {})
+        content_blocks = output.get("content", [])
+
+        text_parts = []
+        reasoning_parts = []
+        tool_calls_out = []
+
+        for block in content_blocks:
+            if "text" in block:
+                text_parts.append(block["text"])
+            elif "toolUse" in block:
+                from agent_unified.schema import ToolCall, Function
+                tu = block["toolUse"]
+                tool_calls_out.append(ToolCall(
+                    id=tu.get("toolUseId", "call_unknown"),
+                    function=Function(
+                        name=tu["name"],
+                        arguments=json.dumps(tu.get("input", {})),
+                    )
+                ))
+            elif "reasoningContent" in block:
+                # Kimi K2 Thinking / MiniMax extended thinking trace
+                rt = block["reasoningContent"].get("reasoningText", {}).get("text", "")
+                if rt:
+                    reasoning_parts.append(rt)
+
+        # Models like Kimi K2 Thinking may return ONLY reasoningContent with no text block
+        if not text_parts and reasoning_parts:
+            text_parts = reasoning_parts
+            reasoning_parts = []
+
+        text = "\n".join(text_parts) if text_parts else ""
+        if text:
+            _, text = _robust_extract(text)
+
+        try:
+            from agent_commercial.api.sse_broadcaster import SSEBroadcaster
+            import asyncio as _aio
+            loop = _aio.get_event_loop()
+            if loop.is_running() and text:
+                broadcaster = SSEBroadcaster()
+                loop.create_task(broadcaster.broadcast("message", {"content": text}, channel=channel))
+        except Exception:
+            pass
+
+        # Extract token usage and compute cost
+        from agent_unified.schema import UsageInfo
+        from datetime import datetime as _dt
+        usage_data = response.get("usage", {})
+        input_tokens = usage_data.get("inputTokens", 0)
+        output_tokens = usage_data.get("outputTokens", 0)
+        cost_usd = _compute_bedrock_cost(model_id, input_tokens, output_tokens)
+
+        usage_info = UsageInfo(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            model_id=model_id,
+            cost_usd=cost_usd,
+        )
+
+        _LLM_USAGE_LOG.append({
+            "model_id": model_id,
+            "channel": channel,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cost_usd": cost_usd,
+            "timestamp": _dt.utcnow().isoformat(),
+        })
+
+        return Message.assistant_message(
+            content=text,
+            tool_calls=tool_calls_out if tool_calls_out else None,
+            usage=usage_info,
+        )
 
     async def _ask_provider(self, agent, system_prompt, messages, tools, tool_choice, override_model=None, max_tokens=None, stream_as="message", channel="chat"):
         # Dispatch to appropriate adapter based on agent configuration

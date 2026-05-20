@@ -18,7 +18,7 @@ import logging
 import math
 import random
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from typing import Dict, List, Optional, Any, Tuple
 from enum import Enum
 import numpy as np
@@ -55,17 +55,22 @@ class QatarClimateModel:
     - Daily cycle: Peak at 2-4 PM, low at 5-6 AM
     """
     
-    # Monthly average temperatures (°C)
+    # Monthly average temperatures (°C) — calibrated to Doha climatology.
+    # Jun–Aug averages raised to 43–45°C; amplitude 10–12 allows peak 50°C+ hits
+    # required to test T3 High-Ambient chiller limits without false anomaly flags.
     MONTHLY_AVG = {
-        1: 18, 2: 19, 3: 23, 4: 28, 5: 34, 6: 38,
-        7: 40, 8: 40, 9: 37, 10: 32, 11: 26, 12: 20
+        1: 18, 2: 19, 3: 23, 4: 28, 5: 34, 6: 43,
+        7: 45, 8: 45, 9: 39, 10: 32, 11: 26, 12: 20
     }
-    
-    # Daily variation amplitude
+
+    # Daily variation amplitude (°C) — larger summer swings due to radiative cooling at night.
     DAILY_AMPLITUDE = {
-        1: 8, 2: 9, 3: 10, 4: 10, 5: 10, 6: 8,
-        7: 6, 8: 6, 9: 8, 10: 10, 11: 10, 12: 8
+        1: 8, 2: 9, 3: 10, 4: 10, 5: 10, 6: 10,
+        7: 12, 8: 12, 9: 10, 10: 10, 11: 10, 12: 8
     }
+
+    # Urban heat-island offset (°C) for dense West Bay / Lusail districts.
+    URBAN_HEAT_ISLAND_C = 2.0
     
     def __init__(self, base_time: Optional[datetime] = None):
         self.base_time = base_time or datetime.now()
@@ -85,10 +90,10 @@ class QatarClimateModel:
         daily_factor = math.sin((hour - 5) * math.pi / 12)
         
         temp = avg_temp + amplitude * daily_factor
-        
-        # Add random variation (±2°C)
-        temp += random.gauss(0, 1)
-        
+
+        # Random variation + urban heat-island offset
+        temp += random.gauss(0, 1) + self.URBAN_HEAT_ISLAND_C
+
         return round(temp, 1)
     
     def get_humidity(self, dt: Optional[datetime] = None) -> float:
@@ -138,36 +143,65 @@ class BuildingModel:
     num_ahus: int = 12
     num_vavs: int = 180
     
+    # Ramadan windows (start, end) — statutory 6h/day / 36h/week limit.
+    # Covers 2024–2028; update annually.
+    _RAMADAN_RANGES = [
+        (date(2024, 3, 11), date(2024, 4, 9)),
+        (date(2025, 3,  1), date(2025, 3, 30)),
+        (date(2026, 2, 18), date(2026, 3, 19)),
+        (date(2027, 2,  8), date(2027, 3,  9)),
+        (date(2028, 1, 28), date(2028, 2, 26)),
+    ]
+
+    def _is_ramadan(self, dt: datetime) -> bool:
+        d = dt.date()
+        return any(start <= d <= end for start, end in self._RAMADAN_RANGES)
+
     def get_occupancy(self, dt: datetime) -> float:
         """
-        Get current occupancy ratio (0-1).
-        
-        Qatar work week: Sunday-Thursday
-        Typical hours: 7 AM - 6 PM
+        Occupancy ratio (0–1).
+
+        Qatar work week: Sunday–Thursday (Mon=0, Fri=4, Sat=5).
+        Normal hours: 7 AM – 6 PM.
+        Ramadan: mandatory 6h/day max → 8 AM – 2 PM per Qatar Labour Law.
         """
-        day = dt.weekday()  # 0=Mon, 6=Sun
+        day = dt.weekday()  # 0=Mon … 6=Sun
         hour = dt.hour
-        
-        # Friday-Saturday: minimal occupancy
-        if day in (4, 5):  # Fri, Sat
+
+        # Friday–Saturday: minimal
+        if day in (4, 5):
             return 0.05
-        
-        # Work hours
-        if 7 <= hour < 9:
-            # Arrival ramp
-            return 0.3 + (hour - 7) * 0.35
-        elif 9 <= hour < 12:
-            return 1.0
-        elif 12 <= hour < 14:
-            # Lunch dip
-            return 0.7
-        elif 14 <= hour < 17:
-            return 0.95
-        elif 17 <= hour < 19:
-            # Departure ramp
-            return 0.9 - (hour - 17) * 0.4
+
+        ramadan = self._is_ramadan(dt)
+
+        if ramadan:
+            # Compressed Ramadan schedule: 8 AM arrival, 2 PM departure
+            if hour < 8:
+                return 0.05
+            elif 8 <= hour < 9:
+                return 0.3 + (hour - 8) * 0.5   # arrival ramp
+            elif 9 <= hour < 12:
+                return 0.85                       # reduced peak (many staff WFH)
+            elif 12 <= hour < 14:
+                return 0.5                        # pre-departure wind-down
+            elif 14 <= hour < 15:
+                return 0.1                        # skeleton staff
+            else:
+                return 0.05
         else:
-            return 0.05
+            # Normal schedule
+            if 7 <= hour < 9:
+                return 0.3 + (hour - 7) * 0.35   # arrival ramp
+            elif 9 <= hour < 12:
+                return 1.0
+            elif 12 <= hour < 14:
+                return 0.7                        # lunch dip
+            elif 14 <= hour < 17:
+                return 0.95
+            elif 17 <= hour < 19:
+                return 0.9 - (hour - 17) * 0.4   # departure ramp
+            else:
+                return 0.05
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -191,12 +225,16 @@ class ChillerModel:
         design_cop: float = 5.5,
         age_years: float = 5.0,
         runtime_hours: float = 15000,
+        air_cooled: bool = False,
     ):
         self.chiller_id = chiller_id
         self.capacity_tr = capacity_tr
         self.design_cop = design_cop
         self.age_years = age_years
         self.runtime_hours = runtime_hours
+        # air_cooled=True: rooftop DX units, condenser driven by dry-bulb + solar gain.
+        # air_cooled=False (default): water-cooled centrifugal, condenser limited by wet-bulb.
+        self.air_cooled = air_cooled
         
         # Operating state
         self.is_running = True
@@ -212,13 +250,33 @@ class ChillerModel:
         self.chwrt = 12.0  # Return temp
         self.condenser_temp = 35.0
     
-    def update(self, outdoor_temp: float, load_fraction: float) -> Dict[str, float]:
+    @staticmethod
+    def _wet_bulb_approx(dry_bulb_c: float, rh_pct: float) -> float:
+        """
+        Magnus/Stull approximation for wet-bulb temperature (°C).
+        Accurate to ±1°C across Qatar operating range (20–50°C, 20–90% RH).
+        """
+        rh = max(1.0, rh_pct)
+        twb = (dry_bulb_c * math.atan(0.151977 * math.sqrt(rh + 8.313659))
+               + math.atan(dry_bulb_c + rh)
+               - math.atan(rh - 1.676331)
+               + 0.00391838 * rh ** 1.5 * math.atan(0.023101 * rh)
+               - 4.686035)
+        return twb
+
+    def update(self, outdoor_temp: float, load_fraction: float, outdoor_rh: float = 55.0) -> Dict[str, float]:
         """
         Update chiller state based on conditions.
-        
-        Returns dict of current sensor values.
+
+        Condenser temperature:
+        - Air-cooled: dry-bulb + 15°C (solar gain on rooftop plant, Qatar heat rejection penalty).
+        - Water-cooled: wet-bulb + 5°C approach (cooling tower limited by latent heat).
         """
-        self.condenser_temp = outdoor_temp + 5  # Approach temp
+        if self.air_cooled:
+            self.condenser_temp = outdoor_temp + 15.0
+        else:
+            twb = self._wet_bulb_approx(outdoor_temp, outdoor_rh)
+            self.condenser_temp = twb + 5.0  # 5°C cooling-tower approach
         
         # COP degrades with higher condenser temp and age
         base_cop = self.design_cop * (1 - self.degradation)
@@ -378,7 +436,7 @@ class RealisticScenarioGenerator:
         # State engine
         self.state_engine = BMSStateEngine()
         self.alarm_engine = AlarmEngine()
-        self.energy_analyzer = EnergyAnalyzer(electricity_rate_qar=0.15)
+        self.energy_analyzer = EnergyAnalyzer(electricity_rate_qar=0.14)
         self.pm_engine = PredictiveMaintenanceEngine()
         
         # Time tracking
@@ -440,15 +498,16 @@ class RealisticScenarioGenerator:
             
             # Get conditions
             outdoor_temp = self.climate.get_outdoor_temp(self.current_time)
+            outdoor_rh = self.climate.get_humidity(self.current_time)
             occupancy = self.building.get_occupancy(self.current_time)
-            
+
             # Apply scenario-specific conditions
             outdoor_temp, occupancy = self._apply_scenario(
                 scenario_name, step, outdoor_temp, occupancy
             )
-            
+
             # Update equipment
-            data_points = await self._update_equipment(outdoor_temp, occupancy)
+            data_points = await self._update_equipment(outdoor_temp, occupancy, outdoor_rh)
             results["data_points"].extend(data_points)
             
             # Check alarms
@@ -518,6 +577,7 @@ class RealisticScenarioGenerator:
         self,
         outdoor_temp: float,
         occupancy: float,
+        outdoor_rh: float = 55.0,
     ) -> List[BMSDataPoint]:
         """Update all equipment and return data points"""
         all_points = []
@@ -530,7 +590,7 @@ class RealisticScenarioGenerator:
         chw_temps = []
         for ch_id, chiller in self.chillers.items():
             if chiller.is_running:
-                values = chiller.update(outdoor_temp, load_fraction)
+                values = chiller.update(outdoor_temp, load_fraction, outdoor_rh)
                 chw_temps.append(chiller.chwst)
                 
                 for point_id, value in values.items():
@@ -601,14 +661,21 @@ class RealisticScenarioGenerator:
                 cooling_kw = ch.current_load * ch.capacity_tr * 3.517
                 total_kw += cooling_kw / ch.current_cop
         
-        # AHU power (fans)
+        # AHU fan power — realistic VFD curve accounts for static pressure
+        # and motor losses at low speed (pure cube law gives near-zero, physically wrong).
+        # Formula: P = P_rated * (0.1 + 0.9 * (speed_frac)^2.7)
+        # At 30% speed: ~3.4 kW (not 0.4 kW from ideal cube law).
         for ahu in self.ahus.values():
-            fan_kw = 15 * (ahu.fan_speed / 100) ** 3  # Fan affinity law
+            speed_frac = ahu.fan_speed / 100.0
+            fan_kw = 15 * (0.1 + 0.9 * speed_frac ** 2.7)
             total_kw += fan_kw
         
-        # Lighting, plugs, etc.
+        # Non-HVAC loads: lighting + plug loads for 50,000 m² Doha office tower.
+        # Baseline 600 kW always-on (12 W/m² servers/common/lighting).
+        # Occupancy-driven 650 kW peak (13 W/m² workstations, pantry, AV).
+        # Total peak ≈ 1,250 kW → ~25 W/m², per ASHRAE 90.1 Qatar practice.
         occupancy = self.building.get_occupancy(self.current_time)
-        total_kw += 200 + 300 * occupancy  # Base load + occupancy
+        total_kw += 600 + 650 * occupancy
         
         reading = EnergyReading(
             meter_id="MAIN-METER",

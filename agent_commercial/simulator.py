@@ -26,7 +26,6 @@ Usage:
 """
 
 import logging
-import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field
@@ -39,9 +38,12 @@ logger = logging.getLogger("arvis.bms.simulator")
 # CONSTANTS - Qatar Specific
 # =============================================================================
 
-# Energy rates (QAR/kWh)
-RATE_STANDARD = 0.033
-RATE_PEAK = 0.066  # 2x during 12:00-18:00
+# Kahramaa commercial electricity tariff (official 2024, QAR/kWh).
+# Standard commercial meters are volumetric slabs — no ToU 2x peak multiplier.
+# Large buildings (>15,000 kWh/month) bill at marginal Tier 3 rate.
+RATE_TIER1 = 0.09   # 1 – 4,000 kWh/month
+RATE_TIER2 = 0.12   # 4,001 – 15,000 kWh/month
+RATE_MARGINAL = 0.14  # >15,001 kWh/month — marginal rate for large commercial buildings
 
 # Average building parameters
 DEFAULT_BUILDING_AREA_M2 = 10000
@@ -182,72 +184,68 @@ class SimulationResult:
 # =============================================================================
 
 class WeatherForecast:
-    """Get weather forecast for simulation."""
-    
-    def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or os.getenv("WEATHERAPI_KEY")
-        self.location = "Doha"
-    
+    """Get weather forecast for simulation using Open-Meteo (free, no API key)."""
+
+    # Doha coordinates
+    _LAT = 25.2854
+    _LON = 51.5310
+
+    # Monthly average daily high (°C) — calibrated with +2°C urban heat-island offset
+    _MONTHLY_HIGH = {
+        1: 22, 2: 24, 3: 28, 4: 34, 5: 40, 6: 47,
+        7: 49, 8: 49, 9: 43, 10: 36, 11: 30, 12: 24,
+    }
+    _MONTHLY_LOW = {
+        1: 14, 2: 15, 3: 18, 4: 23, 5: 29, 6: 33,
+        7: 35, 8: 35, 9: 31, 10: 25, 11: 20, 12: 15,
+    }
+
     def get_forecast(self, days: int = 7) -> List[Dict[str, Any]]:
-        """Get weather forecast for next N days."""
-        if not self.api_key:
-            return self._fallback_forecast(days)
-        
+        """Fetch forecast from Open-Meteo; fall back to seasonal table on error."""
+        days = min(days, 16)  # Open-Meteo free tier supports up to 16 days
         try:
             import requests
-            response = requests.get(
-                "http://api.weatherapi.com/v1/forecast.json",
-                params={
-                    "key": self.api_key,
-                    "q": self.location,
-                    "days": days,
-                },
-                timeout=5
+            url = (
+                "https://api.open-meteo.com/v1/forecast"
+                f"?latitude={self._LAT}&longitude={self._LON}"
+                "&daily=temperature_2m_max,temperature_2m_min,weathercode"
+                f"&forecast_days={days}&timezone=Asia%2FQatar"
             )
-            
-            if response.status_code == 200:
-                data = response.json()
-                daily = []
-                for item in data.get("forecast", {}).get("forecastday", []):
-                    daily.append({
-                        "date": item["date"],
-                        "temp_max": item["day"]["maxtemp_c"],
-                        "temp_min": item["day"]["mintemp_c"],
-                        "condition": item["day"]["condition"]["text"],
+            resp = requests.get(url, timeout=5)
+            if resp.status_code == 200:
+                data = resp.json().get("daily", {})
+                result = []
+                for i, date_str in enumerate(data.get("time", [])):
+                    wcode = data["weathercode"][i] if data.get("weathercode") else 0
+                    condition = "Dust" if wcode in (7, 8, 9) else "Clear" if wcode < 3 else "Cloudy"
+                    result.append({
+                        "date": date_str,
+                        "temp_max": round(data["temperature_2m_max"][i], 1),
+                        "temp_min": round(data["temperature_2m_min"][i], 1),
+                        "condition": condition,
                     })
-                return daily[:days]
-            else:
-                return self._fallback_forecast(days)
-                
+                return result[:days]
         except Exception as e:
-            logger.debug(f"Weather API error: {e}")
-            return self._fallback_forecast(days)
-    
+            logger.debug(f"Open-Meteo forecast error: {e}")
+
+        return self._fallback_forecast(days)
+
     def _fallback_forecast(self, days: int) -> List[Dict[str, Any]]:
-        """Generate heuristic Qatar weather forecast as fallback."""
+        """Seasonal lookup table fallback — consistent with QatarClimateModel calibration."""
         import random
-        
-        base_date = datetime.now()
+
         forecast = []
-        
         for i in range(days):
-            date = base_date + timedelta(days=i)
-            # Simulate Qatar summer (hot) vs winter (mild)
-            month = date.month
-            if 5 <= month <= 9:  # Summer
-                temp_max = random.uniform(40, 48)
-                temp_min = random.uniform(30, 35)
-            else:  # Winter/Spring/Fall
-                temp_max = random.uniform(25, 35)
-                temp_min = random.uniform(15, 22)
-            
+            dt = datetime.now() + timedelta(days=i)
+            month = dt.month
+            temp_max = self._MONTHLY_HIGH[month] + random.uniform(-2, 2)
+            temp_min = self._MONTHLY_LOW[month] + random.uniform(-2, 2)
             forecast.append({
-                "date": date.strftime("%Y-%m-%d"),
+                "date": dt.strftime("%Y-%m-%d"),
                 "temp_max": round(temp_max, 1),
                 "temp_min": round(temp_min, 1),
-                "condition": "Clear" if random.random() > 0.2 else "Dust",
+                "condition": "Clear" if random.random() > 0.15 else "Dust",
             })
-        
         return forecast
 
 
@@ -391,10 +389,9 @@ class WhatIfSimulator:
         delta_kwh_day = baseline * pct_change / 100
         delta_kwh_month = delta_kwh_day * 30
         
-        # Calculate cost (average of standard and peak rates)
-        avg_rate = (RATE_STANDARD + RATE_PEAK) / 2
-        delta_cost_day = delta_kwh_day * avg_rate
-        delta_cost_month = delta_kwh_month * avg_rate
+        # Cost at marginal Tier 3 rate (large buildings exceed 15,000 kWh/month)
+        delta_cost_day = delta_kwh_day * RATE_MARGINAL
+        delta_cost_month = delta_kwh_month * RATE_MARGINAL
         
         # Confidence based on forecast reliability
         confidence = 0.8 if weather else 0.6
@@ -447,13 +444,11 @@ class WhatIfSimulator:
         delta_kwh_day = baseline * pct_change / 100
         delta_kwh_month = delta_kwh_day * 30
         
-        avg_rate = (RATE_STANDARD + RATE_PEAK) / 2
-        
         return EnergyImpact(
             delta_kwh_day=delta_kwh_day,
             delta_kwh_month=delta_kwh_month,
-            delta_cost_qar_day=delta_kwh_day * avg_rate,
-            delta_cost_qar_month=delta_kwh_month * avg_rate,
+            delta_cost_qar_day=delta_kwh_day * RATE_MARGINAL,
+            delta_cost_qar_month=delta_kwh_month * RATE_MARGINAL,
             percentage_change=pct_change,
             confidence=0.7,
         )
@@ -482,8 +477,8 @@ class WhatIfSimulator:
         return EnergyImpact(
             delta_kwh_day=delta_kwh_day,
             delta_kwh_month=delta_kwh_day * 30,
-            delta_cost_qar_day=delta_kwh_day * 0.05,
-            delta_cost_qar_month=delta_kwh_day * 30 * 0.05,
+            delta_cost_qar_day=delta_kwh_day * RATE_MARGINAL,
+            delta_cost_qar_month=delta_kwh_day * 30 * RATE_MARGINAL,
             percentage_change=pct_change,
             confidence=0.75,
         )

@@ -26,12 +26,6 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 from datetime import datetime
 
-# Ensure project root is in path
-from pathlib import Path
-PROJECT_ROOT = Path(__file__).parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-    
 from agent_unified.llm import UnifiedLLM
 from agent_unified.schema import Message
 
@@ -63,16 +57,29 @@ class ChatResponse:
     confidence: float
     language: str  # "en" or "ar"
     sources: List[str]
-    
+    explanation: Optional[Dict[str, Any]] = None
+    truth_score: float = 1.0
+    answer_confidence: float = 1.0
+    data_coverage: float = 1.0
+
+    def __post_init__(self):
+        self.confidence = min(self.truth_score, self.answer_confidence)
+
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "text": self.text,
             "tool_calls": self.tool_calls,
             "tool_results": self.tool_results,
             "confidence": self.confidence,
             "language": self.language,
             "sources": self.sources,
+            "truth_score": self.truth_score,
+            "answer_confidence": self.answer_confidence,
+            "data_coverage": self.data_coverage,
         }
+        if self.explanation:
+            d["explanation"] = self.explanation
+        return d
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -115,18 +122,14 @@ class BMSLLMAgent:
         self.pm_engine = predictive_engine
         self.gsas_reporter = gsas_reporter
         
-        # Phase 2: Multi-Option Advisory System (Production Production)
-        from agent_advisory import MultiOptionAdvisor
-        
-        # Initialize the full Advisor
-        self.advisor = MultiOptionAdvisor()
-        
-        # We also keep Phase 1 components for backward compatibility/direct access
-        self.tracker = self.advisor.tracker
-        self.calibrator = self.advisor.calibrator
-        self.preference_learner = self.advisor.preference_learner
-        
-        logger.info("Phase 2 Multi-Option Advisor initialized")
+        # Phase 2: Multi-Option Advisory System
+        # NOTE: Advisor is fully initialized below (after world model + graph-RAG)
+        # to ensure all dependencies are available. Placeholder references set here
+        # are overwritten after Phase 8 init completes.
+        self.advisor = None
+        self.tracker = None
+        self.calibrator = None
+        self.preference_learner = None
         
         # Import tools
         from agent_commercial.tools_schema import get_bms_tools, BMSToolHandler
@@ -180,10 +183,14 @@ class BMSLLMAgent:
         self.context_graph = ContextGraph()
         self.graph_rag = GraphRAGNavigator(self.knowledge_base, self.context_graph)
         
-        # Initialize Advisor with tracker
+        # Initialize Advisor (single canonical init)
         from agent_advisory import MultiOptionAdvisor
         self.advisor = MultiOptionAdvisor()
+        self.tracker = self.advisor.tracker
+        self.calibrator = self.advisor.calibrator
+        self.preference_learner = self.advisor.preference_learner
         self.trust_calibrator = TrustCalibrator(self.advisor.tracker)
+        logger.info("Phase 2 Multi-Option Advisor initialized")
         
         # Initialize Goal Generator with World Model for simulation validation
         self.goal_generator = GoalGenerator(
@@ -238,7 +245,14 @@ class BMSLLMAgent:
         # Initialize UnifiedLLM
         self.llm = llm or UnifiedLLM()
         self.provider = "unified"
-        
+
+        # MetaCognition — init once, not per-call
+        try:
+            from agent_cognitive.meta_cognition import MetaCognition
+            self.meta_cognition = MetaCognition(building_id=getattr(self.bms_state, 'building_id', 'West Bay Tower'))
+        except Exception:
+            self.meta_cognition = None
+
         logger.info(f"BMSLLMAgent initialized with UnifiedLLM")
         
         # Initialize internal client for direct provider access if needed
@@ -275,10 +289,9 @@ class BMSLLMAgent:
         # Tool execution history for deduplication (Anti-Loop)
         self.tool_history = []  # List of (tool, args, timestamp)
         
-        # Pilot Day Tracking (Phase 16)
-        self.pilot_day = 1
-        self.consequence_memory = [] # List of {day, advice, action, outcome}
-        
+        # Pilot Day Tracking (Phase 16) — persisted via DB
+        self.pilot_day = self._load_pilot_day()
+
         logger.info("Advisory scheduler and ToolEconomyPolicy initialized")
     
     def get_pilot_phase(self) -> str:
@@ -297,16 +310,25 @@ class BMSLLMAgent:
         else:
             return "PHASE: CRITICAL TRUST. You have earned 90 days of trust. Be firm, concise, and decisive. Escalate quickly for terminal safety events."
     
-    def record_consequence(self, day: int, advice: str, action: str, outcome: str):
-        """Link advice and operator action to real-world outcome."""
-        self.consequence_memory.append({
-            "day": day,
-            "advice": advice,
-            "action": action,
-            "outcome": outcome,
-            "timestamp": time.time()
-        })
-        logger.info(f"[PILOT] Recorded consequence for Day {day}: {outcome}")
+    def _load_pilot_day(self) -> int:
+        """Load pilot day from DB, or compute from deployment date."""
+        try:
+            from agent_commercial.database import get_database
+            import sqlite3
+            db = get_database()
+            conn = sqlite3.connect(str(db.db_path))
+            cursor = conn.execute(
+                "SELECT value FROM system_config WHERE key = 'pilot_start_date'"
+            )
+            row = cursor.fetchone()
+            conn.close()
+            if row:
+                from datetime import datetime
+                start = datetime.fromisoformat(row[0])
+                return max(1, (datetime.now() - start).days + 1)
+        except Exception:
+            pass
+        return 1
 
     async def generate_morning_briefing(self, sim_state: Dict[str, Any]) -> str:
         """Generate a narrative daily briefing for the FM."""
@@ -324,8 +346,8 @@ class BMSLLMAgent:
         - Active Alarms: {sim_state.get('active_alarms', 0)}
         - Trust Metric: {sim_state.get('trust_metric', 0):.2f}
         
-        CONSEQUENCE MEMORY:
-        {json.dumps(self.consequence_memory[-3:])}
+        RECENT CONTEXT:
+        (prior operator interactions available via memory system)
         
         INSTRUCTIONS:
         - If PHASE is OBSERVATION: Be silent/informational. No advice.
@@ -418,6 +440,17 @@ class BMSLLMAgent:
         # Simple heuristic: check for Arabic Unicode range
         arabic_chars = sum(1 for c in text if '\u0600' <= c <= '\u06FF')
         return "ar" if arabic_chars > len(text) * 0.3 else "en"
+
+    @staticmethod
+    def _is_actionable_advisory(text: str) -> bool:
+        """Detect if swarm response contains an actionable recommendation."""
+        action_signals = [
+            "recommend", "suggest", "advise", "should", "action",
+            "increase", "decrease", "adjust", "schedule", "inspect",
+            "replace", "reset", "check", "verify", "dispatch",
+        ]
+        text_lower = text.lower()
+        return any(signal in text_lower for signal in action_signals)
     
     async def _get_dynamic_context(self, query: str, language: str) -> BMSContext:
         """Populate BMSContext with real-time advisor history and site status."""
@@ -464,29 +497,84 @@ class BMSLLMAgent:
             except Exception as pe:
                 logger.warning(f"Failed to pull operator preferences: {pe}")
         
-        return BMSContext(
-            building_id=getattr(self.bms_state, 'building_id', 'West Bay Tower'),
-            is_critical=any(w in query.lower() for w in ["critical", "emergency", "icu", "patient"]),
-            is_arabic=is_arabic,
-            query_type=query_type,
-            history_summary=history_summary,
-            last_action_taken=last_action,
-            active_calibration=calibration
-        )
-        
-        # GLASS BOX: Stream Recall Event
-        from agent_commercial.api.sse_broadcaster import SSEBroadcaster
-        import asyncio
+        # ── Semantic incident recall via FAISS ──────────────────────────────
         try:
-            recall_data = {
-                "history_items": len(recent_recs) if recent_recs else 0,
-                "preferences": list(calibration.keys()),
-                "summary": history_summary[:100] + "..."
-            }
-            asyncio.create_task(SSEBroadcaster().broadcast("recall", recall_data))
-        except (ImportError, AttributeError, RuntimeError) as e:
-            logger.debug(f"SSE broadcast skipped: {e}")
-        
+            from agent_cognitive.embeddings_store import EmbeddingsStore
+            _store = EmbeddingsStore()
+            if _store.enabled:
+                hits = _store.search(query, limit=3, threshold=0.65)
+                if hits:
+                    recall_lines = []
+                    for h in hits:
+                        ts = str(h.get("timestamp", ""))[:10]
+                        summary = str(h.get("summary", h.get("text", "")))[:200]
+                        recall_lines.append(f"[{ts}] {summary}")
+                    recall_block = "\n".join(f"  • {s}" for s in recall_lines)
+                    history_summary = (
+                        f"Similar past incidents:\n{recall_block}\n\n"
+                        + history_summary
+                    )
+        except Exception as _faiss_err:
+            logger.debug("FAISS recall skipped: %s", _faiss_err)
+
+        # ── MetaCognition calibration injection ──────────────────────────────
+        try:
+            _mc = getattr(self, "meta_cognition", None)
+            if _mc is not None:
+                import asyncio as _asyncio
+                _reflection = await _mc.reflect(lookback_days=7)
+                _cal = _reflection.get("calibration", {})
+                _biases = _reflection.get("biases_detected", {})
+
+                if _cal.get("verdict") == "overconfident":
+                    calibration["meta_calibration"] = {
+                        "description": (
+                            f"SELF-CALIBRATION ALERT: Recent recommendations were overconfident "
+                            f"(ECE={_cal.get('ece', 0):.3f}). Apply higher uncertainty to projections. "
+                            + (f"Biases: {', '.join(_biases.keys())}." if _biases else "")
+                        ),
+                        "weight_adjustment": -0.15,
+                    }
+                elif _cal.get("verdict") == "well_calibrated":
+                    calibration["meta_calibration"] = {
+                        "description": "Calibration nominal. Confidence scores are reliable.",
+                        "weight_adjustment": 0.0,
+                    }
+
+                # Inject EWC rules with high Fisher importance
+                _ewc_rules = getattr(_mc, "calibration_rules", {})
+                _high_imp = [
+                    (k, v) for k, v in _ewc_rules.items()
+                    if v.get("fisher_information", 0) > 2.0
+                ]
+                for _rname, _rdata in _high_imp[:3]:
+                    calibration[f"ewc_{_rname}"] = {
+                        "description": _rdata.get("description", _rname),
+                        "weight_adjustment": _rdata.get("weight_adjustment", 0.0),
+                    }
+        except Exception as _mc_err:
+            logger.debug("MetaCognition calibration injection skipped: %s", _mc_err)
+
+        # ── Learning engine suggested_actions injection ───────────────────────
+        try:
+            _db = getattr(self, "database", None) or getattr(self, "db", None)
+            if _db is not None and hasattr(_db, "fetch_all"):
+                _suggestions = await _db.fetch_all(
+                    "SELECT action, reason FROM suggested_actions "
+                    "WHERE status='pending' ORDER BY created_at DESC LIMIT 3"
+                )
+                if _suggestions:
+                    _sug_lines = "\n".join(
+                        f"  • {s.get('action','?')} ({s.get('reason','?')})"
+                        for s in _suggestions
+                    )
+                    calibration["learned_patterns"] = {
+                        "description": f"Learning engine identified:\n{_sug_lines}",
+                        "weight_adjustment": 0.0,
+                    }
+        except Exception as _le_err:
+            logger.debug("Suggested actions injection skipped: %s", _le_err)
+
         return BMSContext(
             building_id=getattr(self.bms_state, 'building_id', 'West Bay Tower'),
             is_critical=any(w in query.lower() for w in ["critical", "emergency", "icu", "patient"]),
@@ -743,14 +831,30 @@ class BMSLLMAgent:
         """
         language = self._detect_language(query)
         context = context or {}
-        
-        # 0. META-COGNITION INIT
-        if not hasattr(self, 'meta_cognition'):
+
+        # ── T1 Working Memory: load cross-session conversation context ────────
+        _operator_id = context.get("operator_id", "default")
+        _building_id = context.get("building_id", getattr(self, "_building_id", "default"))
+        _conv_ctx = None
+        _mo = getattr(self, "memory_orchestrator", None)
+        if _mo is not None:
             try:
-                from agent_cognitive.meta_cognition import MetaCognition
-                self.meta_cognition = MetaCognition(getattr(self.bms_state, 'building_id', 'West Bay Tower'))
-            except ImportError:
-                self.meta_cognition = None
+                _conv_ctx = await _mo.get_conversation(_operator_id, _building_id)
+                if _conv_ctx and (_conv_ctx.turns or _conv_ctx.rolling_summary):
+                    # Inject prior turns into context so swarm nodes see them
+                    context["chat_history"] = _conv_ctx.to_history()
+                    logger.info(
+                        f"[Mem-4] Loaded {len(_conv_ctx.turns)} prior turns for operator={_operator_id}"
+                    )
+            except Exception as _cm_err:
+                logger.debug(f"[Mem-4] get_conversation failed (non-fatal): {_cm_err}")
+
+        # Per-request GroundingGuard — isolated from concurrent requests
+        from agent_commercial.grounding_guard import GroundingGuard, set_active_guard
+        _request_guard = GroundingGuard()
+        _guard_token = set_active_guard(_request_guard)
+
+        # meta_cognition already initialized in __init__
 
         if hasattr(self, 'queen') and self.queen:
             logger.info("Routing query to ARVIS Swarm (Phase 1 Advisory)...")
@@ -784,25 +888,65 @@ class BMSLLMAgent:
                 
                 target_eqs = [eq for eq in equipment if eq.equipment_type in ["ahu", "chiller", "cooling_tower"]]
                 
+                stale_sensors = []
+
                 async def fetch_and_check(eq):
                     breaches = []
+                    stale = []
                     points = await self.bms_state.get_points_by_equipment(eq.equipment_id)
+                    from datetime import datetime, timedelta, timezone
+                    _now = datetime.now(timezone.utc)
+                    _stale_threshold = timedelta(minutes=15)
+
                     for p in points:
+                        # Staleness check: skip stale points from grounding
+                        if hasattr(p, 'timestamp') and p.timestamp:
+                            _ts = p.timestamp if p.timestamp.tzinfo else p.timestamp.replace(tzinfo=timezone.utc)
+                            _age = _now - _ts
+                            if _age > _stale_threshold:
+                                stale.append({
+                                    "equipment": eq.equipment_id,
+                                    "point": p.name,
+                                    "age_minutes": round(_age.total_seconds() / 60, 1),
+                                    "last_value": p.value,
+                                })
+                                continue
+
                         if "temp" in p.name.lower() or "sat" in p.point_id.lower():
-                            if p.value and p.value > 25.0:
+                            # Per-zone thresholds based on equipment type and location
+                            _loc = (eq.location or "").lower()
+                            if "server" in _loc or "data" in _loc or "comms" in _loc:
+                                _warn, _crit = 22.0, 27.0
+                            elif eq.equipment_type in ("chiller", "cooling_tower"):
+                                _warn, _crit = 28.0, 35.0
+                            elif "lobby" in _loc or "reception" in _loc:
+                                _warn, _crit = 26.0, 32.0
+                            else:
+                                _warn, _crit = 25.0, 30.0
+
+                            if p.value and p.value > _warn:
                                 breaches.append({
                                     "equipment": eq.equipment_id,
                                     "point": p.name,
                                     "value": p.value,
-                                    "status": "CRITICAL" if p.value > 30.0 else "WARNING"
+                                    "status": "CRITICAL" if p.value > _crit else "WARNING"
                                 })
-                    return breaches
-                
+                    return breaches, stale
+
                 results = await asyncio.gather(*[fetch_and_check(eq) for eq in target_eqs])
-                for res in results:
-                    thermal_breaches.extend(res)
-                    
+                for breaches, stale in results:
+                    thermal_breaches.extend(breaches)
+                    stale_sensors.extend(stale)
+
                 context["GROUNDING_THERMAL_SAFETY"] = thermal_breaches
+                if stale_sensors:
+                    context["STALE_SENSORS"] = stale_sensors
+
+                # Alarm cluster grounding: collapse noise into root causes
+                if self.alarm_engine:
+                    cluster_summary = self.alarm_engine.get_active_clusters_summary()
+                    if cluster_summary:
+                        context["GROUNDING_ALARM_CLUSTERS"] = cluster_summary
             except Exception as e:
                 logger.error(f"Grounding injection failed: {e}")
                 
@@ -813,12 +957,20 @@ class BMSLLMAgent:
             swarm_payload = await self.queen.execute_swarm(query, context, channel=channel)
             
             # Swarm now returns a dict with the consensus AND the raw tool context discovered by nodes
+            _investigation_plan = None
             if isinstance(swarm_payload, dict):
                 final_advice = swarm_payload.get("advice", "")
                 swarm_context = swarm_payload.get("context", {})
+                _investigation_plan = swarm_payload.get("plan")
             else:
                 final_advice = str(swarm_payload)
                 swarm_context = {}
+
+            # P4: Broadcast final plan state to operator as live checklist
+            if _investigation_plan:
+                asyncio.create_task(
+                    broadcaster.broadcast_plan_update(_investigation_plan, channel=channel)
+                )
                 
             if final_advice == "__FAST_PATH_ROUTING__":
                 logger.info("[Queen] Executing Agentic Fast-Path via Tool Agent...")
@@ -838,7 +990,9 @@ class BMSLLMAgent:
                 asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": tasks_state}, channel=channel))
                 
                 try:
-                    fast_result = await fast_node.process(query, context, channel=channel)
+                    # Pass chat_history as message history so fast-path has conversation context
+                    _fast_history = context.get("chat_history", []) if context else []
+                    fast_result = await fast_node.process(query, context, history=_fast_history, channel=channel)
                     fast_text = fast_result["response"].content
                 except Exception as e:
                     logger.error(f"Fast-Path failed: {e}")
@@ -847,13 +1001,41 @@ class BMSLLMAgent:
                 tasks_state[2]["status"] = "completed"
                 tasks_state[3]["status"] = "completed" # Bypass validation for fast path
                 asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": tasks_state}, channel=channel))
+                # -- 0.1: Fast-path now validated --
+                # Run GroundingGuard on fast-path output (per-request instance)
+                audit = _request_guard.audit(fast_text)
+                fast_text = audit.clean_text
+
+                # Run TruthValidator on fast-path
+                try:
+                    from arvis_core.swarm.validator import TruthValidator
+                    _fp_validator = TruthValidator()
+                    _fp_validation = await _fp_validator.validate(fast_text, context)
+                    _fp_val_score = _fp_validation.get("score", 0.0)
+                except Exception as _fp_err:
+                    logger.warning(f"[Fast-Path] Validator unavailable: {_fp_err}")
+                    _fp_val_score = 0.3
+
+                if _fp_val_score < 0.7:
+                    fast_text = f"[Unverified] {fast_text}"
+
+                if _mo is not None:
+                    try:
+                        await _mo.save_conversation_turn(_operator_id, _building_id, "user", query)
+                        await _mo.save_conversation_turn(_operator_id, _building_id, "assistant", fast_text)
+                    except Exception as _fp_cm_err:
+                        logger.debug(f"[Mem-4] fast-path save_conversation_turn failed (non-fatal): {_fp_cm_err}")
+
                 return ChatResponse(
                     text=fast_text,
                     tool_calls=[],
                     tool_results=[],
-                    confidence=0.99,
+                    confidence=_fp_val_score,
                     language=language,
-                    sources=["ARVIS Fast-Path Router"]
+                    sources=["ARVIS Fast-Path Router", f"Truth-Validator (Score: {_fp_val_score})"],
+                    truth_score=_fp_val_score,
+                    answer_confidence=1.0,
+                    data_coverage=1.0,
                 )
 
             # Merge the facts discovered by Swarm Nodes into the ground truth context for the Validator
@@ -869,33 +1051,182 @@ class BMSLLMAgent:
             asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": tasks_state}, channel=channel))
             
             try:
+                # M3.3: Build ML evidence summary so validator can penalise advice that cites fallback values
+                _ml_evidence_summary = []
+                if _investigation_plan is not None:
+                    for _ev in _investigation_plan.evidence.get_all():
+                        if getattr(_ev, "is_ml_fallback", False):
+                            _ml_evidence_summary.append({
+                                "evidence_id": _ev.id,
+                                "source_tool": _ev.source_tool,
+                                "status": "ML_FALLBACK",
+                                "reason": _ev.raw_payload.get("reason", "model unavailable"),
+                            })
+                        elif getattr(_ev, "model_id", None):
+                            _ml_evidence_summary.append({
+                                "evidence_id": _ev.id,
+                                "source_tool": _ev.source_tool,
+                                "model_id": _ev.model_id,
+                                "drift_score": _ev.drift_score,
+                                "confidence_bounds": _ev.confidence_bounds,
+                            })
+                if _ml_evidence_summary:
+                    full_context = {
+                        **full_context,
+                        "_ml_evidence_summary": _ml_evidence_summary,
+                        "_ml_fallback_tools": [e["source_tool"] for e in _ml_evidence_summary if e.get("status") == "ML_FALLBACK"],
+                    }
+
                 from arvis_core.swarm.validator import TruthValidator
                 validator = TruthValidator()
                 validation_result = await validator.validate(final_advice, full_context)
                 val_score = validation_result.get("score", 0.0)
-                
-                if val_score < 0.95:
-                    logger.warning(f"Truth Score below threshold ({val_score}): {validation_result.get('reasoning')}")
-                    # During Pilot, we allow the advice to pass to the Simulator for measuring emergent reasoning
-                    # but we mark the reasoning in the sources.
+                val_reasoning = validation_result.get("reasoning", "")
+
+                if val_score < 0.7:
+                    logger.warning(f"[TruthValidator] BLOCKING — score {val_score}: {val_reasoning}")
+                    final_advice = (
+                        "I was unable to verify my analysis against live building data with sufficient confidence. "
+                        "Please verify the following observation manually or ask me to re-check specific equipment."
+                    )
+                elif val_score < 0.95:
+                    logger.warning(f"[TruthValidator] Low confidence ({val_score}): {val_reasoning}")
+                    final_advice = f"[Low Confidence] {final_advice}"
                 else:
                     logger.info(f"Truth Score Verified: {val_score}")
             except Exception as e:
-                logger.error(f"Validator failure: {e}")
-                val_score = 0.5
+                logger.error(f"[TruthValidator] Failure (blocking): {e}")
+                val_score = 0.0
+                final_advice = (
+                    "ARVIS verification system encountered an error. "
+                    "Cannot deliver unverified advisory. Please retry or check system logs."
+                )
             
             tasks_state[3]["status"] = "completed"
             asyncio.create_task(broadcaster.broadcast("task_list", {"tasks": tasks_state}, channel=channel))
-            
+
+            # Inject confidence statement if ARVIS omitted it
+            final_advice = self._inject_confidence_if_missing(final_advice)
+
+            # GroundingGuard audit — structural check, not a prompt rule.
+            # Flags any cited number (failure %, QAR, health score, RUL days)
+            # that has no provenance in tool results from this turn.
+            try:
+                audit = _request_guard.audit(final_advice)
+                final_advice = audit.clean_text
+                if not audit.passed:
+                    logger.warning(
+                        f"[GroundingGuard] {len(audit.ungrounded_claims)} ungrounded claim(s) "
+                        f"in response for query: {query[:80]!r}"
+                    )
+            except Exception as _gg_err:
+                logger.debug(f"[GroundingGuard] audit failed (non-fatal): {_gg_err}")
+
+            # Programmatic skillbook write — awaited with timeout, not fire-and-forget
+            try:
+                await asyncio.wait_for(
+                    self._programmatic_skillbook_write(final_advice, query),
+                    timeout=3.0
+                )
+            except asyncio.TimeoutError:
+                logger.warning("[Skillbook] Write timed out after 3s — learning lost for this turn")
+            except Exception as _sb_err:
+                logger.error(f"[Skillbook] Write failed: {_sb_err}")
+
+            # Auto-attach explainability for actionable advisories
+            explanation = None
+            if self.explainer and self._is_actionable_advisory(final_advice):
+                try:
+                    from agent_advisory.explainer import DetailLevel
+                    rec = {
+                        "title": query[:80],
+                        "description": final_advice[:500],
+                        "action_type": swarm_context.get("primary_action", "advisory"),
+                        "priority": swarm_context.get("priority", "medium"),
+                    }
+                    explanation = await self.explainer.explain_recommendation(
+                        recommendation=rec,
+                        context=full_context,
+                        level=DetailLevel.STANDARD,
+                    )
+                except Exception as e:
+                    logger.debug(f"Auto-explanation skipped: {e}")
+
+            # Surface tool calls from swarm context for auditability
+            _tc = swarm_context.get("_tool_calls", [])
+            _tr = swarm_context.get("_tool_results", [])
+            _data_cov = _investigation_plan.coverage if _investigation_plan else 1.0
+
+            # H7: Calibrated abstention gate — low coverage + moderate truth → abstain
+            _ABSTENTION_COVERAGE_FLOOR = 0.3
+            _ABSTENTION_TRUTH_CEILING = 0.8
+
+            # ML signal abstention: compute fallback ratio + max drift from plan evidence.
+            # Fallback evidence (is_ml_fallback=True) is treated as drift_score=1.0 —
+            # the gate fires on it regardless of whether drift_score was populated.
+            _ml_fallback_ratio = 0.0
+            _max_drift = 0.0
+            if _investigation_plan is not None:
+                _all_ev = _investigation_plan.evidence.get_all()
+                if _all_ev:
+                    _fb_count = sum(1 for _e in _all_ev if getattr(_e, "is_ml_fallback", False))
+                    _ml_fallback_ratio = _fb_count / len(_all_ev)
+                    # Treat every fallback as drift=1.0 so gate fires even when drift_score is None
+                    _drift_vals = []
+                    for _e in _all_ev:
+                        if getattr(_e, "is_ml_fallback", False):
+                            _drift_vals.append(1.0)
+                        elif getattr(_e, "drift_score", None) is not None:
+                            _drift_vals.append(_e.drift_score)
+                    _max_drift = max(_drift_vals) if _drift_vals else 0.0
+
+            _abstention_reason = None
+            if _data_cov < _ABSTENTION_COVERAGE_FLOOR and val_score < _ABSTENTION_TRUTH_CEILING:
+                _abstention_reason = f"data_coverage={_data_cov:.2f}, truth_score={val_score:.2f}"
+            elif _ml_fallback_ratio > 0.5:
+                _abstention_reason = f"ml_fallback_ratio={_ml_fallback_ratio:.0%} (majority of evidence is ML fallback — models not loaded)"
+            elif _max_drift > 0.7:
+                _abstention_reason = f"max_drift={_max_drift:.2f} (models stale or unavailable — predictions unreliable)"
+
+            if _abstention_reason:
+                logger.warning(f"[Abstention Gate] Triggered: {_abstention_reason}")
+                final_advice = (
+                    "Insufficient data to provide a confident advisory. "
+                    "Too few investigation tasks yielded verifiable evidence this session. "
+                    "Recommend physical inspection or re-query with more specific equipment/zone identifiers."
+                )
+                val_score = min(val_score, 0.3)
+
+            # ── T1 Working Memory: persist this turn ──────────────────────────
+            if _mo is not None:
+                try:
+                    await _mo.save_conversation_turn(_operator_id, _building_id, "user", query)
+                    await _mo.save_conversation_turn(_operator_id, _building_id, "assistant", final_advice)
+                except Exception as _cm_save_err:
+                    logger.debug(f"[Mem-4] save_conversation_turn failed (non-fatal): {_cm_save_err}")
+
+            # ── Flush LLM usage metering to DB ────────────────────────────────
+            if _investigation_plan is not None:
+                try:
+                    _plan_id = getattr(_investigation_plan, "id", "") or getattr(_investigation_plan, "plan_id", "")
+                    _budget = getattr(_investigation_plan, "budget", None)
+                    await self.db.flush_llm_usage(plan_id=_plan_id, budget=_budget)
+                except Exception as _flush_err:
+                    logger.debug(f"[CostMeter] flush_llm_usage failed (non-fatal): {_flush_err}")
+
             return ChatResponse(
                 text=final_advice,
-                tool_calls=[],
-                tool_results=[],
-                confidence=val_score,  # Reflect the actual validator score
+                tool_calls=_tc,
+                tool_results=_tr,
+                confidence=val_score,
                 language=language,
-                sources=["ARVIS Queen Consensus", f"Swarm Truth-Validator (Score: {val_score})"]
+                sources=["ARVIS Queen Consensus", f"Swarm Truth-Validator (Score: {val_score})"],
+                explanation=explanation,
+                truth_score=val_score,
+                answer_confidence=1.0,
+                data_coverage=_data_cov,
             )
-            
+
         else:
             # Fallback (Safety mechanism if swarm fails to load)
             logger.warning("Swarm not available. Falling back to simple response.")
@@ -905,8 +1236,117 @@ class BMSLLMAgent:
                 tool_results=[],
                 confidence=0.0,
                 language=language,
-                sources=[]
+                sources=[],
+                truth_score=0.0,
+                answer_confidence=0.0,
+                data_coverage=0.0,
             )
+
+    # ── Fault diagnosis extraction ─────────────────────────────────────────────
+
+    @staticmethod
+    def _extract_fault_diagnosis(text: str, query: str) -> Optional[Dict[str, Any]]:
+        """
+        Detect whether ARVIS response contains a confirmed fault diagnosis.
+        Returns skillbook args dict if found, None otherwise.
+        Looks for: root cause language, equipment ID patterns, action items.
+        """
+        import re
+        text_lower = text.lower()
+
+        # Must have root cause language to be a diagnosis
+        root_cause_signals = [
+            "root cause", "caused by", "identified:", "confirmed:", "diagnosis:",
+            "fault pattern", "failure mode", "damper stuck", "valve stuck",
+            "bearing wear", "refrigerant leak", "coil fouling", "belt slip",
+        ]
+        if not any(s in text_lower for s in root_cause_signals):
+            return None
+
+        # Must have action items (resolved pattern)
+        action_signals = [
+            "recommend", "replace", "inspect", "clean", "calibrate",
+            "adjust setpoint", "schedule", "dispatch", "repair",
+        ]
+        if not any(s in text_lower for s in action_signals):
+            return None
+
+        # Extract equipment ID (e.g. AHU-07, CH-01, CHILLER-01, CT-02)
+        eq_match = re.search(
+            r"\b(AHU|CH|CHILLER|CT|FCU|PUMP|VAV|MAU)-\d+\b", text, re.IGNORECASE
+        )
+        equipment_id = eq_match.group(0).upper() if eq_match else None
+
+        # Build title from first root cause mention
+        title_match = re.search(
+            r"(?:root cause|diagnosis|identified|confirmed)[:\s]+([^\n\.]{10,80})",
+            text, re.IGNORECASE
+        )
+        title = title_match.group(1).strip() if title_match else query[:80]
+
+        # Description: first 400 chars of diagnostic block
+        description = text[:400].strip()
+
+        return {
+            "title": title,
+            "description": description,
+            "equipment_id": equipment_id,
+            "skill_type": "fault_pattern",
+            "confidence": 0.7,
+            "tags": [equipment_id] if equipment_id else [],
+        }
+
+    async def _programmatic_skillbook_write(
+        self, text: str, query: str
+    ) -> None:
+        """
+        State-machine triggered skillbook write — not LLM-optional.
+        Called after every chat response that contains a confirmed diagnosis.
+        """
+        diagnosis = self._extract_fault_diagnosis(text, query)
+        if diagnosis is None:
+            return
+        try:
+            result = await self.tool_handler.execute("add_to_skillbook", diagnosis)
+            logger.info(
+                f"[Skillbook] Auto-recorded fault pattern: "
+                f"'{diagnosis['title']}' eq={diagnosis['equipment_id']} → {result}"
+            )
+        except Exception as e:
+            logger.warning(f"[Skillbook] Auto-write failed (non-fatal): {e}")
+
+    @staticmethod
+    def _inject_confidence_if_missing(text: str) -> str:
+        """
+        Post-process: if response lacks explicit confidence statement, append one
+        derived from evidence signals in the text.
+        """
+        import re
+        confidence_markers = [
+            r"high confidence", r"medium confidence", r"low confidence",
+            r"\d+%\s+confident", r"confidence[:\s]+\d",
+        ]
+        if any(re.search(p, text, re.IGNORECASE) for p in confidence_markers):
+            return text  # Already has confidence statement
+
+        text_lower = text.lower()
+        # Heuristic: count evidence signals
+        strong = sum(1 for s in [
+            "trend", "days", "sensor", "confirmed", "consistent", "multiple",
+            "historical", "baseline", "corroborat",
+        ] if s in text_lower)
+
+        if strong >= 3:
+            label = "High confidence"
+            basis = f"{strong} corroborating evidence signals"
+        elif strong >= 1:
+            label = "Medium confidence"
+            basis = "limited corroborating data; verify with physical inspection"
+        else:
+            label = "Low confidence"
+            basis = "insufficient trend data; recommend on-site verification"
+
+        return text + f"\n\n**Confidence: {label}** — {basis}."
 
     async def run_edge_safeties(self, query: str, language: str) -> ChatResponse:
         """

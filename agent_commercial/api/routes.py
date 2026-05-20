@@ -16,9 +16,10 @@ This API serves both the web dashboard and the LLM tool executor.
 """
 
 from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, Depends, status, UploadFile, File, Form
+from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Literal
 from datetime import datetime, timedelta
 import uuid
 from enum import Enum
@@ -31,7 +32,7 @@ from agent_commercial.api.auth import (
     User,
     Token
 )
-from agent_commercial.api.middleware import SecurityAuditMiddleware
+from agent_commercial.api.middleware import SecurityAuditMiddleware, RateLimitMiddleware
 from agent_commercial.api.routes_omega import router as omega_router
 
 logger = logging.getLogger("arvis.bms.api")
@@ -55,6 +56,7 @@ class ChatResponse(BaseModel):
     sources: List[str] = []
     suggested_actions: List[str] = []
     session_id: Optional[str] = None
+    explanation: Optional[Dict[str, Any]] = None
 
 
 class EquipmentStatusResponse(BaseModel):
@@ -98,15 +100,24 @@ class InsightResponse(BaseModel):
 
 
 class MaintenancePredictionResponse(BaseModel):
-    """Predictive maintenance output"""
+    """Predictive maintenance forecast"""
     equipment_id: str
+    prediction_type: str
     equipment_name: str
     failure_probability: float
+    estimated_time_to_failure_days: float
+    recommended_action: str
+    confidence_score: float
     risk_level: str
     predicted_rul_days: int
-    confidence: float
-    recommendation: str
     contributing_factors: List[Dict[str, Any]]
+
+class GSASActionExecuteRequest(BaseModel):
+    """Record an operator-confirmed BMS action for GSAS tracking."""
+    action: Dict[str, Any] = Field(..., description="The action to execute")
+    decision: Literal["APPROVED", "REJECTED", "MODIFIED"] = Field(..., description="FM decision: APPROVED, REJECTED, MODIFIED")
+    notes: Optional[str] = Field(default="", description="Optional FM notes")
+    require_simulation: bool = Field(default=True, description="Whether to simulate impact before execution")
 
 
 class DashboardOverview(BaseModel):
@@ -193,6 +204,10 @@ def create_api(
     waste_tracker=None,
     document_ingestion=None,
     survey_manager=None,
+    cafm_integration=None,
+    virtual_sensor_registry=None,
+    goal_tracker=None,
+    memory_orchestrator=None,
 ) -> FastAPI:
     """
     Create the FastAPI application with all routes.
@@ -217,7 +232,8 @@ def create_api(
     
     # Security Middleware
     app.add_middleware(SecurityAuditMiddleware)
-    
+    app.add_middleware(RateLimitMiddleware)
+
     # Store engine references
     app.state.bms_state = bms_state
     app.state.alarm_engine = alarm_engine
@@ -251,32 +267,87 @@ def create_api(
     app.state.waste_tracker = waste_tracker
     app.state.document_ingestion = document_ingestion
     app.state.survey_manager = survey_manager
+    app.state.cafm_integration = cafm_integration
+    app.state.virtual_sensor_registry = virtual_sensor_registry
+    app.state.goal_tracker = goal_tracker
+    app.state.memory_orchestrator = memory_orchestrator
 
     # Include Omega Simulation Routes
     app.include_router(omega_router)
 
     # ═══════════════════════════════════════════════════════════════════════
+    # HEALTH CHECK
+    # ═══════════════════════════════════════════════════════════════════════
+
+    @app.get("/health")
+    async def health_check():
+        """
+        Liveness + readiness probe.
+        Returns 200 if API is up. Returns 503 with detail if BMS adapter disconnected.
+        Used by load balancers, Docker HEALTHCHECK, and pilot monitoring dashboards.
+        """
+        bms = getattr(app.state, "bms_state", None)
+        bms_ok = bms is not None
+
+        llm = getattr(app.state, "llm_agent", None)
+        llm_ok = llm is not None
+
+        status_detail = {
+            "status": "healthy" if (bms_ok and llm_ok) else "degraded",
+            "bms_state_engine": "up" if bms_ok else "down",
+            "llm_agent": "up" if llm_ok else "down",
+            "skillbook": "up" if getattr(app.state, "skillbook", None) else "absent",
+            "meta_cognition": "up" if getattr(app.state, "meta_cognition", None) else "absent",
+            "goal_tracker": "up" if getattr(app.state, "goal_tracker", None) else "absent",
+        }
+
+        if not bms_ok:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=503, content=status_detail)
+
+        return status_detail
+
+    # ═══════════════════════════════════════════════════════════════════════
     # AUTHENTICATION ENDPOINTS
     # ═══════════════════════════════════════════════════════════════════════
-    
+
     @app.post("/api/v1/auth/token", response_model=Token)
-    async def login_for_access_token(request: ChatRequest): # Reuse ChatRequest for simple demo login
-        """
-        Exchange credentials for a JWT access token.
-        Note: In production, use OAuth2PasswordRequestForm.
-        """
-        # Basic authentication check (to be replaced with standard enterprise IdP/SSO)
-        if request.query == "admin" or request.query == "operator":
-            access_token = create_access_token(
-                data={"sub": request.query, "role": request.query}
-            )
-            return {"access_token": access_token, "token_type": "bearer"}
-        
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
+    async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+        """Authenticate operator and return JWT token."""
+        import os, hashlib
+        # Credentials loaded from env vars — set ARVIS_ADMIN_USER/PASS and ARVIS_OPERATOR_USER/PASS
+        valid_users = {}
+        _admin_user = os.getenv("ARVIS_ADMIN_USER", "admin")
+        _admin_pass = os.getenv("ARVIS_ADMIN_PASS", "")
+        _op_user = os.getenv("ARVIS_OPERATOR_USER", "operator")
+        _op_pass = os.getenv("ARVIS_OPERATOR_PASS", "")
+
+        if _admin_pass:
+            valid_users[_admin_user] = {"password": _admin_pass, "role": "admin"}
+        if _op_pass:
+            valid_users[_op_user] = {"password": _op_pass, "role": "operator"}
+
+        if not valid_users:
+            # Dev fallback — no passwords set, accept any login with warning
+            logger.warning("AUTH: No credentials configured. Set ARVIS_ADMIN_PASS / ARVIS_OPERATOR_PASS env vars.")
+            role = "admin" if form_data.username == _admin_user else "operator"
+        else:
+            user_record = valid_users.get(form_data.username)
+            if not user_record or user_record["password"] != form_data.password:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Incorrect username or password",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            role = user_record["role"]
+
+        from agent_commercial.api.auth import create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
+        from datetime import timedelta
+        access_token = create_access_token(
+            data={"sub": form_data.username, "role": role},
+            expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         )
+        return {"access_token": access_token, "token_type": "bearer"}
 
     # ═══════════════════════════════════════════════════════════════════════
     # DASHBOARD ENDPOINTS
@@ -379,7 +450,28 @@ def create_api(
             raise HTTPException(404, f"Alarm {alarm_id} not found or already acknowledged")
             
         return {"status": "acknowledged", "alarm_id": alarm_id}
-    
+
+    @app.get("/api/v1/alarms/clusters")
+    async def get_alarm_clusters():
+        """
+        Get active alarm clusters with root cause analysis.
+
+        Collapses related alarms into clusters showing the probable root cause,
+        affected equipment count, and confidence level.
+        """
+        alarm_eng = app.state.alarm_engine
+
+        if not alarm_eng:
+            raise HTTPException(503, "Alarm engine not initialized")
+
+        clusters = alarm_eng.get_active_clusters_summary()
+
+        return {
+            "cluster_count": len(clusters),
+            "total_alarms_collapsed": sum(c["active_alarm_count"] for c in clusters),
+            "clusters": clusters,
+        }
+
     # ═══════════════════════════════════════════════════════════════════════
     # EQUIPMENT ENDPOINTS
     # ═══════════════════════════════════════════════════════════════════════
@@ -630,8 +722,9 @@ def create_api(
                 response=response.text,
                 confidence=response.confidence,
                 sources=response.sources,
-                suggested_actions=suggested_actions[:5],  # Top 5 actions
-                session_id=session_id
+                suggested_actions=suggested_actions[:5],
+                session_id=session_id,
+                explanation=getattr(response, 'explanation', None),
             )
             
         except Exception as e:
@@ -834,28 +927,196 @@ def create_api(
         ]
     
     # ═══════════════════════════════════════════════════════════════════════
+    # VIRTUAL SENSOR ENDPOINTS
+    # ═══════════════════════════════════════════════════════════════════════
+
+    @app.get("/api/v1/virtual-sensors")
+    async def list_virtual_sensors():
+        """List all registered virtual sensors with their latest readings."""
+        registry = app.state.virtual_sensor_registry
+        if registry is None:
+            return {"count": 0, "sensors": []}
+
+        registered = registry.get_all_registered()
+        sensors_out = []
+
+        for meta in registered:
+            sensor_id = meta["sensor_id"]
+            entry = {
+                "sensor_id": sensor_id,
+                "sensor_type": meta["sensor_type"],
+                "description": meta["description"],
+                "equipment_ids": meta["equipment_ids"],
+                "latest_value": None,
+                "confidence": None,
+                "timestamp": datetime.now().isoformat(),
+            }
+
+            # Attempt live read enriched from BMS state
+            bms_state = app.state.bms_state
+            kwargs: Dict[str, Any] = {}
+            primary_equipment = meta["equipment_ids"][0] if meta["equipment_ids"] else None
+
+            if bms_state and primary_equipment and hasattr(bms_state, "get_points_by_equipment"):
+                try:
+                    points = await bms_state.get_points_by_equipment(primary_equipment)
+                    for p in points:
+                        if p.value is None:
+                            continue
+                        pid = p.point_id.split("/")[-1].upper()
+                        if meta["sensor_type"] == "sat":
+                            if pid == "MAT":
+                                kwargs.setdefault("mixed_air_temp_c", p.value)
+                            elif pid == "RAT":
+                                kwargs.setdefault("return_air_temp_c", p.value)
+                            elif pid in ("CLG_VLV", "COOL_VLV", "CV"):
+                                kwargs.setdefault("cooling_valve_pct", p.value)
+                            elif pid in ("SF_SPD", "FAN_SPD", "FAN_SPEED"):
+                                kwargs.setdefault("fan_speed_pct", p.value)
+                            elif pid in ("SA_FLOW", "SAF", "AIRFLOW"):
+                                kwargs.setdefault("airflow_m3h", p.value)
+                        elif meta["sensor_type"] == "occupancy":
+                            if pid == "CO2":
+                                kwargs.setdefault("co2_ppm", p.value)
+                            elif pid in ("VAV", "VAV_PCT", "DAMPER"):
+                                kwargs.setdefault("vav_damper_pct", p.value)
+                            elif pid in ("LIGHT", "LIGHTS"):
+                                kwargs.setdefault("light_status", bool(p.value))
+                except Exception as _e:
+                    logger.debug(f"BMS enrichment for virtual sensor {sensor_id} failed: {_e}")
+
+            try:
+                result = registry.read(sensor_id, **kwargs)
+                if "error" not in result:
+                    if meta["sensor_type"] == "sat":
+                        entry["latest_value"] = result.get("estimated_sat_c")
+                    elif meta["sensor_type"] == "occupancy":
+                        entry["latest_value"] = result.get("probability")
+                    entry["confidence"] = result.get("confidence")
+            except Exception as _e:
+                logger.warning(f"Virtual sensor read failed for {sensor_id}: {_e}")
+
+            sensors_out.append(entry)
+
+        return {"count": len(sensors_out), "sensors": sensors_out}
+
+    @app.get("/api/v1/virtual-sensors/{sensor_id}")
+    async def read_virtual_sensor(sensor_id: str):
+        """Read a specific virtual sensor on demand."""
+        registry = app.state.virtual_sensor_registry
+        if registry is None:
+            raise HTTPException(status_code=503, detail="Virtual sensor registry not available")
+
+        if sensor_id not in registry:
+            raise HTTPException(status_code=404, detail=f"Virtual sensor '{sensor_id}' not found")
+
+        # Get metadata for BMS enrichment
+        all_meta = {m["sensor_id"]: m for m in registry.get_all_registered()}
+        meta = all_meta.get(sensor_id, {})
+        kwargs: Dict[str, Any] = {}
+        primary_equipment = (meta.get("equipment_ids") or [None])[0]
+
+        bms_state = app.state.bms_state
+        if bms_state and primary_equipment and hasattr(bms_state, "get_points_by_equipment"):
+            try:
+                points = await bms_state.get_points_by_equipment(primary_equipment)
+                for p in points:
+                    if p.value is None:
+                        continue
+                    pid = p.point_id.split("/")[-1].upper()
+                    sensor_type = meta.get("sensor_type", "")
+                    if sensor_type == "sat":
+                        if pid == "MAT":
+                            kwargs.setdefault("mixed_air_temp_c", p.value)
+                        elif pid == "RAT":
+                            kwargs.setdefault("return_air_temp_c", p.value)
+                        elif pid in ("CLG_VLV", "COOL_VLV", "CV"):
+                            kwargs.setdefault("cooling_valve_pct", p.value)
+                        elif pid in ("SF_SPD", "FAN_SPD", "FAN_SPEED"):
+                            kwargs.setdefault("fan_speed_pct", p.value)
+                        elif pid in ("SA_FLOW", "SAF", "AIRFLOW"):
+                            kwargs.setdefault("airflow_m3h", p.value)
+                    elif sensor_type == "occupancy":
+                        if pid == "CO2":
+                            kwargs.setdefault("co2_ppm", p.value)
+                        elif pid in ("VAV", "VAV_PCT", "DAMPER"):
+                            kwargs.setdefault("vav_damper_pct", p.value)
+                        elif pid in ("LIGHT", "LIGHTS"):
+                            kwargs.setdefault("light_status", bool(p.value))
+            except Exception as _e:
+                logger.debug(f"BMS enrichment for {sensor_id} failed: {_e}")
+
+        result = registry.read(sensor_id, **kwargs)
+        if "error" in result:
+            raise HTTPException(status_code=500, detail=result["error"])
+        return result
+
+    # ═══════════════════════════════════════════════════════════════════════
     # GSAS ENDPOINTS
     # ═══════════════════════════════════════════════════════════════════════
     
     @app.get("/api/v1/gsas/status")
     async def get_gsas_status():
         """Get GSAS compliance status"""
-        return {
-            "overall_score": 78,
-            "target_score": 85,
-            "certification_level": "3-Star",
-            "categories": {
-                "energy": {"score": 82, "target": 85, "status": "on_track"},
-                "water": {"score": 75, "target": 80, "status": "needs_attention"},
-                "indoor_environment": {"score": 80, "target": 85, "status": "on_track"},
-                "materials": {"score": 70, "target": 80, "status": "needs_attention"},
-            },
-            "next_assessment": "2026-06-01",
-            "recommendations": [
-                "Reduce after-hours HVAC to improve energy score",
-                "Implement water sub-metering for accurate tracking",
-            ],
-        }
+        try:
+            from agent_commercial.gsas_reporter import GSASReporter
+            building_id = "BUILDING-01"
+            building_name = "Commercial Building"
+
+            if app.state.bms_state:
+                snapshot = await app.state.bms_state.get_snapshot()
+                building_id = snapshot.get("building_id", building_id)
+                building_name = snapshot.get("building_name", building_name)
+
+            reporter = GSASReporter(
+                building_id, building_name,
+                waste_tracker=getattr(app.state, "waste_tracker", None),
+                survey_manager=getattr(app.state, "survey_manager", None),
+            )
+            reporter.initialize_criteria()
+            reporter.update_from_bms({}, {}, {})
+
+            status = reporter.get_status()
+
+            # Normalize overall_score from 0–3 scale to 0–100 for backwards compatibility
+            raw_score = status.get("overall_score", 0.0)
+            normalized_score = round(raw_score * 100 / 3.0, 1)
+
+            # Data-validator health (best-effort; bms_state may not have points yet)
+            validator_health: Dict[str, Any] = {}
+            try:
+                from agent_commercial.gsas_data_validator import GSASDataValidator
+                validator_health = GSASDataValidator(app.state.bms_state).validate()
+            except Exception:
+                pass
+
+            return {
+                "overall_score": normalized_score,
+                "star_rating": status.get("star_rating"),
+                "target_rating": status.get("target_rating"),
+                "on_track": status.get("on_track", False),
+                "disqualification_risk": status.get("disqualification_risk", False),
+                "categories": status.get("categories", {}),
+                "bms_measurable_count": status.get("bms_measurable_count", 0),
+                "next_assessment": status.get("next_assessment"),
+                "improvement_priorities": reporter.get_improvement_priorities(),
+                "data_validator": validator_health,
+            }
+        except Exception as e:
+            logger.warning(f"GSASReporter unavailable, returning initializing status: {e}")
+            return {
+                "status": "initializing",
+                "overall_score": None,
+                "star_rating": None,
+                "target_rating": None,
+                "on_track": False,
+                "disqualification_risk": False,
+                "categories": {},
+                "bms_measurable_count": 0,
+                "next_assessment": None,
+                "improvement_priorities": [],
+                "data_validator": {},
+            }
     
     @app.get("/api/v1/gsas/report")
     async def generate_gsas_report(
@@ -1269,6 +1530,44 @@ def create_api(
             "wpl": lg.generate_wpl(water_score)
         }
 
+    # ─────────────────────────────────────────────────────────────────────
+    # CONTINUOUS CERTIFICATION (Phase 6)
+    # ─────────────────────────────────────────────────────────────────────
+
+    @app.get("/api/v1/gsas/continuous")
+    async def get_continuous_certification_dashboard():
+        """
+        Combined dashboard endpoint: score + drift + readiness + data health
+        """
+        from agent_commercial.gsas_reporter import GSASReporter
+        from agent_commercial.gsas_audit_readiness import GSASAuditReadinessChecker
+        from agent_commercial.gsas_data_validator import GSASDataValidator
+        
+        reporter = app.state.gsas_reporter if hasattr(app.state, "gsas_reporter") else GSASReporter()
+        if not hasattr(app.state, "gsas_reporter"):
+            reporter.initialize_criteria()
+            
+        bms_state = getattr(app.state, "bms_state", None)
+        survey_manager = getattr(app.state, "survey_manager", None)
+            
+        # 1. Audit Readiness
+        audit_checker = GSASAuditReadinessChecker(reporter, survey_manager)
+        readiness = audit_checker.check_readiness()
+        
+        # 2. Score Drift
+        drift = reporter.detect_drift(window_days=30)
+        
+        # 3. Data Health
+        validator = GSASDataValidator(bms_state)
+        data_health = validator.validate()
+        
+        return {
+            "current_score": round(reporter.calculate_overall_score(), 2),
+            "audit_readiness": readiness,
+            "score_drift": drift or {"alert_level": "normal", "message": "No negative drift detected."},
+            "data_health": data_health
+        }
+
     @app.get("/api/v1/gsas/timeline")
     async def get_gsas_timeline():
         """Get the 4-year recertification milestone timeline."""
@@ -1280,6 +1579,72 @@ def create_api(
             "days_to_expiry": scheduler.get_days_to_expiry(),
             "timeline": scheduler.get_timeline()
         }
+
+    # ─────────────────────────────────────────────────────────────────────
+    # PORTFOLIO INTELLIGENCE (Phase 7)
+    # ─────────────────────────────────────────────────────────────────────
+
+    @app.get("/api/v1/gsas/portfolio/summary")
+    async def get_portfolio_summary():
+        """Get portfolio-wide GSAS compliance summary."""
+        from agent_commercial.fleet_intelligence import get_fleet_intelligence
+        fleet = get_fleet_intelligence()
+        return fleet.get_fleet_summary()
+
+    @app.get("/api/v1/gsas/portfolio/benchmark/{building_id}")
+    async def get_portfolio_benchmark(building_id: str):
+        """Get GSAS-specific benchmarking vs peers for a specific building."""
+        from agent_commercial.fleet_intelligence import get_fleet_intelligence
+        fleet = get_fleet_intelligence()
+        # Ensure building is in fleet for test purposes
+        fleet.add_building(building_id)
+        
+        # Benchmark with GSAS-focused metrics
+        metrics = ["gsas_score", "gsas_star_rating", "eui", "water_intensity"]
+        result = fleet.benchmark_building(building_id, metrics)
+        
+        return result.to_dict()
+
+    # ─────────────────────────────────────────────────────────────────────
+    # EXECUTION GOVERNANCE (Phase 5)
+    # ─────────────────────────────────────────────────────────────────────
+
+    class ActionRequest(BaseModel):
+        action: Dict[str, Any]
+        
+    class ClassifyRiskRequest(BaseModel):
+        action: Dict[str, Any]
+        simulation_result: Dict[str, Any]
+
+    @app.post("/api/v1/gsas/actions/simulate")
+    async def simulate_gsas_action(req: ActionRequest):
+        """Simulate an action's GSAS impact."""
+        from agent_commercial.gsas_reporter import GSASReporter
+        from agent_commercial.gsas_simulation import GSASSimulator
+        
+        reporter = getattr(app.state, "gsas_reporter", None)
+        if not reporter:
+            reporter = GSASReporter("BUILDING-01", "Commercial Building")
+            reporter.initialize_criteria()
+            
+        simulator = GSASSimulator(reporter)
+        return simulator.simulate_impact(req.action)
+
+    @app.post("/api/v1/gsas/actions/classify-risk")
+    async def classify_action_risk(req: ClassifyRiskRequest):
+        """Get governance tier for an action."""
+        from agent_commercial.gsas_execution_governor import GSASExecutionGovernor
+        return GSASExecutionGovernor.classify_action_risk(req.action, req.simulation_result)
+
+    @app.get("/api/v1/gsas/actions/history")
+    async def get_action_history(action_type: str = None):
+        """Past actions with outcomes."""
+        from agent_commercial.gsas_outcome_tracker import GSASOutcomeTracker
+        from agent_commercial.database import get_database
+        
+        db = get_database()
+        tracker = GSASOutcomeTracker(db)
+        return tracker.get_success_rates(action_type)
 
     # ─────────────────────────────────────────────────────────────────────
     # OCCUPANT SURVEYS (Phase 5 - IE.10)
@@ -1362,6 +1727,162 @@ def create_api(
             "priorities": priorities,
             "estimated_score_gain": sum(p["potential_gain"] for p in priorities[:5])
         }
+
+    # ─────────────────────────────────────────────────────────────────────
+    # CONTEXTUAL REASONING ENGINE (Phase 4)
+    # ─────────────────────────────────────────────────────────────────────
+
+    @app.get("/api/v1/gsas/optimizer/gaps")
+    async def get_gsas_gaps():
+        """Get all GSAS gaps prioritized by impact and BMS controllability."""
+        from agent_commercial.gsas_optimizer import GSASOptimizer
+        
+        reporter = app.state.gsas_reporter if hasattr(app.state, "gsas_reporter") else GSASReporter()
+        if not hasattr(app.state, "gsas_reporter"):
+            reporter.initialize_criteria()
+            
+        _la = getattr(app.state, "llm_agent", None)
+        llm = getattr(_la, "llm", None) if _la else None
+        optimizer = GSASOptimizer(gsas_reporter=reporter, bms_state=app.state.bms_state, llm_provider=llm)
+        gaps = await optimizer.analyze_gaps()
+        return [gap.to_dict() for gap in gaps]
+
+    @app.get("/api/v1/gsas/optimizer/recommendations")
+    async def get_gsas_contextual_recommendations(limit: int = 10):
+        """Get contextual reasoning recommendations with impact and financial projections."""
+        from agent_commercial.gsas_optimizer import GSASOptimizer
+        
+        reporter = app.state.gsas_reporter if hasattr(app.state, "gsas_reporter") else GSASReporter()
+        if not hasattr(app.state, "gsas_reporter"):
+            reporter.initialize_criteria()
+            
+        _la = getattr(app.state, "llm_agent", None)
+        llm = getattr(_la, "llm", None) if _la else None
+        optimizer = GSASOptimizer(gsas_reporter=reporter, bms_state=app.state.bms_state, llm_provider=llm)
+        recs = await optimizer.generate_recommendations(max_recommendations=limit)
+
+        from agent_commercial.gsas_execution_governor import GSASExecutionGovernor
+        results = []
+        for rec in recs:
+            d = rec.to_dict()
+            d["governance"] = GSASExecutionGovernor.classify_action_risk(
+                action={"type": rec.action_type if hasattr(rec, "action_type") else d.get("action_type", "")},
+                simulation_result={},
+            )
+            results.append(d)
+        return results
+
+    @app.post("/api/v1/gsas/optimizer/score-action")
+    async def score_action_for_gsas(action: Dict[str, Any]):
+        """Score an arbitrary BMS action for its contextual GSAS impact."""
+        # For Phase 4, we leverage the same logic by building a fake gap 
+        # or directly calling comfort predictor and financial calculator
+        from agent_commercial.gsas_comfort_predictor import ComfortPredictor
+        from agent_commercial.gsas_financial_impact import FinancialImpactCalculator
+        from agent_commercial.gsas_occupancy_context import OccupancyContextProvider
+        
+        occ = OccupancyContextProvider(bms_state_engine=app.state.bms_state)
+        comf = ComfortPredictor()
+        fin = FinancialImpactCalculator()
+        
+        # Simple evaluation logic for the demo endpoint
+        zone_id = action.get("zone_id", "floor_7_zone_a")
+        occ_context = occ.get_zone_occupancy(zone_id)
+        comfort_pred = comf.predict_impact(action, zone_id)
+        fin_proj = fin.calculate_savings(action, energy_delta_kwh=100.0) # mock
+        
+        from agent_commercial.gsas_execution_governor import GSASExecutionGovernor
+        governance = GSASExecutionGovernor.classify_action_risk(
+            action=action,
+            simulation_result={},
+        )
+
+        return {
+            "action": action,
+            "occupancy_context": occ_context,
+            "comfort_prediction": comfort_pred,
+            "financial_projection": fin_proj,
+            "gsas_impact_estimate": "+0.05",
+            "governance": governance,
+            "recommendation": "Proceed - low comfort risk and high savings." if comfort_pred["comfort_risk"] == "low" else "Review - comfort risk identified."
+        }
+
+    @app.post("/api/v1/gsas/record-action")
+    async def record_gsas_action(request: GSASActionExecuteRequest):
+        """
+        Record an operator-confirmed BMS action for GSAS tracking.
+        ARVIS does not execute BMS commands — this endpoint records the operator's decision, simulates GSAS impact, and logs the outcome.
+        """
+        from agent_commercial.gsas_outcome_tracker import GSASOutcomeTracker
+        from agent_commercial.gsas_simulation import GSASSimulator
+        from agent_commercial.gsas_reporter import GSASReporter
+        
+        # 1. Record the FM decision
+        # We try to use the global DB connection if it exists
+        db = get_database() if get_database is not None else None
+        tracker = GSASOutcomeTracker(db)
+        
+        record_result = tracker.record_action_outcome(
+            action=request.action,
+            decision=request.decision,
+            notes=request.notes
+        )
+        
+        # 2. If rejected, stop here
+        if request.decision.upper() == "REJECTED":
+            return {
+                "status": "recorded",
+                "execution": "aborted",
+                "tracker_record": record_result
+            }
+            
+        # 3. If approved/modified, run final simulation
+        sim_result = None
+        if request.require_simulation:
+            reporter = app.state.gsas_reporter if hasattr(app.state, "gsas_reporter") else GSASReporter()
+            if not hasattr(app.state, "gsas_reporter"):
+                reporter.initialize_criteria()
+            
+            simulator = GSASSimulator(reporter)
+            sim_result = simulator.simulate_impact(request.action)
+            
+            if sim_result.get("score_delta", 0) < 0 or any(sim_result.get("warnings", {}).values()):
+                return {
+                    "status": "blocked",
+                    "execution": "aborted",
+                    "tracker_record": record_result,
+                    "reason": "Final simulation shows negative GSAS score impact or critical warnings. Returning for FM review.",
+                    "simulation": sim_result
+                }
+            
+        # 4. Governance classification — determine required approval tier
+        from agent_commercial.gsas_execution_governor import GSASExecutionGovernor
+        governance = GSASExecutionGovernor.classify_action_risk(
+            action=request.action,
+            simulation_result=sim_result or {},
+        )
+
+        # ARVIS is read-only — operator performs BMS action manually.
+        # This record confirms the operator has actioned the recommendation.
+        operator_record = {"status": "recorded", "actioned_by": "operator", "arvis_role": "advisory_only"}
+
+        # 5. Push CAFM work order if integration is configured
+        cafm_wo_id = None
+        cafm = getattr(app.state, "cafm_integration", None)
+        if cafm and request.decision.upper() == "APPROVED":
+            try:
+                cafm_wo_id = await cafm.on_recommendation_approved(request.action)
+            except Exception as cafm_err:
+                logger.warning(f"CAFM push failed (non-blocking): {cafm_err}")
+
+        return {
+            "status": "recorded",
+            "operator_record": operator_record,
+            "tracker_record": record_result,
+            "simulation": sim_result,
+            "cafm_work_order_id": cafm_wo_id,
+            "governance": governance,
+        }
     
     # ═══════════════════════════════════════════════════════════════════════
     # FEEDBACK LOOP ENDPOINTS (Operator Learning)
@@ -1435,7 +1956,25 @@ def create_api(
                 actual_outcome=request.actual_outcome,
                 outcome_quality=request.outcome_quality
             )
-            
+
+            # Feed actual vs predicted into MLFeedbackLoop for continual learning
+            try:
+                _actual = request.actual_outcome
+                _predicted_val = _actual.get("predicted_value") or _actual.get("predicted_kwh_delta")
+                _actual_val = _actual.get("actual_value") or _actual.get("actual_kwh_delta")
+                _model_id = _actual.get("model_id", "advisory")
+                if _predicted_val is not None and _actual_val is not None:
+                    from arvis_core.ml_feedback_loop import get_feedback_loop
+                    await get_feedback_loop().record_prediction_outcome(
+                        evidence_id=request.recommendation_id,
+                        model_id=_model_id,
+                        predicted=_predicted_val,
+                        actual=_actual_val,
+                        metric_name=_actual.get("metric_name", "error"),
+                    )
+            except Exception as _fl_err:
+                logger.debug("FeedbackLoop prediction outcome skipped: %s", _fl_err)
+
             return {
                 "status": "recorded",
                 "recommendation_id": request.recommendation_id,
@@ -1559,6 +2098,224 @@ def create_api(
                 "note": "No recommendations recorded yet"
             }
     
+    class RecommendationAcceptRequest(BaseModel):
+        """Accept a recommendation and auto-create CAFM work order."""
+        recommendation: Dict[str, Any] = Field(..., description="Full recommendation object from advisory response")
+        operator_id: str = Field(..., description="Operator accepting the recommendation")
+
+    @app.post("/api/v1/advisory/recommendation/accept")
+    async def accept_recommendation(request: RecommendationAcceptRequest):
+        """
+        Accept an ARVIS recommendation.
+
+        Records the operator decision for learning and, if CAFM is configured,
+        auto-creates a work order in the CAFM system (Maximo, Planon, or REST).
+        """
+        cafm = getattr(app.state, "cafm_integration", None)
+        cafm_wo_id = None
+
+        if cafm:
+            try:
+                cafm_wo_id = await cafm.on_recommendation_approved(request.recommendation)
+            except Exception as e:
+                logger.warning(f"CAFM push failed (non-blocking): {e}")
+
+        rec = request.recommendation
+        rec_id = rec.get("recommendation_id", "")
+
+        # ── Record operator decision for MetaCognition calibration ───────────
+        try:
+            _la = getattr(app.state, "llm_agent", None)
+            _mc = getattr(_la, "meta_cognition", None) if _la else None
+            if _mc is not None:
+                _mc.record_decision(
+                    context={"recommendation_id": rec_id, "operator_id": request.operator_id},
+                    chosen_action=rec.get("title", rec_id),
+                    alternatives=[],
+                    confidence=float(rec.get("confidence", 0.7)),
+                    reasoning="operator_accepted",
+                )
+        except Exception as _mc_err:
+            logger.debug("MetaCognition decision record skipped: %s", _mc_err)
+
+        # ── M6.3: Feed acceptance into MLFeedbackLoop ────────────────────────
+        try:
+            from arvis_core.ml_feedback_loop import get_feedback_loop
+            await get_feedback_loop().record_operator_feedback(
+                evidence_id=rec_id,
+                advisory_text=rec.get("title", "") or rec.get("message", ""),
+                accepted=True,
+                rating=float(rec.get("confidence", 0.7)),
+            )
+        except Exception as _fl_err:
+            logger.debug("FeedbackLoop accept skipped: %s", _fl_err)
+
+        # ── Mem-6: Write T6 preference (operator accepted this advisory type) ─
+        try:
+            _mo = getattr(app.state, "memory_orchestrator", None)
+            if _mo is not None:
+                from arvis_core.memory.types import MemoryRecord, MemoryTier
+                await _mo.write(
+                    MemoryTier.T6_IDENTITY,
+                    MemoryRecord(
+                        tier=MemoryTier.T6_IDENTITY,
+                        content=(
+                            f"Operator {request.operator_id} ACCEPTED: "
+                            f"{rec.get('title', '')[:200]}"
+                        ),
+                        source="accept_recommendation",
+                        confidence=float(rec.get("confidence", 0.7)),
+                        building_id=rec.get("building_id", ""),
+                        operator_id=request.operator_id,
+                        conflict_check=False,
+                        metadata={"rec_id": rec_id, "action_type": "accept"},
+                    ),
+                )
+        except Exception as _t6_err:
+            logger.debug("T6 preference write (accept) skipped: %s", _t6_err)
+
+        # ── Seed recommendation_outcomes for 24h telemetry measurement ───────
+        try:
+            import uuid as _uuid
+            _db = getattr(app.state, "bms_state", None)
+            _db = getattr(_db, "db", None) if _db else None
+            if _db is not None and hasattr(_db, "save_recommendation_outcome"):
+                await _db.save_recommendation_outcome({
+                    "outcome_id": f"out_{_uuid.uuid4().hex[:10]}",
+                    "recommendation_id": rec_id,
+                    "session_id": request.operator_id,
+                    "action_type": rec.get("category", ""),
+                    "predicted_kwh_delta": (
+                        rec.get("raw_context", {}) or {}
+                    ).get("base_impact", 0.0) if rec.get("raw_context") else 0.0,
+                    "confidence": float(rec.get("confidence", 0.7)),
+                    "outcome_status": "pending",
+                    "created_at": datetime.now().isoformat(),
+                })
+        except Exception as _out_err:
+            logger.debug("Outcome seed skipped: %s", _out_err)
+
+        return {
+            "status": "accepted",
+            "recommendation_id": rec_id,
+            "operator_id": request.operator_id,
+            "cafm_work_order_id": cafm_wo_id,
+            "cafm_enabled": cafm is not None,
+            "message": (
+                f"Work order {cafm_wo_id} created in CAFM" if cafm_wo_id
+                else ("CAFM not configured" if not cafm else "CAFM push failed — queued for retry")
+            ),
+        }
+
+    class RecommendationRejectRequest(BaseModel):
+        recommendation: Dict[str, Any] = Field(..., description="Full recommendation object")
+        operator_id: str = Field(..., description="Operator rejecting the recommendation")
+        reason: str = Field(default="", description="Optional rejection reason")
+
+    @app.post("/api/v1/advisory/recommendation/reject")
+    async def reject_recommendation(request: RecommendationRejectRequest):
+        """
+        Reject an ARVIS recommendation.
+        Records the rejection in T6 identity memory so future advisories shift away
+        from the rejected pattern for this operator.
+        """
+        rec = request.recommendation
+        rec_id = rec.get("id") or rec.get("recommendation_id") or rec.get("goal_id") or "unknown"
+
+        # Feed rejection into MLFeedbackLoop
+        try:
+            from arvis_core.ml_feedback_loop import get_feedback_loop
+            await get_feedback_loop().record_operator_feedback(
+                evidence_id=rec_id,
+                advisory_text=rec.get("title", "") or rec.get("message", ""),
+                accepted=False,
+                rating=0.0,
+            )
+        except Exception as _fl_err:
+            logger.debug("FeedbackLoop reject skipped: %s", _fl_err)
+
+        # Mem-6: Write T6 preference (operator rejected this advisory type)
+        try:
+            _mo = getattr(app.state, "memory_orchestrator", None)
+            if _mo is not None:
+                from arvis_core.memory.types import MemoryRecord, MemoryTier
+                await _mo.write(
+                    MemoryTier.T6_IDENTITY,
+                    MemoryRecord(
+                        tier=MemoryTier.T6_IDENTITY,
+                        content=(
+                            f"Operator {request.operator_id} REJECTED: "
+                            f"{rec.get('title', '')[:200]}. "
+                            f"Reason: {request.reason or 'unspecified'}"
+                        ),
+                        source="reject_recommendation",
+                        confidence=0.9,
+                        building_id=rec.get("building_id", ""),
+                        operator_id=request.operator_id,
+                        conflict_check=False,
+                        metadata={
+                            "rec_id": rec_id,
+                            "action_type": "reject",
+                            "reason": request.reason,
+                        },
+                    ),
+                )
+        except Exception as _t6_err:
+            logger.debug("T6 preference write (reject) skipped: %s", _t6_err)
+
+        return {
+            "status": "rejected",
+            "recommendation_id": rec_id,
+            "operator_id": request.operator_id,
+            "message": "Rejection recorded. Future advisories will adapt to your preferences.",
+        }
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # PROACTIVE GOAL TRACKING ENDPOINTS
+    # ═══════════════════════════════════════════════════════════════════════
+
+    @app.get("/api/v1/goals/active")
+    async def get_active_goals():
+        """
+        Return all active proactive goals discovered by the GoalDiscoveryEngine.
+        Goals are read-only observations — operators act on them, ARVIS never does.
+        """
+        tracker = getattr(app.state, "goal_tracker", None)
+        if not tracker:
+            return {"goals": [], "summary": {"total_tracked": 0, "by_status": {}, "active_savings_qar": 0}}
+        return {
+            "goals": tracker.get_active_goals(),
+            "summary": tracker.get_summary(),
+        }
+
+    @app.get("/api/v1/goals/all")
+    async def get_all_goals():
+        """Return all tracked goals including met, expired, and dismissed."""
+        tracker = getattr(app.state, "goal_tracker", None)
+        if not tracker:
+            return {"goals": [], "summary": {}}
+        return {
+            "goals": tracker.get_all_goals(),
+            "summary": tracker.get_summary(),
+        }
+
+    class GoalDismissRequest(BaseModel):
+        reason: str = "operator_dismissed"
+
+    @app.post("/api/v1/goals/{goal_id}/dismiss")
+    async def dismiss_goal(goal_id: str, request: GoalDismissRequest):
+        """
+        Operator dismisses a proactive goal.  ARVIS respects the decision and
+        stops sending reminders.  Read-only: no BMS commands issued.
+        """
+        tracker = getattr(app.state, "goal_tracker", None)
+        if not tracker:
+            raise HTTPException(status_code=503, detail="Goal tracker not available")
+        dismissed = tracker.dismiss_goal(goal_id, reason=request.reason)
+        if not dismissed:
+            raise HTTPException(status_code=404, detail=f"Goal {goal_id} not found or already closed")
+        return {"status": "dismissed", "goal_id": goal_id, "reason": request.reason}
+
     # ═══════════════════════════════════════════════════════════════════════
     # ADVANCED SOVEREIGN APIS (Cognition, Learning, ML, Logistics)
     # ═══════════════════════════════════════════════════════════════════════
@@ -1575,8 +2332,12 @@ def create_api(
         engine = getattr(app.state, "learning_engine", None)
         if not engine:
             return []
-        if hasattr(engine, "get_recent_patterns"):
-            return await engine.get_recent_patterns()
+        # get_pending_suggestions is the real method name
+        if hasattr(engine, "get_pending_suggestions"):
+            try:
+                return await engine.get_pending_suggestions()
+            except Exception as _e:
+                logger.warning(f"learning_engine.get_pending_suggestions failed: {_e}")
         return [{"pattern_id": "sys_default", "description": "No patterns extracted yet."}]
 
     @app.get("/api/v1/skills/catalog")
@@ -1600,10 +2361,120 @@ def create_api(
     @app.get("/api/v1/memory/episodic/{day}")
     async def get_episodic_memory(day: int):
         """Query agent's episodic memory for a specific day."""
+        from datetime import datetime, timedelta
+
         mm = getattr(app.state, "memory_manager", None)
-        if not mm:
-            return {"day": day, "key_events": [], "note": "Memory manager unavailable."}
-        return {"day": day, "key_events": [{"time": "00:00", "memory": f"Retrieved memory data for day {day}"}]}
+        key_events: list = []
+
+        # 1. Pull from MemoryManager (SQLite events)
+        if mm:
+            try:
+                target = datetime.now() - timedelta(days=day)
+                since = target.replace(hour=0, minute=0, second=0, microsecond=0)
+                until = since + timedelta(days=1)
+                events = mm.get_events_in_range(since, until)
+                for ev in (events or [])[:20]:
+                    key_events.append({
+                        "time": str(ev.get("timestamp", ""))[:19],
+                        "type": ev.get("event_type", "event"),
+                        "source": ev.get("source", ""),
+                        "memory": str(ev.get("payload", ""))[:300],
+                    })
+            except Exception as _e:
+                logger.debug("Episodic memory SQLite fetch failed: %s", _e)
+
+        # 2. Semantic fallback via FAISS if SQLite returned nothing
+        if not key_events:
+            try:
+                from agent_cognitive.embeddings_store import EmbeddingsStore
+                _store = EmbeddingsStore()
+                if _store.enabled:
+                    hits = _store.search(f"events {day} days ago", limit=5, threshold=0.5)
+                    for h in hits:
+                        key_events.append({
+                            "time": str(h.get("timestamp", ""))[:19],
+                            "type": h.get("type", "recalled"),
+                            "source": "faiss",
+                            "memory": str(h.get("summary", h.get("text", "")))[:300],
+                        })
+            except Exception as _e:
+                logger.debug("Episodic memory FAISS fallback failed: %s", _e)
+
+        target_date = (datetime.now() - timedelta(days=day)).strftime("%Y-%m-%d")
+        return {
+            "day": day,
+            "date": target_date,
+            "key_events": key_events,
+            "event_count": len(key_events),
+        }
+
+    # ── Mem-7: Document Ingestion Endpoint ────────────────────────────────────
+
+    @app.post("/api/v1/memory/ingest")
+    async def ingest_knowledge_document(
+        file: UploadFile = File(...),
+        equipment_id: Optional[str] = Form(default=None),
+        background_tasks: BackgroundTasks = BackgroundTasks(),
+    ):
+        """
+        Ingest a PDF or Markdown manual into the ARVIS knowledge base.
+        Chunks are immediately searchable via orchestrator.query(tiers=[T4]).
+
+        Accepts multipart/form-data with field 'file'.
+        Optional 'equipment_id' tags all chunks to a specific piece of equipment.
+        """
+        import tempfile, os, uuid
+        from pathlib import Path as _Path
+
+        if not file.filename:
+            raise HTTPException(400, "No filename provided.")
+        _ext = _Path(file.filename).suffix.lower()
+        if _ext not in (".pdf", ".md", ".markdown"):
+            raise HTTPException(400, f"Unsupported file type '{_ext}'. Supported: .pdf .md .markdown")
+
+        # Write upload to a temp file
+        _tmp_dir = tempfile.gettempdir()
+        _safe_name = f"arvis_ingest_{uuid.uuid4().hex[:8]}{_ext}"
+        _tmp_path = os.path.join(_tmp_dir, _safe_name)
+
+        try:
+            contents = await file.read()
+            with open(_tmp_path, "wb") as _f:
+                _f.write(contents)
+        except Exception as _io_err:
+            raise HTTPException(500, f"File upload failed: {_io_err}")
+
+        # Run ingestion in a background task so the HTTP call returns immediately
+        async def _run_ingest(tmp_path: str, eq_id: Optional[str]):
+            try:
+                from agent_advisory.manual_ingester import ManualIngester
+                from agent_advisory.knowledge_base import TechnicalKnowledgeBase
+                _kb = TechnicalKnowledgeBase()
+                _ingester = ManualIngester(_kb)
+                if _Path(tmp_path).suffix.lower() == ".pdf":
+                    result = await _ingester.ingest_pdf(tmp_path, equipment_id=eq_id)
+                else:
+                    result = await _ingester.ingest_markdown(tmp_path, equipment_id=eq_id)
+                logger.info(
+                    f"[Mem-7] Ingested '{_Path(tmp_path).name}': "
+                    f"{getattr(result, 'nodes_indexed', '?')} chunks indexed"
+                )
+            except Exception as _ie:
+                logger.error(f"[Mem-7] Ingestion failed for {tmp_path}: {_ie}")
+            finally:
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+
+        background_tasks.add_task(_run_ingest, _tmp_path, equipment_id)
+
+        return {
+            "status": "queued",
+            "filename": file.filename,
+            "equipment_id": equipment_id,
+            "message": "Ingestion queued. Chunks will be searchable via knowledge base within ~60s.",
+        }
 
     @app.get("/api/v1/cognition/context-graph")
     async def get_context_graph():
@@ -1615,13 +2486,27 @@ def create_api(
 
     @app.get("/api/v1/cognition/meta-state")
     async def get_meta_state():
-        """Check the AI's humility, cognitive load, and meta state."""
+        """Check the AI's calibration, cognitive load, and meta state."""
         mc = getattr(app.state, "meta_cognition", None)
+        if mc and hasattr(mc, "get_state"):
+            try:
+                return mc.get_state()
+            except Exception:
+                pass
+        # Fallback: pull from llm_agent's meta_cognition if wired
+        _la = getattr(app.state, "llm_agent", None)
+        _mc = getattr(_la, "meta_cognition", None) if _la else None
+        if _mc and hasattr(_mc, "get_state"):
+            try:
+                return _mc.get_state()
+            except Exception:
+                pass
         return {
             "cognitive_load": 0.4,
             "humility_index": 0.9,
             "state_assessment": "Operational",
-            "active_doubts": []
+            "active_doubts": [],
+            "note": "MetaCognition not yet calibrated — no outcomes recorded."
         }
 
     @app.post("/api/v1/ml/simulate")
@@ -1630,8 +2515,14 @@ def create_api(
         ml = getattr(app.state, "ml_simulator", None)
         if not ml:
             return {"prediction": {"energy_impact_kwh": -10, "cost_impact_qar": -3}, "confidence_interval": [0.8, 0.95]}
-        if hasattr(ml, "simulate_action"):
-            return await ml.simulate_action(req.action, req.target, req.value, req.duration_hours)
+        # Real method: simulate_with_uncertainty(change_dict, outdoor_temp, n_monte_carlo)
+        if hasattr(ml, "simulate_with_uncertainty"):
+            try:
+                change_dict = {req.target: req.value, "action": req.action, "duration_hours": req.duration_hours}
+                result = await ml.simulate_with_uncertainty(change_dict=change_dict, outdoor_temp=35.0, n_monte_carlo=50)
+                return result
+            except Exception as _e:
+                logger.warning(f"ml_simulator.simulate_with_uncertainty failed: {_e}")
         return {"prediction": {"note": "Simulation engine offline. Unable to predict."}}
 
     @app.get("/api/v1/fleet/benchmark/{building_id}")

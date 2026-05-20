@@ -17,6 +17,9 @@ logger = logging.getLogger("arvis.advisory.agentic.retriever")
 chromadb = None
 SentenceTransformer = None
 
+# Module-level model cache keyed by model name — prevents repeated 90MB loads.
+_SCENARIO_MODEL_CACHE: dict = {}
+
 
 def _ensure_chromadb():
     """Lazy import ChromaDB"""
@@ -46,6 +49,12 @@ def _ensure_sentence_transformers():
             logger.warning("sentence-transformers not installed")
             return False
     return True
+
+
+def _get_scenario_model(model_name: str):
+    if model_name not in _SCENARIO_MODEL_CACHE and _ensure_sentence_transformers():
+        _SCENARIO_MODEL_CACHE[model_name] = SentenceTransformer(model_name)
+    return _SCENARIO_MODEL_CACHE.get(model_name)
 
 
 class HistoricalScenario:
@@ -150,7 +159,7 @@ class ScenarioRetriever:
         # Try to initialize embedder
         if _ensure_sentence_transformers():
             try:
-                self.embedder = SentenceTransformer(self.embedding_model_name)
+                self.embedder = _get_scenario_model(self.embedding_model_name)
             except Exception as e:
                 logger.warning("Sentence transformer init failed: %s", e)
     

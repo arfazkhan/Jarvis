@@ -33,7 +33,7 @@ class AlarmHandlerMixin:
             "analyze_cascade": instance._handle_analyze_cascade,
             "escalate_alarm": instance._handle_escalate_alarm,
             "silence_alarm": instance._handle_silence_alarm,
-            "get_alarm_cluster": instance._handle_get_alarm_cluster,
+            "get_alarm_clusters": instance._handle_get_alarm_clusters,
         }
     
     async def _handle_get_active_alarms(self, args: Dict) -> Dict:
@@ -233,3 +233,16 @@ class AlarmHandlerMixin:
                 logger.error(f"Error getting alarm cluster: {e}")
         
         return {"error": f"Cluster {cluster_id} not found"}
+
+    async def _handle_get_alarm_clusters(self, args: Dict) -> Dict:
+        """Get all active alarm clusters with root cause summaries."""
+        alarm_engine = getattr(self, "alarm_engine", None)
+        if not alarm_engine:
+            return {"cluster_count": 0, "total_alarms_collapsed": 0, "clusters": []}
+
+        clusters = alarm_engine.get_active_clusters_summary()
+        return {
+            "cluster_count": len(clusters),
+            "total_alarms_collapsed": sum(c["active_alarm_count"] for c in clusters),
+            "clusters": clusters,
+        }

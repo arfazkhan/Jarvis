@@ -670,13 +670,63 @@ class AlarmEngine:
         active_clusters = []
         for cluster in self.clusters.values():
             has_active = any(
-                aid in self.active_alarms 
+                aid in self.active_alarms
                 for aid in cluster.alarm_ids
             )
             if has_active:
                 active_clusters.append(cluster)
-        
+
         return active_clusters
+
+    def get_active_clusters_summary(self) -> List[Dict[str, Any]]:
+        """
+        Get a summary of all active alarm clusters with root cause analysis.
+
+        Returns collapsed view: each cluster shows root cause, member count,
+        affected equipment/zones, confidence, and priority.
+        """
+        clusters = self.get_clusters()
+        if not clusters:
+            return []
+
+        summaries = []
+        for cluster in clusters:
+            active_members = [
+                self.active_alarms[aid]
+                for aid in cluster.alarm_ids
+                if aid in self.active_alarms
+            ]
+
+            member_details = []
+            for pa in active_members[:10]:
+                member_details.append({
+                    "alarm_id": pa.alarm.alarm_id,
+                    "equipment_id": pa.alarm.equipment_id,
+                    "message": pa.alarm.message,
+                    "severity": pa.alarm.severity.value,
+                })
+
+            summaries.append({
+                "cluster_id": cluster.cluster_id,
+                "alarm_count": len(cluster.alarm_ids),
+                "active_alarm_count": len(active_members),
+                "probable_root_cause": cluster.probable_root_cause,
+                "root_cause_equipment": cluster.root_cause_equipment_id,
+                "root_cause_confidence": round(cluster.root_cause_confidence, 2),
+                "affected_equipment_count": cluster.affected_equipment_count,
+                "affected_zones": cluster.affected_zones,
+                "priority": cluster.priority.value,
+                "first_alarm": cluster.first_alarm_time.isoformat() if cluster.first_alarm_time else None,
+                "last_alarm": cluster.last_alarm_time.isoformat() if cluster.last_alarm_time else None,
+                "member_alarms": member_details,
+            })
+
+        summaries.sort(key=lambda s: (
+            {"critical": 0, "high": 1, "medium": 2, "low": 3}.get(s["priority"], 4),
+            -s["alarm_count"]
+        ))
+
+        return summaries
     
     def get_root_cause_analysis(self, alarm_id: str) -> RootCauseReport:
         """Generate detailed root cause analysis for an alarm"""

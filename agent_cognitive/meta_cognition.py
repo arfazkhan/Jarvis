@@ -410,6 +410,55 @@ class MetaCognition:
                 return True
         return False
 
+    def get_state(self) -> dict:
+        """Return a snapshot of current calibration state."""
+        rules = self.calibration_rules or {}
+
+        # Derive state_assessment from calibration rules weight adjustments
+        adjustments = [v.get("weight_adjustment", 0.0) for v in rules.values() if isinstance(v, dict)]
+        if not adjustments:
+            state_assessment = "Insufficient data"
+        else:
+            avg_adj = statistics.mean(adjustments)
+            if avg_adj < -0.15:
+                state_assessment = "Overconfident"
+            elif avg_adj > 0.15:
+                state_assessment = "Underconfident"
+            else:
+                state_assessment = "Well-calibrated"
+
+        # cognitive_load: ratio of active rules to an assumed max of 20
+        cognitive_load = round(min(1.0, len(rules) / 20.0), 3)
+
+        # humility_index: high fisher_information rules pull humility up
+        fisher_vals = [v.get("fisher_information", 0.0) for v in rules.values() if isinstance(v, dict)]
+        if fisher_vals:
+            avg_fisher = statistics.mean(fisher_vals)
+            humility_index = round(min(1.0, avg_fisher / 5.0), 3)
+        else:
+            humility_index = 0.5
+
+        # active_doubts: rules whose weight_adjustment is strongly negative
+        active_doubts = [
+            name for name, v in rules.items()
+            if isinstance(v, dict) and v.get("weight_adjustment", 0.0) < -0.2
+        ]
+
+        # calibration_summary: expose rule count, file path, and rule names
+        calibration_summary = {
+            "rule_count": len(rules),
+            "calibration_file": self.calibration_file,
+            "rule_names": list(rules.keys()),
+        }
+
+        return {
+            "state_assessment": state_assessment,
+            "cognitive_load": cognitive_load,
+            "humility_index": humility_index,
+            "active_doubts": active_doubts,
+            "calibration_summary": calibration_summary,
+        }
+
     def determine_action_class(self, risk_level: str, is_lockout: bool) -> str:
         """
         Maps risk and state to an Action Authority Class.

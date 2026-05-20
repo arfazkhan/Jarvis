@@ -21,8 +21,9 @@ shap>=0.42.0                    # Model explainability
 # ═══════════════════════════════════════════════════════════
 # Deep Learning (Phase 2 - LSTM for RUL)
 # ═══════════════════════════════════════════════════════════
-torch>=2.0.0                    # PyTorch for LSTM
-# tensorflow>=2.13.0            # Alternative: TensorFlow
+torch>=2.0.0                    # PyTorch for LSTM + VAE (fdd_autoencoder)
+# tensorflow>=2.13.0            # Alternative: TensorFlow (replaced by PyTorch)
+pgmpy>=0.1.17                   # Bayesian Network for root cause analysis (analyze_root_cause)
 
 # ═══════════════════════════════════════════════════════════
 # API & Server

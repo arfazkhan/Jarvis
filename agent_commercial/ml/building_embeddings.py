@@ -33,6 +33,14 @@ except ImportError:
     ST_AVAILABLE = False
     logger.warning("sentence-transformers not installed. Run: pip install sentence-transformers")
 
+# Module-level singleton — shared across all SemanticSkillMatcher instances.
+_ST_MODEL_CACHE: dict = {}
+
+def _get_st_model(model_name: str):
+    if model_name not in _ST_MODEL_CACHE and ST_AVAILABLE:
+        _ST_MODEL_CACHE[model_name] = SentenceTransformer(model_name)
+    return _ST_MODEL_CACHE.get(model_name)
+
 try:
     from sklearn.metrics.pairwise import cosine_similarity
     from sklearn.cluster import KMeans
@@ -109,8 +117,8 @@ class SemanticSkillMatcher:
         # Load model if available
         if ST_AVAILABLE:
             try:
-                self.model = SentenceTransformer(model_name)
-                logger.info(f"Loaded embedding model: {model_name}")
+                self.model = _get_st_model(model_name)
+                logger.info(f"Loaded embedding model: {model_name} (singleton)")
             except Exception as e:
                 logger.warning(f"Failed to load model: {e}")
         
@@ -308,6 +316,54 @@ class SemanticSkillMatcher:
                     matrix[sid1][sid2] = float(sim)
         
         return matrix
+
+    # =========================================================================
+    # MODEL PERSISTENCE (ModelRegistry Integration)
+    # =========================================================================
+
+    def save_model(self) -> Optional[str]:
+        """Save skill embeddings cache to ModelRegistry."""
+        from agent_commercial.ml.model_registry import get_model_registry
+        registry = get_model_registry()
+
+        model_state = {
+            "skill_texts": self.skill_texts,
+            "skill_count": len(self.skill_texts),
+        }
+        extra = {}
+        if self.skill_embeddings:
+            extra["embeddings"] = dict(self.skill_embeddings)
+
+        version = registry.save_model(
+            "building_embeddings",
+            model_state,
+            {"skills": len(self.skill_texts)},
+            extra_artifacts=extra or None,
+        )
+        logger.info(f"Skill embeddings saved: building_embeddings/{version}")
+        return version
+
+    def load_model(self) -> bool:
+        """Load skill embeddings from ModelRegistry."""
+        from agent_commercial.ml.model_registry import get_model_registry
+        registry = get_model_registry()
+
+        model_state, metadata = registry.load_model("building_embeddings")
+        if model_state is None:
+            return False
+
+        saved_texts = model_state.get("skill_texts", {})
+        if saved_texts:
+            for skill_id, text in saved_texts.items():
+                if skill_id not in self.skill_texts:
+                    self.add_skill(skill_id, text)
+
+        embeddings = registry.load_artifact("building_embeddings", "embeddings")
+        if embeddings:
+            self.skill_embeddings.update(embeddings)
+
+        logger.info(f"Skill embeddings loaded: {len(self.skill_texts)} skills")
+        return True
 
 
 # =============================================================================

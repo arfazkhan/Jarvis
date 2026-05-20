@@ -162,6 +162,207 @@ class FeatureFactor:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# FILTER DEGRADATION PREDICTOR
+# ═══════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class FilterDegradationResult:
+    """Result of filter degradation trend analysis."""
+    equipment_id: str
+    current_dp_pa: float
+    threshold_dp_pa: float = 300.0
+    trend_slope_pa_per_day: float = 0.0
+    projected_days_to_threshold: Optional[int] = None
+    confidence: float = 0.0
+    risk_level: str = "low"
+    recommendation: str = ""
+    data_points_used: int = 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "equipment_id": self.equipment_id,
+            "current_dp_pa": round(self.current_dp_pa, 1),
+            "threshold_dp_pa": self.threshold_dp_pa,
+            "trend_slope_pa_per_day": round(self.trend_slope_pa_per_day, 3),
+            "projected_days_to_threshold": self.projected_days_to_threshold,
+            "confidence": round(self.confidence, 2),
+            "risk_level": self.risk_level,
+            "recommendation": self.recommendation,
+            "data_points_used": self.data_points_used,
+        }
+
+
+class FilterDegradationPredictor:
+    """
+    Predicts filter replacement timing using differential pressure trend analysis.
+
+    Uses linear regression on rolling filter DP readings to extrapolate when
+    the filter will reach the replacement threshold (typically 250-350 Pa).
+    Generates warnings weeks before failure.
+
+    Requires: At least 7 days of DP history for meaningful prediction.
+    """
+
+    REPLACEMENT_THRESHOLD_PA = 300.0
+    WARNING_THRESHOLD_PA = 250.0
+    MIN_DATA_POINTS = 7
+    MAX_LOOKBACK_DAYS = 60
+
+    def __init__(self):
+        self._dp_history: Dict[str, List[Tuple[datetime, float]]] = {}
+
+    def record_reading(self, equipment_id: str, dp_pa: float, timestamp: Optional[datetime] = None) -> None:
+        """Record a filter differential pressure reading."""
+        ts = timestamp or datetime.now()
+        if equipment_id not in self._dp_history:
+            self._dp_history[equipment_id] = []
+        self._dp_history[equipment_id].append((ts, dp_pa))
+
+        # Trim to max lookback
+        cutoff = datetime.now() - timedelta(days=self.MAX_LOOKBACK_DAYS)
+        self._dp_history[equipment_id] = [
+            (t, v) for t, v in self._dp_history[equipment_id] if t > cutoff
+        ]
+
+    def predict_degradation(self, equipment_id: str) -> FilterDegradationResult:
+        """
+        Predict when filter will reach replacement threshold.
+
+        Uses ordinary least-squares linear regression on DP history.
+        Returns projected days until threshold breach.
+        """
+        history = self._dp_history.get(equipment_id, [])
+
+        if not history:
+            return FilterDegradationResult(
+                equipment_id=equipment_id,
+                current_dp_pa=0.0,
+                recommendation="No filter DP data available",
+            )
+
+        current_dp = history[-1][1]
+        n_points = len(history)
+
+        if n_points < self.MIN_DATA_POINTS:
+            return FilterDegradationResult(
+                equipment_id=equipment_id,
+                current_dp_pa=current_dp,
+                data_points_used=n_points,
+                recommendation=f"Insufficient data ({n_points}/{self.MIN_DATA_POINTS} days). Collecting baseline.",
+            )
+
+        t0 = history[0][0]
+        days = np.array([(t - t0).total_seconds() / 86400 for t, _ in history])
+        values = np.array([v for _, v in history])
+
+        # ── Exponential fit (physically correct for filter loading) ──────────────────
+        # Filter DP follows DP(t) = a·exp(b·t): fit ln(DP) = b0 + b1·t via OLS.
+        # Linear OLS on the raw curve drastically overestimates remaining life because
+        # it cannot capture the accelerating cake-filtration phase at end-of-life.
+        use_exp = False
+        exp_b0 = exp_b1 = exp_r2 = 0.0
+        try:
+            lv = np.log(np.maximum(values, 1.0))
+            ne = len(days)
+            sxe, slv = days.sum(), lv.sum()
+            sxlv, sx2e = (days * lv).sum(), (days ** 2).sum()
+            denom_e = ne * sx2e - sxe ** 2
+            if denom_e != 0:
+                exp_b1 = (ne * sxlv - sxe * slv) / denom_e
+                exp_b0 = (slv - exp_b1 * sxe) / ne
+                lv_pred = exp_b1 * days + exp_b0
+                ss_res_e = ((lv - lv_pred) ** 2).sum()
+                ss_tot_e = ((lv - lv.mean()) ** 2).sum()
+                exp_r2 = max(0.0, 1.0 - ss_res_e / ss_tot_e) if ss_tot_e > 0 else 0.0
+                use_exp = exp_b1 > 0.001 and exp_r2 >= 0.5
+        except Exception:
+            pass
+
+        # ── Linear OLS (fallback for flat early-stage depth-filtration phase) ────────
+        n = len(days)
+        sum_x, sum_y = days.sum(), values.sum()
+        sum_xy, sum_x2 = (days * values).sum(), (days ** 2).sum()
+        denominator = n * sum_x2 - sum_x ** 2
+        if denominator == 0:
+            slope, intercept = 0.0, values.mean()
+        else:
+            slope = (n * sum_xy - sum_x * sum_y) / denominator
+            intercept = (sum_y - slope * sum_x) / n
+
+        y_pred = slope * days + intercept
+        ss_res = ((values - y_pred) ** 2).sum()
+        ss_tot = ((values - values.mean()) ** 2).sum()
+        r_squared = 1.0 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
+        confidence = max(0.0, min(1.0, exp_r2 if use_exp else r_squared))
+
+        # ── Project days to replacement threshold ─────────────────────────────────────
+        projected_days = None
+        if use_exp:
+            # Solve threshold = exp(b0 + b1·t_proj)  →  t_proj = (ln(threshold) - b0) / b1
+            t_proj = (np.log(self.REPLACEMENT_THRESHOLD_PA) - exp_b0) / exp_b1
+            days_rem = t_proj - days[-1]
+            if days_rem > 0:
+                projected_days = int(days_rem)
+            # Instantaneous slope at current DP for risk-level reporting
+            slope = exp_b1 * current_dp
+        elif slope > 0.1:
+            days_remaining = (self.REPLACEMENT_THRESHOLD_PA - current_dp) / slope
+            if days_remaining > 0:
+                projected_days = int(days_remaining)
+
+        # Risk level
+        if current_dp >= self.REPLACEMENT_THRESHOLD_PA:
+            risk_level = "critical"
+        elif projected_days is not None and projected_days <= 7:
+            risk_level = "critical"
+        elif projected_days is not None and projected_days <= 14:
+            risk_level = "high"
+        elif projected_days is not None and projected_days <= 30:
+            risk_level = "medium"
+        elif slope > 0.5:
+            risk_level = "medium"
+        else:
+            risk_level = "low"
+
+        # Recommendation
+        if risk_level == "critical":
+            if current_dp >= self.REPLACEMENT_THRESHOLD_PA:
+                recommendation = "Filter DP exceeded threshold. Replace immediately."
+            else:
+                recommendation = f"Filter projected to exceed threshold in {projected_days} days. Schedule replacement this week."
+        elif risk_level == "high":
+            recommendation = f"Filter degrading — replacement needed within {projected_days} days. Order replacement filter now."
+        elif risk_level == "medium":
+            recommendation = f"Filter degradation trend detected. Projected replacement in ~{projected_days} days. Plan maintenance window."
+        elif slope > 0.1:
+            recommendation = f"Slow filter degradation detected (slope: {slope:.2f} Pa/day). Monitor weekly."
+        else:
+            recommendation = "Filter DP stable. No action needed."
+
+        return FilterDegradationResult(
+            equipment_id=equipment_id,
+            current_dp_pa=current_dp,
+            threshold_dp_pa=self.REPLACEMENT_THRESHOLD_PA,
+            trend_slope_pa_per_day=slope,
+            projected_days_to_threshold=projected_days,
+            confidence=confidence,
+            risk_level=risk_level,
+            recommendation=recommendation,
+            data_points_used=n_points,
+        )
+
+    def scan_all_filters(self) -> List[FilterDegradationResult]:
+        """Predict degradation for all tracked filters."""
+        results = []
+        for equipment_id in self._dp_history:
+            result = self.predict_degradation(equipment_id)
+            if result.trend_slope_pa_per_day > 0.1:
+                results.append(result)
+        results.sort(key=lambda r: r.projected_days_to_threshold or 999)
+        return results
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # PREDICTIVE MAINTENANCE ENGINE
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -223,6 +424,7 @@ class PredictiveMaintenanceEngine:
         self.feature_names = EquipmentFeatures.feature_names()
         self.equipment_history: Dict[str, List[EquipmentFeatures]] = {}
         self.equipment_baselines: Dict[str, Dict[str, float]] = {}
+        self.weibull_models: Dict[str, Any] = {}  # equipment_type → fitted WeibullFitter
         # New: Reference to BMS state (will be injected)
         self.bms_state = None
         
@@ -241,7 +443,10 @@ class PredictiveMaintenanceEngine:
             "days_overdue_maintenance": 30,
             "fault_count_high": 5,
         }
-        
+
+        # Filter degradation trend predictor
+        self.filter_predictor = FilterDegradationPredictor()
+
         logger.info("PredictiveMaintenanceEngine initialized")
 
     def set_bms_state(self, bms_state):
@@ -402,11 +607,17 @@ class PredictiveMaintenanceEngine:
                 df_seq = pd.DataFrame([f.to_array() for f in all_features[-vae.sequence_length:]], 
                                      columns=self.feature_names)
                 vae_health_score = vae.get_health_score(df_seq)
-                if vae_health_score < 20:
-                    failure_proba = max(failure_proba, 0.85)
-                elif vae_health_score < 50:
-                    failure_proba = max(failure_proba, 0.5)
+                # VAE detects out-of-distribution data (novelty), not mechanical failure.
+                # Sudden seasonal shifts, heatwaves, or occupancy spikes all depress the
+                # health score without indicating impending breakdown.
+                # Only nudge failure_proba when BOTH the VAE is alarmed AND the rule-based
+                # probability already suggests degradation (i.e., corroboration required).
                 anomaly_score = (100 - vae_health_score) / 100
+                if vae_health_score < 20 and failure_proba > 0.4:
+                    # Strong novelty + pre-existing rule signal → escalate modestly
+                    failure_proba = max(failure_proba, min(0.75, failure_proba * 1.3))
+                elif vae_health_score < 50 and failure_proba > 0.3:
+                    failure_proba = max(failure_proba, min(0.55, failure_proba * 1.15))
             else:
                 anomaly_score = 0.0
         else:
@@ -443,6 +654,8 @@ class PredictiveMaintenanceEngine:
             features
         )
         
+        horizons = self._multi_horizon_risk(float(failure_proba), rul_days, features)
+
         return FailurePrediction(
             equipment_id=equipment_id,
             failure_probability=float(failure_proba),
@@ -459,12 +672,55 @@ class PredictiveMaintenanceEngine:
                 }
                 for f in contributing_factors
             ],
+            failure_probability_horizons=horizons,
         )
     
+    def _multi_horizon_risk(
+        self,
+        base_probability: float,
+        rul_days: Optional[int],
+        features: EquipmentFeatures,
+    ) -> Dict[str, float]:
+        """
+        Compute failure probability at 7, 14, 21, and 30-day horizons.
+
+        Uses base 7-day probability plus:
+        - Weibull RUL if available (most accurate)
+        - Exponential hazard extrapolation from base probability otherwise
+        """
+        horizons = {}
+
+        if rul_days is not None and rul_days > 0:
+            # Weibull-based: probability increases as RUL approaches
+            for days in (7, 14, 21, 30):
+                fraction_consumed = days / max(1, rul_days)
+                p = min(0.99, base_probability + (fraction_consumed * (1 - base_probability) * 0.6))
+                horizons[f"{days}_day"] = round(float(p), 3)
+        else:
+            # Weibull-shaped accelerating hazard (bathtub wear-out phase).
+            # Constant-rate exponential (beta=1) underestimates risk as equipment
+            # approaches end-of-life.  Use beta=2.5 (wear-out shape typical for
+            # rotating HVAC equipment) when no Weibull model has been fitted.
+            WEAR_OUT_BETA = 2.5
+            if base_probability > 0:
+                # Back-solve Weibull scale eta from the 7-day CDF:
+                #   p7 = 1 - exp(-(7/eta)^beta)  →  eta = 7 / (-ln(1-p7))^(1/beta)
+                log_term = -np.log(max(1e-9, 1.0 - base_probability))
+                eta = 7.0 / (log_term ** (1.0 / WEAR_OUT_BETA))
+                for days in (7, 14, 21, 30):
+                    p = float(1.0 - np.exp(-((days / eta) ** WEAR_OUT_BETA)))
+                    if features.efficiency_trend < -0.02:
+                        p = min(0.99, p * 1.10)
+                    horizons[f"{days}_day"] = round(min(0.99, p), 3)
+            else:
+                horizons = {"7_day": 0.0, "14_day": 0.0, "21_day": 0.01, "30_day": 0.02}
+
+        return horizons
+
     def _rule_based_probability(self, features: EquipmentFeatures) -> float:
         """
         Fallback rule-based failure probability when model not trained.
-        
+
         This provides reasonable estimates before sufficient training data.
         """
         score = 0.0
@@ -703,13 +959,16 @@ class PredictiveMaintenanceEngine:
         # Simple z-score based detection
         anomalous = []
         
-        # Check key features against expected ranges
+        # Efficiency only — universal threshold valid across all equipment types.
+        # motor_current and delta_t removed: both require equipment-specific rated
+        # values (a VAV fan draws ~2 A; a centrifugal chiller draws 300+ A).
+        # A universal static band produces wall-to-wall false alarms on large plant
+        # and misses faults on small plant. Only flag when equipment-specific
+        # baseline has been established in equipment_baselines.
         checks = [
-            ("efficiency", 0.85, 1.0),
-            ("delta_t", 8, 15),
-            ("motor_current", 0, 100),
+            ("efficiency", 0.70, 1.0),   # Flag below 70%; 0.85 threshold was too tight
         ]
-        
+
         for name, expected_low, expected_high in checks:
             value = getattr(features, name, None)
             if value is not None:
@@ -719,6 +978,23 @@ class PredictiveMaintenanceEngine:
                 elif value > expected_high:
                     deviation = (value - expected_high) / expected_high
                     anomalous.append((name, deviation))
+
+        # Equipment-specific current anomaly: only fire when a baseline exists
+        baseline = self.equipment_baselines.get(features.equipment_id, {})
+        baseline_current = baseline.get("motor_current")
+        if baseline_current and baseline_current > 0 and features.motor_current > 0:
+            current_ratio = features.motor_current / baseline_current
+            if current_ratio > 1.25:   # > 25% above learned baseline → anomalous
+                anomalous.append(("motor_current", current_ratio - 1.0))
+            elif current_ratio < 0.6:  # > 40% below baseline → possible open phase / trip
+                anomalous.append(("motor_current", -(1.0 - current_ratio)))
+
+        # Delta-T: compare against equipment-specific design value if known
+        design_delta_t = baseline.get("design_delta_t")
+        if design_delta_t and design_delta_t > 0 and features.delta_t > 0:
+            dt_ratio = features.delta_t / design_delta_t
+            if dt_ratio < 0.5 or dt_ratio > 1.6:
+                anomalous.append(("delta_t", dt_ratio - 1.0))
         
         return anomalous
     
@@ -805,7 +1081,7 @@ class PredictiveMaintenanceEngine:
             equipment_id=equipment_id,
             efficiency=eq.efficiency or 0.85,
             days_since_maintenance=(datetime.now() - eq.last_maintenance).days if eq.last_maintenance else 45,
-            total_runtime_hours=eq.runtime_hours,
+            runtime_hours=eq.runtime_hours,
         )
         
         # Add sensor data
@@ -819,14 +1095,25 @@ class PredictiveMaintenanceEngine:
         pred = self.predict_failure(equipment_id, features, eq.equipment_type.value if eq.equipment_type else None)
         
         # 4. Format for tool output
-        return {
+        result = {
             "equipment_id": equipment_id,
-            "health_score": pred.health_score,
+            "health_score": getattr(pred, "health_score", None),
             "failure_probability": pred.failure_probability,
-            "predicted_failure_date": pred.predicted_failure_date.isoformat() if pred.predicted_failure_date else None,
-            "days_until_predicted_failure": pred.days_until_failure,
-            "risk_level": pred.risk_level.value,
-            "contributing_factors": [f.name for f in pred.contributing_factors if f.is_concerning],
+            "predicted_failure_date": (
+                pred.predicted_failure_date.isoformat()
+                if getattr(pred, "predicted_failure_date", None) else None
+            ),
+            "days_until_predicted_failure": (
+                pred.predicted_rul_days if pred.predicted_rul_days != -1 else None
+            ),
+            "risk_level": pred.risk_level if isinstance(pred.risk_level, str) else pred.risk_level.value,
+            "contributing_factors": [
+                f["name"] if isinstance(f, dict) else getattr(f, "name", str(f))
+                for f in pred.contributing_factors
+                if (f.get("is_concerning") if isinstance(f, dict) else getattr(f, "is_concerning", False))
+            ],
             "recommendation": pred.recommendation,
-            "last_maintenance": eq.last_maintenance.isoformat() if eq.last_maintenance else None
+            "last_maintenance": eq.last_maintenance.isoformat() if eq.last_maintenance else None,
+            "failure_probability_horizons": pred.failure_probability_horizons,
         }
+        return result

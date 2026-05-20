@@ -32,6 +32,10 @@ ALARM_TOOLS = [
             },
             "required": []
         },
+        "version": "1.0.0",
+        "cost_class": "cheap",
+        "precedents": [],
+        "produces": ["evidence:active_alarms"],
         "response_schema": {
             "type": "object",
             "properties": {
@@ -51,6 +55,21 @@ ALARM_TOOLS = [
                 }
             },
             "required": ["alarm_id"]
+        },
+        "version": "1.0.0",
+        "cost_class": "cheap",
+        "precedents": ["get_active_alarms"],
+        "produces": ["evidence:alarm_explanation"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "alarm_id": {"type": "string"},
+                "explanation": {"type": "string", "description": "Human-readable explanation of the alarm cause"},
+                "root_cause": {"type": "string", "description": "Identified root cause"},
+                "related_alarms": {"type": "array", "description": "IDs of correlated alarms"},
+                "recommended_actions": {"type": "array", "description": "Ordered list of suggested remediation steps"},
+                "severity": {"type": "string"}
+            }
         }
     },
     {
@@ -73,6 +92,10 @@ ALARM_TOOLS = [
             "required": ["alarm_id"]
         },
         "requires_confirmation": True,
+        "version": "1.0.0",
+        "cost_class": "cheap",
+        "precedents": ["get_active_alarms"],
+        "produces": ["evidence:alarm_acknowledged"],
         "response_schema": {
             "type": "object",
             "properties": {
@@ -99,6 +122,41 @@ ALARM_TOOLS = [
                 }
             },
             "required": ["alarm_ids"]
+        },
+        "version": "1.0.0",
+        "cost_class": "medium",
+        "precedents": ["get_active_alarms"],
+        "produces": ["evidence:cascade_analysis"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "root_cause_alarm_id": {"type": "string", "description": "The originating alarm in the cascade"},
+                "root_cause_equipment": {"type": "string", "description": "Equipment identified as cascade source"},
+                "cascade_tree": {"type": "object", "description": "Cause-effect tree of alarm propagation"},
+                "confidence": {"type": "number", "description": "Confidence 0-1 in root cause identification"},
+                "affected_systems": {"type": "array", "description": "Systems impacted by the cascade"}
+            }
+        }
+    },
+    {
+        "name": "get_alarm_clusters",
+        "description": "Get all active alarm clusters with root cause analysis. Collapses many related alarms into grouped clusters showing the probable root cause equipment, confidence level, affected zones, and member alarms. Use this to understand the real situation behind alarm noise.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        },
+        "version": "1.0.0",
+        "cost_class": "medium",
+        "precedents": ["get_active_alarms"],
+        "produces": ["evidence:alarm_clusters"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "cluster_count": {"type": "integer"},
+                "total_alarms_collapsed": {"type": "integer"},
+                "clusters": {"type": "array"}
+            }
         }
     },
 ]

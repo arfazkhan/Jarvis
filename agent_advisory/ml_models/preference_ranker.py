@@ -334,19 +334,33 @@ class PreferenceRankingModel:
             len(decision_data), len(X)
         )
     
-    def save(self, path: Optional[str] = None):
+    def save(self, path: Optional[str] = None) -> Optional[str]:
         """Save model to disk"""
-        # Resolve path
+        try:
+            from agent_commercial.ml.model_registry import get_model_registry
+            registry = get_model_registry()
+            version = registry.save_model(
+                name="preference_ranker",
+                model=self.model,
+                metrics={"is_trained": self.is_trained},
+                extra_artifacts={"operator_history": dict(self.operator_history)},
+            )
+            logger.info("PreferenceRankingModel saved via ModelRegistry: %s", version)
+            return version
+        except Exception as e:
+            logger.warning("ModelRegistry save failed, falling back to pickle: %s", e)
+
+        # Pickle fallback
         if path is None:
             path = self.model_path
         if path is None:
             path = "preference_ranker.pkl"
-            
+
         p = Path(path)
         if p.is_dir() or (not p.exists() and not p.suffix):
             p.mkdir(parents=True, exist_ok=True)
             p = p / "preference_ranker.pkl"
-            
+
         data = {
             "model": self.model,
             "is_trained": self.is_trained,
@@ -355,15 +369,35 @@ class PreferenceRankingModel:
         with open(p, 'wb') as f:
             pickle.dump(data, f)
         logger.info("PreferenceRankingModel saved to %s", p)
-    
-    def load(self, path: str):
+        return str(p)
+
+    def load(self, path: Optional[str] = None) -> bool:
         """Load model from disk"""
+        try:
+            from agent_commercial.ml.model_registry import get_model_registry
+            registry = get_model_registry()
+            model, metadata = registry.load_model("preference_ranker")
+            if model is not None:
+                self.model = model
+                self.is_trained = metadata.get("metrics", {}).get("is_trained", True)
+                operator_history_artifact = registry.load_artifact("preference_ranker", "operator_history")
+                if operator_history_artifact is not None:
+                    self.operator_history = defaultdict(list, operator_history_artifact)
+                logger.info("PreferenceRankingModel loaded via ModelRegistry")
+                return True
+        except Exception as e:
+            logger.debug("ModelRegistry load failed, trying pickle fallback: %s", e)
+
+        # Pickle fallback
+        if path is None:
+            return False
         with open(path, 'rb') as f:
             data = pickle.load(f)
         self.model = data["model"]
         self.is_trained = data.get("is_trained", True)
         self.operator_history = defaultdict(list, data.get("operator_history", {}))
         logger.info("PreferenceRankingModel loaded from %s", path)
+        return True
     
     def _heuristic_score(
         self,

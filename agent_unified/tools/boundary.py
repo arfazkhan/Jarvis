@@ -26,6 +26,23 @@ class TaskBoundaryTool(BaseTool):
         "required": ["task_name", "mode", "summary", "status", "predicted_task_size"]
     }
 
+    def to_param(self):
+        param = super().to_param()
+        param["function"]["version"] = "1.0.0"
+        param["function"]["precedents"] = []
+        param["function"]["produces"] = ["evidence:task_boundary"]
+        param["function"]["response_schema"] = {
+            "type": "object",
+            "properties": {
+                "task_name": {"type": "string"},
+                "mode": {"type": "string"},
+                "summary": {"type": "string"},
+                "status": {"type": "string"},
+                "predicted_size": {"type": "integer"},
+            },
+        }
+        return param
+
     async def execute(self, **kwargs) -> ToolResult:
         # Note: The actual state update is handled in the Agent.act() loop 
         # since it needs access to the agent's memory/state. 

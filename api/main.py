@@ -33,18 +33,21 @@ from arvis_core.event_bus.event_bus import EventBus
 
 # Conditional Imports
 if ARVIS_VERTICAL == "RESIDENTIAL":
-    from agent_home.state_engine.state_engine import StateEngine
-    from agent_home.controllers.matter_controller import MatterController
-    from agent_home.automations.automation_engine import AutomationEngine
-    from agent_home.tools.executor import ToolExecutor
-    from agent_home.learning.learning_engine import LearningEngine
-    from agent_home.llm_agent.llm_agent import LLMAgent
-    from agent_unified.voice.coordinator import VoiceCoordinator
-    # from agent_conversation.dialogue_manager import DialogueManager # Moved to Core?
-    # from agent_mission.mission_manager import MissionManager # Moved to Core?
-    from agent_unified.flows.planning import PlanningFlow
+    try:
+        from agent_home.state_engine.state_engine import StateEngine
+        from agent_home.controllers.matter_controller import MatterController
+        from agent_home.automations.automation_engine import AutomationEngine
+        from agent_home.tools.executor import ToolExecutor
+        from agent_home.learning.learning_engine import LearningEngine
+        from agent_home.llm_agent.llm_agent import LLMAgent
+        from agent_unified.voice.coordinator import VoiceCoordinator
+        from agent_unified.flows.planning import PlanningFlow
+    except ImportError as e:
+        logger.error(f"RESIDENTIAL mode requested but modules unavailable: {e}")
+        logger.error("Falling back to COMMERCIAL mode")
+        ARVIS_VERTICAL = "COMMERCIAL"
 
-elif ARVIS_VERTICAL == "COMMERCIAL":
+if ARVIS_VERTICAL == "COMMERCIAL":
     from agent_commercial.bms_llm_agent import BMSLLMAgent
     from agent_unified.engines.real_bms import RealBMS # Used as adapter
     from agent_commercial.api.routes_omega import router as omega_router
@@ -121,38 +124,54 @@ async def lifespan(app: FastAPI):
                 logger.warning(f"⚠️ Voice Init Failed: {e}")
 
     elif ARVIS_VERTICAL == "COMMERCIAL":
-        logger.info("🏢 Initializing COMMERCIAL Stack...")
-        
+        from config.settings import ARVIS_LITE
+        lite_tag = " [LITE]" if ARVIS_LITE else ""
+        logger.info(f"🏢 Initializing COMMERCIAL Stack{lite_tag}...")
+
         # 1. BMS State Engine (The digital twin)
         from agent_commercial.database import BMSDatabase
         global_state.bms_state = BMSStateEngine()
         global_state.bms_state.set_database(BMSDatabase())
         app.state.bms_state = global_state.bms_state
-        
+
         # 2. BMS Adapter
         global_state.real_bms = RealBMS(config={"bacnet": {"device_id": 9999}})
-        
+
         # 3. Commercial Agent (Cognitive Layer)
         global_state.bms_agent = BMSLLMAgent(bms_state=global_state.bms_state)
-        global_state.llm_agent = global_state.bms_agent # Alias for compatibility
+        global_state.llm_agent = global_state.bms_agent
         app.state.llm_agent = global_state.bms_agent
-        
-        # 4. Learning Engine
-        global_state.learning_engine = BMSLearningEngine(llm_agent=global_state.bms_agent)
-        await global_state.learning_engine.start()
-        
+
+        if ARVIS_LITE:
+            # Lite mode: disable swarm (single-agent), skip heavy components
+            global_state.bms_agent.queen = None
+            logger.info("  [LITE] Swarm disabled — single-agent mode")
+
+        # 4. Learning Engine (disabled in lite mode)
+        if not ARVIS_LITE:
+            global_state.learning_engine = BMSLearningEngine(llm_agent=global_state.bms_agent)
+            await global_state.learning_engine.start()
+        else:
+            logger.info("  [LITE] Learning engine disabled")
+
         # 5. Simulation Service
         global_state.sim_service = SimServiceMaster()
         app.state.sim_service = global_state.sim_service
         global_state.sim_controller = global_state.sim_service.sim_controller
         app.state.sim_controller = global_state.sim_controller
-        
-        # 6. Briefing & Fleet Intelligence
-        global_state.fleet_intel = FleetIntelligence(building_ids=["DOHA-TOWER-001"])
-        global_state.goal_generator = GoalGenerator(fleet_intelligence=global_state.fleet_intel)
-        global_state.briefing_engine = BriefingScheduler(goal_generator=global_state.goal_generator)
-        
-        logger.info("✅ Commercial BMS Stack Active (State + Agent + Sim + Briefing + Fleet)")
+
+        # 6. Briefing & Fleet Intelligence (disabled in lite mode)
+        if not ARVIS_LITE:
+            global_state.fleet_intel = FleetIntelligence(building_ids=["DOHA-TOWER-001"])
+            global_state.goal_generator = GoalGenerator(fleet_intelligence=global_state.fleet_intel)
+            global_state.briefing_engine = BriefingScheduler(goal_generator=global_state.goal_generator)
+        else:
+            logger.info("  [LITE] Fleet intelligence & briefing disabled")
+
+        if ARVIS_LITE:
+            logger.info("✅ Commercial BMS Stack Active [LITE MODE] (State + Agent + Sim)")
+        else:
+            logger.info("✅ Commercial BMS Stack Active (State + Agent + Sim + Briefing + Fleet)")
 
     logger.info("✅ System Fully Initialized.")
     yield

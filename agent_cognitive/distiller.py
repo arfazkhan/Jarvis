@@ -22,7 +22,7 @@ from typing import Dict, List, Any, Optional
 
 logger = logging.getLogger("arvis.cognitive.distiller")
 
-SWARM_NODES_FILE = os.path.join(os.path.dirname(__file__), "..", "agent_commercial", "swarm_nodes.py")
+# Rules are now persisted to the distilled_rules DB table instead of rewriting source files.
 
 CONFIDENCE_THRESHOLD = 0.88  # Must see a pattern in 88%+ cases to hardcode it
 
@@ -99,52 +99,39 @@ class KnowledgeDistiller:
         )
         logger.info(f"[Distiller] Wrote skill to Skillbook: {pattern_key} (confidence={confidence:.1%})")
 
-    def _inject_constraint_into_node_prompt(self, agent_name: str, constraint: str) -> bool:
+    async def _persist_rule_to_db(self, agent_name: str, constraint: str, confidence: float) -> bool:
         """
-        Rewrites the swarm_nodes.py file to inject a hard constraint
-        into the agent's system_prompt. This is the most aggressive form of learning.
-        The constraint is appended to the agent's system_prompt string in-place.
+        Persist a learned constraint to the distilled_rules DB table.
+        Replaces the previous approach of rewriting swarm_nodes.py source code,
+        which was fragile and unsafe in production.
+        Rules are loaded at runtime by SwarmNode.process() before each ReAct turn.
         """
-        if not os.path.exists(SWARM_NODES_FILE):
-            logger.warning(f"[Distiller] swarm_nodes.py not found at {SWARM_NODES_FILE}. Skipping prompt injection.")
+        try:
+            import uuid as _uuid
+            from agent_commercial.database import get_database
+            db = get_database()
+            rule_id = f"distilled_{agent_name}_{_uuid.uuid4().hex[:8]}"
+            await db.save_distilled_rule({
+                "rule_id": rule_id,
+                "agent_name": agent_name,
+                "rule_text": (
+                    f"DO NOT approve proposals that have historically led to safety vetoes: "
+                    f"{constraint} (confidence={confidence:.1%})"
+                ),
+                "confidence": confidence,
+                "veto_count": 1,
+                "active": 1,
+                "created_at": datetime.now().isoformat(),
+                "updated_at": datetime.now().isoformat(),
+            })
+            logger.info(
+                "[Distiller] Rule persisted to DB for %s (confidence=%.1f%%): %s",
+                agent_name, confidence * 100, constraint[:80],
+            )
+            return True
+        except Exception as exc:
+            logger.warning("[Distiller] DB rule persistence failed: %s", exc)
             return False
-
-        with open(SWARM_NODES_FILE, "r", encoding="utf-8") as f:
-            source = f.read()
-
-        # Build the injection marker for this agent
-        injection_marker = f"# [DISTILLED_RULE:{agent_name}]"
-        
-        # If already injected, skip to avoid duplicates
-        if injection_marker in source:
-            logger.info(f"[Distiller] Constraint already injected for {agent_name}. Skipping.")
-            return False
-
-        # Locate the agent's system_prompt definition and append the rule
-        # We search for a pattern like: "agent_name" ... system_prompt = "..."
-        # Practically, we search for the class name or label and inject after its system prompt assignment
-        search_str = f'"{agent_name}"'
-        insert_pos = source.find(search_str)
-        if insert_pos == -1:
-            logger.warning(f"[Distiller] Could not find {agent_name} definition in swarm_nodes.py. Skipping injection.")
-            return False
-
-        # Find the end of that agent block's first string/triple-quote
-        prompt_marker = '"""'
-        end_prompt_pos = source.find(prompt_marker, insert_pos + len(search_str) + 100)
-        if end_prompt_pos == -1:
-            logger.warning(f"[Distiller] Could not find system prompt end for {agent_name}. Skipping.")
-            return False
-
-        # Compose the insertion
-        injection = f"\\n{injection_marker} DO NOT approve proposals that have historically led to safety vetoes: {constraint}"
-        new_source = source[:end_prompt_pos] + injection + source[end_prompt_pos:]
-
-        with open(SWARM_NODES_FILE, "w", encoding="utf-8") as f:
-            f.write(new_source)
-
-        logger.info(f"[Distiller] Injected constraint into {agent_name}'s system prompt in swarm_nodes.py.")
-        return True
 
     async def run_distillation(self, inject_prompts: bool = True) -> Dict[str, Any]:
         """
@@ -172,11 +159,11 @@ class KnowledgeDistiller:
                 # 1. Write to Skillbook
                 await self._write_skill_to_skillbook(pattern_key, confidence, agents)
                 
-                # 2. Optionally inject into agent source prompts
+                # 2. Persist learned constraints to DB (replaces source-code rewriting)
                 if inject_prompts:
                     for agent_name in agents:
-                        constraint_text = f"Repeated vetoes on '{pattern_key}' (confidence={confidence:.1%})"
-                        self._inject_constraint_into_node_prompt(agent_name, constraint_text)
+                        constraint_text = f"Repeated vetoes on '{pattern_key}'"
+                        await self._persist_rule_to_db(agent_name, constraint_text, confidence)
 
                 distilled += 1
             else:

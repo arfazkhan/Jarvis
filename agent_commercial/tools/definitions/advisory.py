@@ -31,6 +31,18 @@ ADVISORY_TOOLS = [
                 }
             },
             "required": ["context"]
+        },
+        "version": "1.0.0",
+        "cost_class": "medium",
+        "precedents": [],
+        "produces": ["evidence:advisory_recommendations"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "recommendations": {"type": "array", "description": "Ranked list of recommendations each with title, description, priority, estimated_savings_qar, risk_level, and suggested_actions"},
+                "total": {"type": "integer"},
+                "context_used": {"type": "string"}
+            }
         }
     },
     {
@@ -46,6 +58,18 @@ ADVISORY_TOOLS = [
                 }
             },
             "required": []
+        },
+        "version": "1.0.0",
+        "cost_class": "cheap",
+        "precedents": [],
+        "produces": ["evidence:proactive_goals"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "goals": {"type": "array", "description": "Active proactive goals each with goal_id, category, priority, title, and description"},
+                "total": {"type": "integer"},
+                "highest_priority_category": {"type": "string"}
+            }
         }
     },
     {
@@ -66,6 +90,22 @@ ADVISORY_TOOLS = [
                 }
             },
             "required": []
+        },
+        "version": "1.0.0",
+        "cost_class": "expensive",
+        "precedents": [],
+        "produces": ["evidence:briefing"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "briefing_type": {"type": "string"},
+                "critical_items": {"type": "array", "description": "Issues requiring immediate attention"},
+                "anomalies": {"type": "array", "description": "Detected anomalies since last briefing"},
+                "optimization_wins": {"type": "array", "description": "Recent successful optimizations"},
+                "context": {"type": "object", "description": "Weather, tariff, and event context for today"},
+                "recommendations": {"type": "array", "description": "Prioritized recommended actions"},
+                "generated_at": {"type": "string"}
+            }
         }
     },
     {
@@ -82,6 +122,20 @@ ADVISORY_TOOLS = [
                 }
             },
             "required": []
+        },
+        "version": "1.0.0",
+        "cost_class": "expensive",
+        "precedents": [],
+        "produces": ["evidence:briefing"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "briefing_type": {"type": "string"},
+                "summary": {"type": "string", "description": "One-paragraph situation summary"},
+                "critical_items": {"type": "array"},
+                "top_recommendations": {"type": "array"},
+                "generated_at": {"type": "string"}
+            }
         }
     },
     {
@@ -111,6 +165,20 @@ ADVISORY_TOOLS = [
                 }
             },
             "required": ["feedback_type", "target", "content"]
+        },
+        "version": "1.0.0",
+        "cost_class": "cheap",
+        "precedents": [],
+        "produces": ["evidence:operator_feedback"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "accepted": {"type": "boolean"},
+                "feedback_id": {"type": "string"},
+                "feedback_type": {"type": "string"},
+                "model_updated": {"type": "boolean", "description": "True if feedback triggered an immediate model update"},
+                "timestamp": {"type": "string"}
+            }
         }
     },
     {
@@ -120,6 +188,21 @@ ADVISORY_TOOLS = [
             "type": "object",
             "properties": {},
             "required": []
+        },
+        "version": "1.0.0",
+        "cost_class": "cheap",
+        "precedents": [],
+        "produces": ["evidence:trust_metrics"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "overall_trust_score": {"type": "number", "description": "0-1 composite trust score"},
+                "recommendation_adoption_rate": {"type": "number", "description": "Fraction of recommendations acted on by operators"},
+                "prediction_accuracy": {"type": "number", "description": "Accuracy of outcome predictions 0-1"},
+                "model_drift_detected": {"type": "boolean"},
+                "feedback_count": {"type": "integer"},
+                "last_updated": {"type": "string"}
+            }
         }
     },
 ]

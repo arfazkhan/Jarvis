@@ -50,10 +50,22 @@ class EquipmentHandlerMixin:
             return {"error": "BMS state engine not configured"}
         
         equipment = await self.bms_state.get_equipment(equipment_id)
-        if not equipment:
-            return {"error": f"Equipment {equipment_id} not found"}
-        
         points = await self.bms_state.get_points_by_equipment(equipment_id)
+
+        if not equipment:
+            if points:
+                # Sensor data exists but no Equipment object registered
+                return {
+                    "warning": "equipment_not_registered",
+                    "message": f"{equipment_id} has {len(points)} sensor data points but is not in the equipment registry. BMS integration may be incomplete.",
+                    "equipment_id": equipment_id,
+                    "data_points": [p.to_dict() for p in points],
+                }
+            return {
+                "error": "not_found",
+                "message": f"{equipment_id} not found in equipment registry and no sensor data points exist.",
+                "equipment_id": equipment_id,
+            }
         
         return {
             "equipment": equipment.to_dict(),
@@ -120,20 +132,19 @@ class EquipmentHandlerMixin:
         predictive = getattr(self, "predictive_engine", None)
         if predictive and hasattr(predictive, "predict_maintenance"):
             prediction = await predictive.predict_maintenance(equipment_id)
+            health_score = prediction.get("health_score") or 85
             return {
                 "equipment_id": equipment_id,
-                "overall_health": "good" if prediction.get("health_score", 100) > 70 else "poor",
-                "health_score": prediction.get("health_score", 85),
+                "overall_health": "good" if health_score > 70 else "poor",
+                "health_score": health_score,
                 "trending": "stable",
                 "risk_factors": []
             }
         
         return {
+            "error": "no_data",
+            "reason": "Predictive engine not configured or no baseline data available for health scoring.",
             "equipment_id": equipment_id,
-            "overall_health": "good",
-            "health_score": 92.5,
-            "trending": "stable",
-            "risk_factors": [],
         }
     
     async def _handle_get_point_history(self, args: Dict) -> Dict:
@@ -185,7 +196,7 @@ class EquipmentHandlerMixin:
         }
 
     async def _handle_hybrid_search_knowledge(self, args: Dict) -> Dict:
-        """Search technical manuals using tree, vector, or hybrid retrieval."""
+        """Search technical manuals via MemoryOrchestrator (T4 Semantic), with hybrid_rag fallback."""
         query = args.get("query")
         equipment_id = args.get("equipment_id")
         strategy = args.get("strategy", "auto")
@@ -194,15 +205,37 @@ class EquipmentHandlerMixin:
         if not query:
             return {"error": "query is required"}
 
+        # Mem-8: Primary path — MemoryOrchestrator T4 (semantic)
+        _mo = getattr(self, "memory_orchestrator", None)
+        if _mo is not None:
+            try:
+                from arvis_core.memory.types import MemoryTier
+                hits = await _mo.query(
+                    query=query,
+                    tiers=[MemoryTier.T4_SEMANTIC],
+                    top_k=limit,
+                )
+                if hits:
+                    return {
+                        "query": query,
+                        "strategy": "orchestrator_t4",
+                        "vector_results": [
+                            {"content": h.content, "source": h.source, "score": h.confidence,
+                             "metadata": h.metadata}
+                            for h in hits
+                        ],
+                        "combined": [{"content": h.content, "source": h.source} for h in hits],
+                    }
+            except Exception as e:
+                logger.debug(f"hybrid_search_knowledge via orchestrator failed: {e}")
+
+        # Fallback: direct hybrid_rag or knowledge_base
         hybrid = getattr(self, "hybrid_rag", None)
         kb = getattr(self, "knowledge_base", None)
 
         if hybrid and hasattr(hybrid, "retrieve"):
             return await hybrid.retrieve(
-                query=query,
-                equipment_id=equipment_id,
-                strategy=strategy,
-                limit=limit,
+                query=query, equipment_id=equipment_id, strategy=strategy, limit=limit,
             )
 
         if kb and hasattr(kb, "query_specs"):
