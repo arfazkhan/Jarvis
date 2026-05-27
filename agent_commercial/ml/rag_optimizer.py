@@ -3,85 +3,98 @@ RAG Optimizer
 =============
 
 Sophisticated components for fine-tuning ARVIS retrieval:
-1. Cross-Encoder Reranker: High-precision validation of retrieval candidates.
+1. Cross-Encoder Reranker: Cohere Rerank v3.5 via Bedrock (replaces local CrossEncoder).
 2. BMS Chunker: Domain-aware semantic chunking for technical manuals.
 """
 
+import json
 import logging
+import os
 from typing import List, Dict, Any, Tuple, Optional
 import numpy as np
 
 logger = logging.getLogger("arvis.ml.rag_optimizer")
 
-try:
-    from sentence_transformers import CrossEncoder
-    CE_AVAILABLE = True
-except ImportError:
-    CE_AVAILABLE = False
-    logger.warning("sentence-transformers not installed. Reranking will be disabled.")
+_COHERE_RERANK_MODEL = "cohere.rerank-v3-5:0"
 
 
 # =============================================================================
-# CROSS-ENCODER RERANKER
+# CROSS-ENCODER RERANKER (Cohere Rerank v3.5 via Bedrock)
 # =============================================================================
 
 class CrossEncoderReranker:
     """
-    Second-pass reranker for high-precision retrieval validation.
-    
-    Unlike Bi-Encoders (which encode query and doc separately), 
-    Cross-Encoders ingest query+doc pairs and output a direct 
-    relevance score.
+    Second-pass reranker using Cohere Rerank v3.5 on Bedrock.
+    No local model loading — API-based, fast, multilingual.
     """
-    
-    DEFAULT_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    
-    def __init__(self, model_name: str = DEFAULT_MODEL):
-        self.model = None
-        if CE_AVAILABLE:
+
+    def __init__(self, model_id: str = _COHERE_RERANK_MODEL):
+        self._model_id = model_id
+        self._region = os.environ.get("AWS_BEDROCK_REGION", "us-west-2")
+        self._client = None
+        self.is_available = True
+
+    def _get_client(self):
+        if self._client is None:
             try:
-                self.model = CrossEncoder(model_name)
-                logger.info(f"Loaded Cross-Encoder model: {model_name}")
+                import boto3
+                from botocore.config import Config
+                self._client = boto3.client(
+                    "bedrock-runtime",
+                    region_name=self._region,
+                    config=Config(read_timeout=30, connect_timeout=5, retries={"max_attempts": 2}),
+                )
             except Exception as e:
-                logger.warning(f"Failed to load Cross-Encoder: {e}")
-        
-        self.is_available = self.model is not None
-        
-    def rerank(self, 
-               query: str, 
-               candidates: List[Dict[str, Any]], 
+                logger.warning(f"[Reranker] boto3 client init failed: {e}")
+                self.is_available = False
+        return self._client
+
+    def rerank(self,
+               query: str,
+               candidates: List[Dict[str, Any]],
                top_n: int = 5) -> List[Dict[str, Any]]:
-        """
-        Rerank retrieval candidates.
-        
-        Args:
-            query: The user query
-            candidates: List of skill/doc dictionaries to rerank
-            top_n: Number of results to return
-            
-        Returns:
-            Reranked and sorted candidates
-        """
-        if not self.is_available or not candidates:
-            return candidates[:top_n]
-            
-        # Prepare pairs for cross-encoder
-        # For skills, we use "title + description" as the text
-        pairs = []
+        if not candidates:
+            return []
+
+        documents = []
         for c in candidates:
-            text = f"{c.get('title', '')} {c.get('description', '')}"
-            pairs.append([query, text])
-            
-        # Predict relevance scores
-        scores = self.model.predict(pairs)
-        
-        # Attach scores and sort
-        for i, c in enumerate(candidates):
-            c["rerank_score"] = float(scores[i])
-            
-        candidates.sort(key=lambda x: x.get("rerank_score", 0), reverse=True)
-        
-        return candidates[:top_n]
+            text = f"{c.get('title', '')} {c.get('description', '')}".strip()
+            if not text:
+                text = c.get("content", c.get("text", str(c)))
+            documents.append(text)
+
+        client = self._get_client()
+        if not client:
+            return candidates[:top_n]
+
+        try:
+            payload = json.dumps({
+                "query": query,
+                "documents": documents,
+                "top_n": min(top_n, len(documents)),
+            })
+            response = client.invoke_model(
+                modelId=self._model_id,
+                contentType="application/json",
+                accept="application/json",
+                body=payload,
+            )
+            result = json.loads(response["body"].read())
+            ranked_indices = result.get("results", [])
+
+            reranked = []
+            for r in ranked_indices:
+                idx = r.get("index", 0)
+                score = r.get("relevance_score", 0.0)
+                if idx < len(candidates):
+                    candidates[idx]["rerank_score"] = score
+                    reranked.append(candidates[idx])
+
+            return reranked[:top_n]
+
+        except Exception as e:
+            logger.warning(f"[Reranker] Cohere rerank failed: {e}. Falling back to original order.")
+            return candidates[:top_n]
 
 
 # =============================================================================

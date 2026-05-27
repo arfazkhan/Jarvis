@@ -238,4 +238,312 @@ EQUIPMENT_TOOLS = [
             }
         }
     },
+    {
+        "name": "get_point_inventory",
+        "description": (
+            "Returns the BACnet point inventory ARVIS can see, with optional filters. "
+            "Use this when the operator asks what points are mapped, what's missing, "
+            "what's stale, or claims to see a point in Desigo that ARVIS doesn't report. "
+            "Returns: total_points, mapped_points, unmapped_points, stale_points, "
+            "by_equipment (per-device point list with status), blind_spots (points known "
+            "in BACnet but not polled by ARVIS)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "equipment_filter": {
+                    "type": "string",
+                    "description": "Optional. Filter by equipment id substring, e.g. 'CH-02' or 'AHU'."
+                },
+                "point_filter": {
+                    "type": "string",
+                    "description": "Optional. Filter by point name substring, e.g. 'FLT_DP' or 'TEMP'."
+                },
+                "include_stale": {
+                    "type": "boolean",
+                    "description": "Include points with age > 300s. Default true.",
+                    "default": True
+                },
+                "include_unmapped": {
+                    "type": "boolean",
+                    "description": "Include points present in BACnet but not polled by ARVIS. Default true.",
+                    "default": True
+                },
+                "summary_only": {
+                    "type": "boolean",
+                    "description": "If true, omit per-point detail and return only counts + blind_spots. Default false.",
+                    "default": False
+                }
+            },
+            "required": []
+        },
+        "version": "1.0.0",
+        "cost_class": "cheap",
+        "precedents": [],
+        "produces": ["evidence:point_inventory"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "provider": {"type": "string", "description": "Active provider: sim or production"},
+                "total_points": {"type": "integer"},
+                "mapped_points": {"type": "integer", "description": "Points polled by ARVIS"},
+                "unmapped_points": {"type": "integer", "description": "Points in BACnet but not polled"},
+                "stale_points": {"type": "integer", "description": "Points whose last update is older than 300s"},
+                "by_equipment": {"type": "object", "description": "Per-device point map with status and missing critical points"},
+                "blind_spots": {"type": "object", "description": "Critical points missing across equipment"}
+            }
+        }
+    },
+    {
+        "name": "get_calibration_status",
+        "description": "Query the statistics-based point and equipment calibrations from the database. Shows the count of active calibrations, breakdowns by scope level, and details for promoted thresholds.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "equipment_id": {
+                    "type": "string",
+                    "description": "Optional equipment identifier to filter calibrations (e.g. 'AHU-19')"
+                },
+                "point_id": {
+                    "type": "string",
+                    "description": "Optional point identifier to filter calibrations (e.g. 'AHU-19/DMPR_POS')"
+                }
+            },
+            "required": []
+        },
+        "version": "1.0.0",
+        "cost_class": "cheap",
+        "precedents": [],
+        "produces": ["evidence:calibration_status"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "active_calibrations": {"type": "integer", "description": "Count of promoted calibrations in point_calibrations"},
+                "scope_breakdown": {"type": "object", "description": "Counts by scope: point, equipment, type, bootstrap"},
+                "sample_details": {"type": "array", "description": "Representative subset or filtered details of active calibrations"}
+            }
+        }
+    },
+    {
+        "name": "probe_bacnet_point",
+        "description": (
+            "Probe a single BACnet point for metadata (object type, unit, current "
+            "value, age). Read-only — no side effects. Use to inspect a candidate "
+            "before discovery/registration, or to answer 'what is this point?' queries."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "point_id": {
+                    "type": "string",
+                    "description": "Canonical point id, e.g. 'CH-02/FLT_DP'."
+                }
+            },
+            "required": ["point_id"]
+        },
+        "version": "1.0.0",
+        "cost_class": "cheap",
+        "precedents": [],
+        "produces": ["evidence:point_probe"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "point_id": {"type": "string"},
+                "found": {"type": "boolean"},
+                "metadata": {"type": "object"}
+            }
+        }
+    },
+    {
+        "name": "register_point_to_poller",
+        "description": (
+            "Register a discovered BACnet point into the ARVIS runtime poll "
+            "registry via the Discovery Agent. Performs criticality classification, "
+            "rate-limit + safety checks, and signs the action into the audit log. "
+            "Writable points on critical equipment (CH-*, FIRE-*, FACP-*, ELEV-*, "
+            "LS-*) require operator approval and will NOT auto-register. New points "
+            "enter a 24h probation window (read but excluded from alarms)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "point_id": {
+                    "type": "string",
+                    "description": "Canonical point id, e.g. 'CH-02/FLT_DP'."
+                },
+                "cadence_seconds": {
+                    "type": "number",
+                    "description": "Optional cadence override; classifier picks one if omitted."
+                },
+                "priority": {
+                    "type": "string",
+                    "description": "Optional priority override: critical | nice_to_have | cosmetic."
+                }
+            },
+            "required": ["point_id"]
+        },
+        "version": "1.0.0",
+        "cost_class": "moderate",
+        "precedents": [],
+        "produces": ["evidence:discovery_decision"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "point_id": {"type": "string"},
+                "registered": {"type": "boolean"},
+                "requires_operator_approval": {"type": "boolean"},
+                "reason": {"type": "string"},
+                "classification": {"type": "object"},
+                "audit_entry_id": {"type": "string"}
+            }
+        }
+    },
+    {
+        "name": "list_discovery_candidates",
+        "description": (
+            "Return a ranked list of unmapped BACnet points that look CRITICAL by "
+            "the rule-based classifier. Use this to preview what the Discovery "
+            "Agent would auto-onboard during a scheduled scan."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Max candidates to return. Default 20.",
+                    "default": 20
+                }
+            },
+            "required": []
+        },
+        "version": "1.0.0",
+        "cost_class": "cheap",
+        "precedents": [],
+        "produces": ["evidence:discovery_candidates"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "candidates": {"type": "array"},
+                "total_unmapped": {"type": "integer"}
+            }
+        }
+    },
+    {
+        "name": "audit_discovery_log",
+        "description": (
+            "Query the signed, tamper-evident Discovery Agent audit log. Returns "
+            "the most recent discovery actions (register, quarantine, rate_limited, "
+            "operator_approval_required, etc.). Use for forensic review of "
+            "autonomous onboarding behaviour."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "equipment_id": {
+                    "type": "string",
+                    "description": "Optional equipment filter, e.g. 'CH-04'."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max entries. Default 100.",
+                    "default": 100
+                }
+            },
+            "required": []
+        },
+        "version": "1.0.0",
+        "cost_class": "cheap",
+        "precedents": [],
+        "produces": ["evidence:discovery_audit"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "entries": {"type": "array"},
+                "chain_verified": {"type": "boolean"}
+            }
+        }
+    },
+    {
+        "name": "exclude_unreliable_sensor",
+        "description": "Exclude a broken or noisy sensor data point from future ARVIS analysis and alarms. Suppresses telemetry updates for this point in the digital twin.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "point_id": {
+                    "type": "string",
+                    "description": "Canonical point id (e.g. 'CT-02/VIB_RMS')."
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Reason for sensor exclusion / suppression."
+                }
+            },
+            "required": ["point_id", "reason"]
+        },
+        "version": "1.0.0",
+        "cost_class": "cheap",
+        "precedents": [],
+        "produces": ["evidence:point_exclusion"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "point_id": {"type": "string"},
+                "excluded": {"type": "boolean"},
+                "message": {"type": "string"}
+            }
+        }
+    },
+    {
+        "name": "get_year_end_summary",
+        "description": "Retrieve an honest consolidated year-end summary of ARVIS's operational metrics, adoption rates, false-alarm suppressions, and economic value delivered over the past year.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "time_window_days": {
+                    "type": "integer",
+                    "description": "Window of summary in days (default: 365)."
+                }
+            },
+            "required": []
+        },
+        "version": "1.0.0",
+        "cost_class": "cheap",
+        "precedents": [],
+        "produces": ["evidence:year_end_summary"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "adoption_rate": {"type": "number"},
+                "false_positives_count": {"type": "number"},
+                "fp_cost_qar": {"type": "number"},
+                "unrealized_savings_qar": {"type": "number"},
+                "catastrophic_save_value_qar": {"type": "number"},
+                "honest_assessment": {"type": "string"}
+            }
+        }
+    },
+    {
+        "name": "get_false_positive_cost_ledger",
+        "description": "Retrieve the false-positive cost ledger for predictive maintenance, comparing actual dispatch analysis costs against estimated costs of missing a real bearing failure.",
+        "parameters": {
+            "type": "object",
+            "properties": {}
+        },
+        "required": [],
+        "version": "1.0.0",
+        "cost_class": "cheap",
+        "precedents": [],
+        "produces": ["evidence:cost_ledger"],
+        "response_schema": {
+            "type": "object",
+            "properties": {
+                "cost_of_being_wrong_qar": {"type": "number"},
+                "cost_of_missing_real_failure_min_qar": {"type": "number"},
+                "cost_of_missing_real_failure_max_qar": {"type": "number"},
+                "preventive_savings_qar": {"type": "number"},
+                "expected_value_math": {"type": "string"}
+            }
+        }
+    },
 ]
+

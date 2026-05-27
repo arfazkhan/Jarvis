@@ -196,6 +196,8 @@ def expand_query(query: str) -> str:
     Expand a query with domain synonyms.
     Returns the original query with key synonyms appended.
     """
+    if not query or not isinstance(query, str):
+        return ""
     query_lower = query.lower()
     expansions = set()
     

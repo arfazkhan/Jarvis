@@ -58,6 +58,13 @@ class MemoryOrchestrator:
             max_conversation_turns: Max turns in conversation buffer
             observation_decay_days: Days before observations expire
         """
+        # Honor ARVIS_MEMORY_DIR env var so test harnesses can redirect
+        # T2/T3 episodic+observation+conversation DBs to a per-run isolated
+        # directory. Falls back to the constructor argument otherwise.
+        import os as _os
+        _env_mem = _os.getenv("ARVIS_MEMORY_DIR", "").strip()
+        if _env_mem:
+            persist_dir = _env_mem
         self.persist_dir = Path(persist_dir)
         self.persist_dir.mkdir(parents=True, exist_ok=True)
         

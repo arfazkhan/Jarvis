@@ -50,6 +50,7 @@ _TOOL_COST_MAP: Dict[str, str] = {
     "get_virtual_sensor_reading": "cheap",
     # Equipment — mostly cheap DB reads
     "get_equipment_status": "cheap",
+    "get_calibration_status": "cheap",
     "list_equipment": "cheap",
     "get_equipment_health": "cheap",
     "get_point_history": "medium",

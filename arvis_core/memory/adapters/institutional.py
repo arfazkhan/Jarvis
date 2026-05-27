@@ -85,13 +85,27 @@ class InstitutionalStoreAdapter:
         if self._skillbook is None:
             return ""
         try:
-            result = await self._skillbook.add_skill(
-                content=record.content,
+            skill_type = "pattern"
+            if record.source and record.source.lower() in ["equipment_quirk", "pattern", "optimization", "failure", "contractor_note", "schedule", "threshold"]:
+                skill_type = record.source.lower()
+            elif record.metadata and record.metadata.get("skill_type") in ["equipment_quirk", "pattern", "optimization", "failure", "contractor_note", "schedule", "threshold"]:
+                skill_type = record.metadata.get("skill_type")
+
+            skills = await self._skillbook.add_skill(
+                skill_type=skill_type,
+                title=record.source or "Learned Memory",
+                description=record.content,
                 confidence=record.confidence,
-                source=record.source,
-                building_id=record.building_id or "",
+                equipment_id=record.metadata.get("equipment_id") if record.metadata else None,
+                zone_id=record.metadata.get("zone_id") if record.metadata else None,
+                contractor_id=record.metadata.get("contractor_id") if record.metadata else None,
+                evidence=record.metadata.get("evidence") if record.metadata else None,
+                context_signature=record.metadata.get("context_signature") if record.metadata else None,
+                tags=record.metadata.get("tags") if record.metadata else None,
             )
-            return str(result.get("skill_id", ""))
+            if skills:
+                return str(skills[0].skill_id)
+            return ""
         except Exception as e:
             logger.error(f"[InstitutionalAdapter] write failed: {e}")
             return ""

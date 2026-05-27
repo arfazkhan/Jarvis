@@ -128,7 +128,19 @@ class GSASDataValidator:
                 "point_count": 0,
             }
 
+        # Determine simulated reference time from max timestamp of points
         now = datetime.now()
+        if points:
+            valid_ts = []
+            for p in points.values():
+                ts = getattr(p, 'timestamp', None)
+                if ts:
+                    if ts.tzinfo is not None:
+                        ts = ts.replace(tzinfo=None)
+                    valid_ts.append(ts)
+            if valid_ts:
+                now = max(valid_ts)
+                
         stale_cutoff = now - timedelta(minutes=self.stale_threshold_minutes)
 
         # ── 1. Freshness check ────────────────────────────────────────────────

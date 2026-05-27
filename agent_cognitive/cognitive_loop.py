@@ -455,6 +455,18 @@ class CognitiveLoop:
         except Exception as e:
             logger.debug(f"Prediction step skipped: {e}")
 
+        # 4.7. B9: Autonomous deep sweep — re-probe unresolved anomalies via Queen swarm
+        if self._should_run_deep_sweep():
+            try:
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.ensure_future(self._run_autonomous_sweep())
+                else:
+                    loop.run_until_complete(self._run_autonomous_sweep())
+            except Exception as e:
+                logger.debug(f"[B9] Deep sweep skipped: {e}")
+
         # 5. Proactive Goal Discovery (NEW)
         if self.goal_discovery:
             # Building ID is needed - assume context graph has it or default
@@ -742,6 +754,58 @@ class CognitiveLoop:
             })
 
     # ═══════════════════════════════════════════════════════════════════════
+    # B9: AUTONOMOUS MONITORING SWEEP
+    # ═══════════════════════════════════════════════════════════════════════
+
+    def _should_run_deep_sweep(self) -> bool:
+        """Rate-limit autonomous sweep to every 15 minutes."""
+        now = time.time()
+        last = getattr(self, "_last_deep_sweep_ts", 0)
+        if now - last > 900:
+            self._last_deep_sweep_ts = now
+            return True
+        return False
+
+    async def _run_autonomous_sweep(self) -> None:
+        """
+        15-min sweep: forward unresolved anomalies from watchdog buffer to
+        InvestigationDispatcher for full Queen swarm diagnosis.
+        Runs inside the CognitiveLoop thread's event loop.
+        """
+        dispatcher = getattr(self, "_dispatcher", None)
+        watchdog = getattr(self, "_watchdog", None)
+
+        # Try to get dispatcher/watchdog from attached BMS agent if not on self
+        if not dispatcher:
+            dispatcher = getattr(self, "bms_agent", None)
+            if dispatcher:
+                dispatcher = getattr(dispatcher, "_dispatcher", None)
+        if not watchdog:
+            watchdog_src = getattr(self, "bms_agent", None)
+            if watchdog_src:
+                watchdog = getattr(watchdog_src, "_watchdog", None)
+
+        if not dispatcher or not watchdog:
+            return
+
+        # Get anomalies from last 15 min not yet investigated
+        recent = watchdog.get_recent_anomalies(minutes=15)
+        unprobed = [
+            a for a in recent
+            if a.equipment_id not in dispatcher._last_investigation
+            or (time.time() - dispatcher._last_investigation[a.equipment_id]) > dispatcher._cooldown
+        ]
+
+        if unprobed:
+            logger.info(f"[B9] Deep sweep: {len(unprobed)} unprobed anomalies, dispatching up to 2")
+
+        for anomaly in unprobed[:2]:
+            try:
+                await dispatcher.investigate_anomaly(anomaly)
+            except Exception as e:
+                logger.debug(f"[B9] Sweep investigation failed: {e}")
+
+    # ═══════════════════════════════════════════════════════════════════════
     # CHECKPOINTING & WARM-START
     # ═══════════════════════════════════════════════════════════════════════
 
@@ -756,6 +820,8 @@ class CognitiveLoop:
                 db = get_database()
 
             conn = sqlite3.connect(str(db.db_path))
+            conn.execute("PRAGMA busy_timeout=60000")
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS cognitive_checkpoints (
                     component TEXT PRIMARY KEY,
@@ -817,6 +883,16 @@ class CognitiveLoop:
                 db = get_database()
 
             conn = sqlite3.connect(str(db.db_path))
+            conn.execute("PRAGMA busy_timeout=60000")
+            conn.execute("PRAGMA journal_mode=WAL")
+            # Preemptively guarantee table exists on load to prevent cold-boot select crashes
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS cognitive_checkpoints (
+                    component TEXT PRIMARY KEY,
+                    state_json TEXT NOT NULL,
+                    timestamp TEXT NOT NULL
+                )
+            """)
             cursor = conn.execute("SELECT component, state_json FROM cognitive_checkpoints")
             rows = cursor.fetchall()
             conn.close()

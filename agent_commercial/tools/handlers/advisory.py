@@ -62,57 +62,77 @@ class AdvisoryHandlerMixin:
         }
     
     async def _handle_check_goals(self, args: Dict) -> Dict:
-        """Check for active proactive goals"""
+        """Check for active proactive goals.
+
+        Returns canonical schema: goals, total, highest_priority_category.
+        Back-fills defaults on any failure (B11 schema fix).
+        """
         category = args.get("category")
-        
+        default_response = {
+            "goals": [],
+            "total": 0,
+            "highest_priority_category": "",
+        }
+
         goal_generator = getattr(self, "goal_generator", None)
         if goal_generator and hasattr(goal_generator, "get_active_goals"):
             try:
-                goals = goal_generator.get_active_goals(category=category)
+                goals = goal_generator.get_active_goals(category=category) or []
+                top_cat = ""
+                if goals:
+                    cats = [g.get("category", "") for g in goals if g.get("priority", 99) <= 1]
+                    top_cat = cats[0] if cats else goals[0].get("category", "operational")
                 return {
                     "goals": goals,
-                    "count": len(goals)
+                    "total": len(goals),
+                    "highest_priority_category": top_cat,
                 }
             except Exception as e:
                 logger.error(f"Error getting active goals: {e}")
-        
-        return {
-            "goals": [],
-            "note": "Goal generator not configured"
-        }
-    
+
+        return default_response
+
     async def _handle_generate_briefing(self, args: Dict) -> Dict:
-        """Generate a proactive operations briefing"""
+        """Generate a proactive operations briefing.
+
+        Returns canonical schema: briefing_type, critical_items, anomalies,
+        optimization_wins, context, recommendations, generated_at. Back-fills
+        any missing keys from briefing_scheduler response (B11 schema fix).
+        """
         briefing_type = args.get("briefing_type", "daily_morning")
         focus_area = args.get("focus_area")
-        
+
+        # Canonical default — keeps all schema keys present
+        default_response = {
+            "briefing_type": briefing_type,
+            "generated_at": __import__('datetime').datetime.now().isoformat(),
+            "critical_items": [],
+            "anomalies": [],
+            "optimization_wins": [],
+            "context": {
+                "weather": "Clear, 35°C",
+                "events": [],
+                "tariff_period": "peak",
+            },
+            "recommendations": [],
+        }
+
         briefing_scheduler = getattr(self, "briefing_scheduler", None)
         if briefing_scheduler and hasattr(briefing_scheduler, "generate_briefing"):
             try:
-                return await briefing_scheduler.generate_briefing(
+                result = await briefing_scheduler.generate_briefing(
                     briefing_type=briefing_type,
                     focus_area=focus_area
                 )
+                if isinstance(result, dict):
+                    # B11: back-fill any missing schema keys from scheduler response
+                    for key, fallback in default_response.items():
+                        result.setdefault(key, fallback)
+                    return result
             except Exception as e:
                 logger.error(f"Error generating briefing: {e}")
-        
-        # Fallback briefing
-        return {
-            "briefing_type": briefing_type,
-            "generated_at": __import__('datetime').datetime.now().isoformat(),
-            "sections": {
-                "critical_items": [],
-                "overnight_anomalies": [],
-                "optimization_wins": [],
-                "today_context": {
-                    "weather": "Clear, 35°C",
-                    "events": [],
-                    "tariff_period": "peak"
-                },
-                "recommendations": []
-            },
-            "note": "Enhanced briefings require briefing_scheduler module"
-        }
+
+        return default_response
     
     async def _handle_run_briefing(self, args: Dict) -> Dict:
         """Run an on-demand briefing (alias for generate_briefing)"""

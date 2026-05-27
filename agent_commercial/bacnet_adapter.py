@@ -10,6 +10,7 @@ All operations are proper coroutines.
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Callable
@@ -341,6 +342,7 @@ class BACnetSimulatorAdapter:
         self._devices: Dict[int, BACnetDevice] = {}
         self._points: Dict[str, BACnetPoint] = {}
         self._sim_values: Dict[str, float] = {}
+        self._sim_value_timestamps: Dict[str, float] = {}
         self._is_connected = False
         self._poll_task: Optional[asyncio.Task] = None
         self._on_point_update: List[Callable] = []
@@ -358,6 +360,9 @@ class BACnetSimulatorAdapter:
     @property
     def is_connected(self) -> bool:
         return self._is_connected
+
+    def get_point_last_update_epoch(self, point_id: str) -> Optional[float]:
+        return self._sim_value_timestamps.get(point_id)
 
     def _setup_simulated_devices(self) -> None:
         self._devices[260001] = BACnetDevice(
@@ -387,6 +392,8 @@ class BACnetSimulatorAdapter:
             "WTR-02/TOTAL_M3": 450.0,
             "WTR-02/FLOW_LPM": 3.2,
         }
+        _now = time.time()
+        self._sim_value_timestamps = {k: _now for k in self._sim_values}
 
     async def discover_devices(self, timeout_seconds: int = 1) -> List[BACnetDevice]:
         await asyncio.sleep(0.1)
@@ -400,6 +407,17 @@ class BACnetSimulatorAdapter:
             del self._points[point_id]
             return True
         return False
+
+    def register_dynamic_point(self, point_id: str, cadence_seconds: float) -> None:
+        """Record a runtime-added poll entry (used by ARVIS Discovery Agent).
+
+        The sim has no real poller, so we stash the cadence in a side dict so
+        tests/inspectors can see what's been onboarded. The production
+        BACnet/IP adapter will wire this into the actual scheduler.
+        """
+        if not hasattr(self, "_dynamic_poll_registry"):
+            self._dynamic_poll_registry: Dict[str, float] = {}
+        self._dynamic_poll_registry[point_id] = float(cadence_seconds)
 
     def load_points_from_config(self, config: Dict[str, Any]) -> int:
         count = 0
@@ -431,6 +449,7 @@ class BACnetSimulatorAdapter:
             # Meters are cumulative, they should only go up
             increment = random.uniform(0.01, 0.05)
             self._sim_values[point_config.point_id] = base + increment
+            self._sim_value_timestamps[point_config.point_id] = time.time()
             val = base + increment
         elif "FLOW_LPM" in point_config.point_id:
             val = base * (1 + random.uniform(-0.1, 0.1))
@@ -482,9 +501,11 @@ class BACnetSimulatorAdapter:
 
         while True:
             try:
+                _now = time.time()
                 for k in self._sim_values:
                     drift = random.uniform(-0.5, 0.5)
                     self._sim_values[k] = max(0, self._sim_values[k] + drift)
+                    self._sim_value_timestamps[k] = _now
 
                 points = await self.read_all_points()
                 for point in points:

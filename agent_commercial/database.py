@@ -23,8 +23,42 @@ import asyncio
 
 logger = logging.getLogger("arvis.bms.database")
 
-# Default database path
-DEFAULT_DB_PATH = Path(__file__).parent / "data" / "arvis_bms.db"
+# Default database path.
+# Honors ARVIS_DB_PATH env var so test harnesses (e.g. marina_prove_it.py
+# with --isolated-db) can redirect every BMSDatabase consumer to a per-run
+# file without code changes. skillbook.py and other modules that compute
+# their own path against this directory also benefit.
+import os as _os
+_env_db = _os.getenv("ARVIS_DB_PATH", "").strip()
+if _env_db:
+    DEFAULT_DB_PATH = Path(_env_db)
+else:
+    DEFAULT_DB_PATH = Path(__file__).parent / "data" / "arvis_bms.db"
+
+def get_sync_db(db_path: Any) -> sqlite3.Connection:
+    """Central factory for synchronous SQLite connections with WAL mode and busy timeout."""
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+    except Exception as e:
+        logger.warning(f"Failed to configure sync SQLite connection for {db_path}: {e}")
+    return conn
+
+
+async def get_async_db(db_path: Any) -> aiosqlite.Connection:
+    """Central factory for asynchronous SQLite connections with WAL mode and busy timeout."""
+    conn = await aiosqlite.connect(str(db_path))
+    conn.row_factory = aiosqlite.Row
+    try:
+        await conn.execute("PRAGMA busy_timeout=30000")
+        await conn.execute("PRAGMA journal_mode=WAL")
+        await conn.execute("PRAGMA synchronous=NORMAL")
+    except Exception as e:
+        logger.warning(f"Failed to configure async SQLite connection for {db_path}: {e}")
+    return conn
 
 
 class BMSDatabase:
@@ -56,6 +90,7 @@ class BMSDatabase:
         
         self._async_conn: Optional[aiosqlite.Connection] = None
         self._lock = asyncio.Lock()
+        self._write_lock = asyncio.Lock()
         
         logger.info(f"BMSDatabase initialized: {self.db_path}")
 
@@ -81,6 +116,9 @@ class BMSDatabase:
                 
                 # Enable WAL mode for high concurrency
                 try:
+                    # 10s timeout — Marina harness fires ~62k background point-persist
+                    # tasks per phase via state-engine callback. Reduced to 10000ms per instructions.
+                    await self._async_conn.execute("PRAGMA busy_timeout=10000")
                     await self._async_conn.execute("PRAGMA journal_mode=WAL")
                     await self._async_conn.execute("PRAGMA synchronous=NORMAL")
                     await self._async_conn.execute("PRAGMA cache_size=-64000") # 64MB cache
@@ -99,6 +137,22 @@ class BMSDatabase:
                     raise e # Propagate error
                     
             return self._async_conn
+
+    @__import__('contextlib').asynccontextmanager
+    async def _execute(self, query: str, params: tuple = ()):
+        """Execute a query and yield the cursor (async context manager)"""
+        query_upper = query.strip().upper()
+        is_write = any(query_upper.startswith(w) for w in ["INSERT", "UPDATE", "DELETE", "REPLACE", "CREATE", "DROP", "ALTER", "PRAGMA"])
+        
+        if is_write:
+            async with self._write_lock:
+                conn = await self._get_async_connection()
+                async with conn.execute(query, params) as cursor:
+                    yield cursor
+        else:
+            conn = await self._get_async_connection()
+            async with conn.execute(query, params) as cursor:
+                yield cursor
 
     async def _init_schema(self, conn: aiosqlite.Connection) -> None:
         """Initialize database tables if they don't exist"""
@@ -493,6 +547,7 @@ class BMSDatabase:
             )
             """)
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_rules_agent ON distilled_rules(agent_name, active)")
+        else:
             # Migration: add columns if table exists but lacks new fields
             try:
                 await conn.execute("ALTER TABLE distilled_rules ADD COLUMN source_evidence_id TEXT")
@@ -635,6 +690,159 @@ class BMSDatabase:
         except Exception:
             pass
 
+        # 27. BFT Vote Archive — persists consensus outcomes for judge introspection
+        if 'bft_votes' not in existing_tables:
+            logger.info("Creating table: bft_votes")
+            await conn.execute("""
+            CREATE TABLE bft_votes (
+                vote_id         TEXT PRIMARY KEY,
+                round_id        TEXT NOT NULL,
+                plan_id         TEXT DEFAULT '',
+                agent_name      TEXT NOT NULL,
+                vote            TEXT NOT NULL,
+                confidence      REAL DEFAULT 0.5,
+                conditions      TEXT DEFAULT '[]',
+                reasoning       TEXT,
+                proposal        TEXT,
+                proposer_name   TEXT,
+                timestamp       TEXT NOT NULL
+            )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_bft_votes_round ON bft_votes(round_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_bft_votes_plan ON bft_votes(plan_id)")
+
+        # 28. BFT Abstention Log — nodes that failed to vote
+        if 'bft_abstentions' not in existing_tables:
+            logger.info("Creating table: bft_abstentions")
+            await conn.execute("""
+            CREATE TABLE bft_abstentions (
+                abstention_id   TEXT PRIMARY KEY,
+                round_id        TEXT NOT NULL,
+                plan_id         TEXT DEFAULT '',
+                agent_name      TEXT NOT NULL,
+                reason          TEXT NOT NULL,
+                timestamp       TEXT NOT NULL
+            )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_bft_abstentions_round ON bft_abstentions(round_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_bft_abstentions_plan ON bft_abstentions(plan_id)")
+
+        # 29. Violation Ledger — physics violations persisted from simulator
+        if 'violation_ledger' not in existing_tables:
+            logger.info("Creating table: violation_ledger")
+            await conn.execute("""
+            CREATE TABLE violation_ledger (
+                violation_id    TEXT PRIMARY KEY,
+                plan_id         TEXT DEFAULT '',
+                advisory_text   TEXT,
+                code            TEXT NOT NULL,
+                severity        TEXT NOT NULL,
+                description     TEXT,
+                expected_value  REAL,
+                cited_value     REAL,
+                component       TEXT DEFAULT '',
+                timestamp       TEXT NOT NULL
+            )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_violations_plan ON violation_ledger(plan_id)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_violations_code ON violation_ledger(code)")
+
+        # 30. Judgment Ledger — agentic judge audit trail
+        if 'judgment_ledger' not in existing_tables:
+            logger.info("Creating table: judgment_ledger")
+            await conn.execute("""
+            CREATE TABLE judgment_ledger (
+                judgment_id     TEXT PRIMARY KEY,
+                run_id          TEXT NOT NULL,
+                phase           TEXT NOT NULL,
+                scenario        TEXT NOT NULL,
+                dimension_id    TEXT NOT NULL,
+                score           REAL NOT NULL,
+                reasoning       TEXT,
+                evidence_chain  TEXT DEFAULT '[]',
+                tool_calls_used INTEGER DEFAULT 0,
+                judge_model_id  TEXT,
+                wall_time_ms    REAL DEFAULT 0.0,
+                timestamp       TEXT NOT NULL
+            )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_judgment_run ON judgment_ledger(run_id, phase)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_judgment_dimension ON judgment_ledger(dimension_id)")
+
+        # 31. Calibration Schema tables
+        if 'point_baselines' not in existing_tables:
+            logger.info("Creating table: point_baselines")
+            await conn.execute("""
+            CREATE TABLE point_baselines (
+                building_id      TEXT DEFAULT 'default' NOT NULL,
+                point_id         TEXT NOT NULL,
+                equipment_id     TEXT NOT NULL,
+                equipment_type   TEXT NOT NULL,
+                point_type       TEXT NOT NULL,
+                location         TEXT,
+                date             TEXT NOT NULL,
+                sample_count     INTEGER NOT NULL,
+                mean_val         REAL NOT NULL,
+                std_val          REAL NOT NULL,
+                median_val       REAL NOT NULL,
+                mad_val          REAL NOT NULL,
+                p05_val          REAL NOT NULL,
+                p95_val          REAL NOT NULL,
+                min_val          REAL NOT NULL,
+                max_val          REAL NOT NULL,
+                alarm_duration_s INTEGER DEFAULT 0,
+                is_healthy       INTEGER DEFAULT 1,
+                PRIMARY KEY (building_id, point_id, date)
+            )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_pb_eqtype_date ON point_baselines(building_id, equipment_type, point_type, date)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_pb_eqid_date ON point_baselines(building_id, equipment_id, date)")
+
+        if 'point_calibrations' not in existing_tables:
+            logger.info("Creating table: point_calibrations")
+            await conn.execute("""
+            CREATE TABLE point_calibrations (
+                building_id          TEXT DEFAULT 'default' NOT NULL,
+                scope_key            TEXT NOT NULL,
+                scope_level          TEXT NOT NULL,
+                point_type           TEXT NOT NULL,
+                equipment_type       TEXT,
+                calibrated_floor     REAL NOT NULL,
+                calibrated_z_thresh  REAL NOT NULL,
+                prev_floor           REAL,
+                prev_z_thresh        REAL,
+                sample_size_days     INTEGER NOT NULL,
+                rejection_rate_7d    REAL,
+                fp_target            REAL DEFAULT 0.001,
+                promoted             INTEGER DEFAULT 0,
+                change_reason        TEXT,
+                last_calibrated_at   TEXT NOT NULL,
+                last_promoted_at     TEXT,
+                next_due_at          TEXT,
+                PRIMARY KEY (building_id, scope_key)
+            )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_pc_eqtype ON point_calibrations(building_id, equipment_type, point_type)")
+
+        if 'calibration_runs' not in existing_tables:
+            logger.info("Creating table: calibration_runs")
+            await conn.execute("""
+            CREATE TABLE calibration_runs (
+                run_id               TEXT PRIMARY KEY,
+                building_id          TEXT DEFAULT 'default' NOT NULL,
+                started_at           TEXT NOT NULL,
+                finished_at          TEXT,
+                trigger_source       TEXT NOT NULL,
+                window_days          INTEGER NOT NULL,
+                rows_scanned         INTEGER,
+                rows_rejected_alarm  INTEGER,
+                rows_rejected_hampel INTEGER,
+                scopes_updated       INTEGER,
+                scopes_rolled_back   INTEGER,
+                notes                TEXT
+            )
+            """)
+
         await conn.commit()
         logger.info("✅ Database schema verification complete.")
 
@@ -668,6 +876,15 @@ class BMSDatabase:
         
         await conn.commit()
     
+    async def update_equipment_runtime(self, equipment_id: str, hours_delta: float) -> None:
+        """Increment runtime_hours for equipment by hours_delta."""
+        conn = await self._get_async_connection()
+        await conn.execute(
+            "UPDATE equipment SET runtime_hours = runtime_hours + ?, updated_at = ? WHERE equipment_id = ?",
+            (hours_delta, datetime.now().isoformat(), equipment_id),
+        )
+        await conn.commit()
+
     async def get_equipment(self, equipment_id: str) -> Optional[Dict]:
         """Get equipment by ID (Async)"""
         conn = await self._get_async_connection()
@@ -682,58 +899,113 @@ class BMSDatabase:
     async def get_all_equipment(self) -> List[Dict]:
         """Get all equipment (Async)"""
         conn = await self._get_async_connection()
-        
+
         async with conn.execute("SELECT * FROM equipment ORDER BY equipment_id") as cursor:
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
-    
+
+    async def update_equipment_runtime(
+        self,
+        equipment_id: str,
+        hours_delta: float = 0.0,
+        cycles_delta: int = 0,
+    ) -> bool:
+        """Increment runtime_hours / start_stop_cycles on equipment (B10).
+
+        Called by state engine when a STATUS point flips or as a periodic
+        accumulator. Idempotent for hours_delta=0, cycles_delta=0.
+        Returns True if a row was updated.
+        """
+        if not equipment_id:
+            return False
+        if hours_delta == 0 and cycles_delta == 0:
+            return False
+        try:
+            conn = await self._get_async_connection()
+            cursor = await conn.execute(
+                """
+                UPDATE equipment
+                SET runtime_hours = COALESCE(runtime_hours, 0) + ?,
+                    start_stop_cycles = COALESCE(start_stop_cycles, 0) + ?
+                WHERE equipment_id = ?
+                """,
+                (float(hours_delta), int(cycles_delta), equipment_id),
+            )
+            await conn.commit()
+            return (cursor.rowcount or 0) > 0
+        except Exception as e:
+            logger.debug(f"[DB] update_equipment_runtime failed for {equipment_id}: {e}")
+            return False
+
     # ═══════════════════════════════════════════════════════════════════════════
     # DATA POINT OPERATIONS
     # ═══════════════════════════════════════════════════════════════════════════
     
     async def save_data_point(
-        self, 
-        point_id: str, 
-        value: float, 
+        self,
+        point_id: str,
+        value: float,
         unit: str = "",
         equipment_id: str = None,
         quality: str = "good",
         timestamp: datetime = None
     ) -> None:
-        """Save a data point reading (Async)"""
-        conn = await self._get_async_connection()
-        
-        ts = (timestamp or datetime.now()).isoformat()
-        
-        await conn.execute("""
-            INSERT INTO data_points (point_id, equipment_id, value, unit, quality, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (point_id, equipment_id, value, unit, quality, ts))
-        
-        await conn.commit()
+        """Save a data point reading (Async).
+
+        Uses INSERT OR REPLACE on the (point_id, timestamp) PK so duplicate
+        writes within the same microsecond (common with high-frequency
+        emulator ticks or fast phase injection bursts) coalesce silently.
+
+        Also swallows sqlite3.IntegrityError as a belt-and-suspenders guard:
+        callers fire-and-forget this as a background asyncio.Task and any
+        unhandled exception surfaces as "Task exception was never retrieved"
+        in stderr, which is noise — not a correctness problem.
+        """
+        try:
+            async with self._write_lock:
+                conn = await self._get_async_connection()
+
+                ts = timestamp if isinstance(timestamp, str) else (timestamp or datetime.now()).isoformat()
+                quality_str = quality.value if hasattr(quality, "value") else str(quality)
+
+                await conn.execute("""
+                    INSERT OR REPLACE INTO data_points (point_id, equipment_id, value, unit, quality, timestamp)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (point_id, equipment_id, value, unit, quality_str, ts))
+
+                await conn.commit()
+        except sqlite3.IntegrityError as _ie:
+            # Duplicate (point_id, timestamp) under WAL contention — discard.
+            logger.debug(f"[DB] save_data_point dedupe: {point_id} @ {ts}: {_ie}")
+        except Exception as _e:
+            logger.debug(f"[DB] save_data_point failed for {point_id}: {_e}")
     
     async def save_data_points_batch(self, points: List[Dict]) -> None:
         """Save multiple data points efficiently (Async)"""
-        conn = await self._get_async_connection()
-        
-        data = [
-            (
-                p.get("point_id"),
-                p.get("equipment_id"),
-                p.get("value"),
-                p.get("unit", ""),
-                p.get("quality", "good"),
-                (p.get("timestamp") or datetime.now()).isoformat() if isinstance(p.get("timestamp"), datetime) else p.get("timestamp", datetime.now().isoformat())
-            )
-            for p in points
-        ]
-        
-        await conn.executemany("""
-            INSERT INTO data_points (point_id, equipment_id, value, unit, quality, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, data)
-        
-        await conn.commit()
+        async with self._write_lock:
+            conn = await self._get_async_connection()
+            
+            data = []
+            for p in points:
+                _q = p.get("quality", "good")
+                _q_str = _q.value if hasattr(_q, "value") else str(_q)
+                _ts = p.get("timestamp")
+                _ts_str = _ts.isoformat() if isinstance(_ts, datetime) else (_ts or datetime.now().isoformat())
+                data.append((
+                    p.get("point_id"),
+                    p.get("equipment_id"),
+                    p.get("value"),
+                    p.get("unit", ""),
+                    _q_str,
+                    _ts_str,
+                ))
+            
+            await conn.executemany("""
+                INSERT OR REPLACE INTO data_points (point_id, equipment_id, value, unit, quality, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, data)
+            
+            await conn.commit()
     
     async def get_point_history(
         self, 
@@ -744,7 +1016,22 @@ class BMSDatabase:
         """Get historical values for a point (Async)"""
         conn = await self._get_async_connection()
         
-        cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+        # Get simulated reference time
+        sim_now = datetime.now()
+        try:
+            async with conn.execute("SELECT MAX(timestamp) FROM data_points") as c:
+                row = await c.fetchone()
+                if row and row[0]:
+                    # Handle possible string formats
+                    val_str = str(row[0])
+                    if "T" in val_str:
+                        sim_now = datetime.fromisoformat(val_str.split(".")[0].split("+")[0])
+                    else:
+                        sim_now = datetime.fromisoformat(val_str)
+        except Exception:
+            pass
+            
+        cutoff = (sim_now - timedelta(hours=hours)).isoformat()
         
         async with conn.execute("""
             SELECT value, unit, quality, timestamp 
@@ -924,7 +1211,7 @@ class BMSDatabase:
         """Save energy meter reading (Async)"""
         conn = await self._get_async_connection()
         
-        ts = (timestamp or datetime.now()).isoformat()
+        ts = timestamp if isinstance(timestamp, str) else (timestamp or datetime.now()).isoformat()
         
         await conn.execute("""
             INSERT INTO energy_readings (meter_id, value, unit, outdoor_temp, occupancy, timestamp)
@@ -1906,6 +2193,120 @@ class BMSDatabase:
         await conn.commit()
         logger.info(f"[DB] Flushed {len(entries)} LLM usage entries for plan={plan_id} (${total_cost:.4f}, {total_tokens} tokens)")
         return len(entries)
+
+    # ── BFT Vote & Violation Persistence (for Agentic Judge) ─────────────────
+
+    async def save_bft_vote(
+        self,
+        round_id: str,
+        plan_id: str,
+        agent_name: str,
+        vote: str,
+        confidence: float,
+        conditions: List[str],
+        reasoning: str,
+        proposal: str,
+        proposer_name: str,
+    ) -> None:
+        """Persist a single BFT vote result."""
+        import uuid as _uuid
+        from datetime import datetime as _dt, timezone as _tz
+        conn = await self._get_async_connection()
+        await conn.execute("""
+            INSERT OR IGNORE INTO bft_votes
+            (vote_id, round_id, plan_id, agent_name, vote, confidence,
+             conditions, reasoning, proposal, proposer_name, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            str(_uuid.uuid4())[:12], round_id, plan_id or "",
+            agent_name, vote, confidence,
+            json.dumps(conditions), reasoning,
+            proposal, proposer_name,
+            _dt.now(_tz.utc).isoformat(),
+        ))
+        await conn.commit()
+
+    async def save_bft_abstention(
+        self,
+        round_id: str,
+        plan_id: str,
+        agent_name: str,
+        reason: str,
+    ) -> None:
+        """Persist a BFT abstention (node failed to vote)."""
+        import uuid as _uuid
+        from datetime import datetime as _dt, timezone as _tz
+        conn = await self._get_async_connection()
+        await conn.execute("""
+            INSERT OR IGNORE INTO bft_abstentions
+            (abstention_id, round_id, plan_id, agent_name, reason, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            str(_uuid.uuid4())[:12], round_id, plan_id or "",
+            agent_name, reason,
+            _dt.now(_tz.utc).isoformat(),
+        ))
+        await conn.commit()
+
+    async def save_violation(
+        self,
+        plan_id: str,
+        advisory_text: str,
+        code: str,
+        severity: str,
+        description: str,
+        expected_value: Optional[float] = None,
+        cited_value: Optional[float] = None,
+        component: str = "",
+    ) -> None:
+        """Persist a physics violation from the simulator."""
+        import uuid as _uuid
+        from datetime import datetime as _dt, timezone as _tz
+        conn = await self._get_async_connection()
+        await conn.execute("""
+            INSERT OR IGNORE INTO violation_ledger
+            (violation_id, plan_id, advisory_text, code, severity,
+             description, expected_value, cited_value, component, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            str(_uuid.uuid4())[:12], plan_id or "",
+            advisory_text, code, severity, description,
+            expected_value, cited_value, component,
+            _dt.now(_tz.utc).isoformat(),
+        ))
+        await conn.commit()
+
+    async def save_judgment(
+        self,
+        run_id: str,
+        phase: str,
+        scenario: str,
+        dimension_id: str,
+        score: float,
+        reasoning: str,
+        evidence_chain: List[Dict[str, Any]],
+        tool_calls_used: int = 0,
+        judge_model_id: str = "",
+        wall_time_ms: float = 0.0,
+    ) -> None:
+        """Persist a single judge dimension score with evidence chain."""
+        import uuid as _uuid
+        from datetime import datetime as _dt, timezone as _tz
+        conn = await self._get_async_connection()
+        await conn.execute("""
+            INSERT OR IGNORE INTO judgment_ledger
+            (judgment_id, run_id, phase, scenario, dimension_id, score,
+             reasoning, evidence_chain, tool_calls_used, judge_model_id,
+             wall_time_ms, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            str(_uuid.uuid4())[:12], run_id, phase, scenario,
+            dimension_id, score, reasoning,
+            json.dumps(evidence_chain), tool_calls_used,
+            judge_model_id, wall_time_ms,
+            _dt.now(_tz.utc).isoformat(),
+        ))
+        await conn.commit()
 
     # ── T1 Working Memory: Conversation turns ────────────────────────────────
 

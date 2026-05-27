@@ -28,6 +28,44 @@ from agent_commercial.bms_data_model import (
 logger = logging.getLogger("arvis.bms.state")
 
 
+# Fix 8: Telemetry source priority. Lower index = higher priority.
+_SOURCE_PRIORITY = {
+    "BMS_HISTORIAN": 0,
+    "LIVE_BMS_SNAPSHOT": 1,
+    "INFERRED": 2,
+}
+
+
+def _source_priority_allows(existing, incoming, all_points_dict) -> bool:
+    """
+    Return True if incoming point's source is >= existing source priority.
+    Logs a conflict and returns False otherwise. Also surfaces STATUS-field
+    conflicts across streams within the same session.
+    """
+    existing_src = (getattr(existing, "source", None) or "").upper() or None
+    incoming_src = (getattr(incoming, "source", None) or "").upper() or None
+    # Without source metadata we can't enforce priority; allow update.
+    if existing_src is None or incoming_src is None:
+        return True
+    ex_rank = _SOURCE_PRIORITY.get(existing_src, 99)
+    in_rank = _SOURCE_PRIORITY.get(incoming_src, 99)
+    if in_rank > ex_rank:
+        # Detect STATUS-field conflict for richer log
+        eq = getattr(incoming, "equipment_id", "") or getattr(existing, "equipment_id", "")
+        if "STATUS" in (getattr(incoming, "point_id", "") or "").upper() and existing.value != incoming.value:
+            logger.warning(
+                f"[BMS] STATUS conflict on {eq}: keeping {existing.value} from {existing_src} "
+                f"(rejected {incoming.value} from {incoming_src})"
+            )
+        else:
+            logger.info(
+                f"[BMS] Source priority reject: {incoming_src} cannot overwrite {existing_src} "
+                f"on point {getattr(incoming, 'point_id', '?')}"
+            )
+        return False
+    return True
+
+
 class BMSStateEngine:
     """
     Central state store for Building Management System.
@@ -63,7 +101,7 @@ class BMSStateEngine:
     def __init__(self, history_buffer_hours: int = 24):
         """
         Initialize BMS State Engine.
-        
+
         Args:
             history_buffer_hours: Hours of history to keep in memory
         """
@@ -71,12 +109,12 @@ class BMSStateEngine:
         self._equipment: Dict[str, Equipment] = {}
         self._points: Dict[str, BMSDataPoint] = {}
         self._alarms: Dict[str, Alarm] = {}
-        
+
         # Topology: building -> floor -> zone -> equipment
         self._topology: Dict[str, Dict[str, Dict[str, List[str]]]] = defaultdict(
             lambda: defaultdict(lambda: defaultdict(list))
         )
-        
+
         # History buffer settings
         self._history_buffer_hours = history_buffer_hours
         self._max_history_points = history_buffer_hours * 60  # 1-minute resolution
@@ -93,6 +131,9 @@ class BMSStateEngine:
         # Database persistence
         self.db = None
         
+        # Suppressed points for sensor exclusion
+        self.suppressed_points = set()
+        
         # Statistics
         self._stats = {
             "points_updated": 0,
@@ -101,6 +142,17 @@ class BMSStateEngine:
         }
         
         logger.info("BMSStateEngine initialized")
+
+    def suppress_point(self, point_id: str) -> None:
+        """Excludes a point from active updates (suppressed broken sensor)."""
+        self.suppressed_points.add(point_id)
+        logger.info(f"Point {point_id} is now SUPPRESSED (marked as broken sensor)")
+
+    def unsuppress_point(self, point_id: str) -> None:
+        """Removes a point from suppression list."""
+        if point_id in self.suppressed_points:
+            self.suppressed_points.remove(point_id)
+            logger.info(f"Point {point_id} is now UNSUPPRESSED")
 
     def get_summary(self) -> Dict[str, Any]:
         """Return a summary of the current BMS state."""
@@ -216,20 +268,37 @@ class BMSStateEngine:
     async def update_point(self, point: BMSDataPoint) -> None:
         """
         Update a data point value.
-        
+
         - Stores current value
         - Adds to history buffer
         - Triggers callbacks for subscribers
         """
+        # Exclude suppressed/broken sensors from the digital twin state
+        if hasattr(self, "suppressed_points") and point.point_id in self.suppressed_points:
+            from agent_commercial.bms_data_model import PointQuality
+            point.quality = PointQuality.BAD
+            return
+
         async with self._lock:
             # Get existing point or use new one
             existing = self._points.get(point.point_id)
-            
+
+            # Fix 8: Source priority — BMS_HISTORIAN > LIVE_BMS_SNAPSHOT > INFERRED
+            if existing and not _source_priority_allows(existing, point, self._points):
+                return
+
             if existing:
                 # Update existing point
                 existing.value = point.value
                 existing.timestamp = point.timestamp
                 existing.quality = point.quality
+                # Track source if provided so subsequent updates can compare
+                _new_src = getattr(point, "source", None)
+                if _new_src is not None:
+                    try:
+                        setattr(existing, "source", _new_src)
+                    except Exception:
+                        pass
                 existing.add_to_history(self._max_history_points)
             else:
                 # Register new point
@@ -244,22 +313,36 @@ class BMSStateEngine:
             
             self._stats["points_updated"] += 1
             self._stats["last_update"] = datetime.now()
-        
-        # Trigger callbacks (outside lock to prevent deadlocks)
+
+        # Trigger callbacks (outside lock to prevent deadlocks).
+        # Pass the canonical stored point — the one with accumulated history —
+        # so downstream consumers (AnomalyWatchdog, etc.) see full history,
+        # not the bare incoming point with only a single value entry.
+        canonical_point = self._points.get(point.point_id, point)
         for callback in self._on_point_update:
             try:
-                callback(point)
+                callback(canonical_point)
             except Exception as e:
                 logger.error(f"Point update callback error: {e}")
     
     def update_point_sync(self, point: BMSDataPoint) -> None:
         """Synchronous version for BACnet polling thread"""
         existing = self._points.get(point.point_id)
-        
+
+        # Fix 8: Source priority enforcement
+        if existing and not _source_priority_allows(existing, point, self._points):
+            return
+
         if existing:
             existing.value = point.value
             existing.timestamp = point.timestamp
             existing.quality = point.quality
+            _new_src = getattr(point, "source", None)
+            if _new_src is not None:
+                try:
+                    setattr(existing, "source", _new_src)
+                except Exception:
+                    pass
             existing.add_to_history(self._max_history_points)
         else:
             point.add_to_history(self._max_history_points)
@@ -312,17 +395,48 @@ class BMSStateEngine:
                 }
     
     async def get_point_history(
-        self, 
-        point_id: str, 
+        self,
+        point_id: str,
         minutes: int = 60
     ) -> List[tuple]:
-        """Get historical values for a point"""
+        """Get historical values for a point (in-memory buffer, falls back to DB)."""
         async with self._lock:
             point = self._points.get(point_id)
             if point:
-                cutoff = datetime.now().timestamp() - (minutes * 60)
-                return [(t, v) for t, v in point.history if t.timestamp() > cutoff]
-            return []
+                # Determine simulated reference time from max timestamp of points
+                sim_now = datetime.now()
+                if self._points:
+                    valid_ts = []
+                    for p in self._points.values():
+                        ts = getattr(p, 'timestamp', None)
+                        if ts:
+                            if ts.tzinfo is not None:
+                                ts = ts.replace(tzinfo=None)
+                            valid_ts.append(ts)
+                    if valid_ts:
+                        sim_now = max(valid_ts)
+                cutoff = sim_now.timestamp() - (minutes * 60)
+                
+                # Point history contains (dt_object, value_float)
+                result = []
+                for t, v in point.history:
+                    t_naive = t.replace(tzinfo=None) if t.tzinfo is not None else t
+                    if t_naive.timestamp() > cutoff:
+                        result.append((t, v))
+                if result:
+                    return result
+        # Fallback: query persistent database if available
+        _db = getattr(self, "db", None)
+        if _db and hasattr(_db, "get_point_history"):
+            try:
+                hours = max(1, minutes // 60)
+                db_result = await _db.get_point_history(point_id, hours=hours)
+                if db_result:
+                    return [(r["timestamp"], r["value"]) if isinstance(r, dict)
+                            else r for r in db_result]
+            except Exception:
+                pass
+        return []
     
     # ═══════════════════════════════════════════════════════════════════════
     # ALARM MANAGEMENT
@@ -344,19 +458,34 @@ class BMSStateEngine:
         # Trigger callbacks
         for callback in self._on_alarm:
             try:
-                callback(alarm)
+                import asyncio, inspect
+                if inspect.iscoroutinefunction(callback):
+                    asyncio.ensure_future(callback(alarm))
+                else:
+                    callback(alarm)
             except Exception as e:
                 logger.error(f"Alarm callback error: {e}")
     
-    async def acknowledge_alarm(self, alarm_id: str, by: str) -> bool:
-        """Acknowledge an alarm (Async & Persistent)"""
+    async def acknowledge_alarm(self, alarm_id: str, by: str, note: Optional[str] = None) -> bool:
+        """Acknowledge an alarm (Async & Persistent). Optional note appended to alarm record."""
         async with self._lock:
             if alarm_id in self._alarms:
                 alarm = self._alarms[alarm_id]
                 alarm.state = AlarmState.ACKNOWLEDGED
                 alarm.acknowledged_at = datetime.now()
                 alarm.acknowledged_by = by
-                
+                if note:
+                    # Append note to alarm record (best-effort, falls back to message)
+                    try:
+                        _existing_note = getattr(alarm, "ack_note", "") or ""
+                        _combined = (_existing_note + " | " + note) if _existing_note else note
+                        setattr(alarm, "ack_note", _combined)
+                    except Exception:
+                        try:
+                            alarm.message = (alarm.message or "") + f"\n[ack note: {note}]"
+                        except Exception:
+                            pass
+
                 # Persist to database if available
                 if self.db:
                     try:
@@ -681,3 +810,111 @@ class BMSStateEngine:
         except Exception as e:
             logger.error(f"Failed to restore from snapshot: {e}")
             return False
+
+    async def get_historical_telemetry(self, equipment_id_or_type: str, days: int = 28) -> Any:
+        """
+        Queries and reconstructs historical telemetry as a pivoted pandas DataFrame.
+        """
+        import pandas as pd
+        if not self.db:
+            return pd.DataFrame()
+            
+        # 1. Resolve equipment IDs
+        equipment_ids = []
+        async with self._lock:
+            for eq_id, eq in self._equipment.items():
+                if (eq_id == equipment_id_or_type or 
+                        (eq.equipment_type and eq.equipment_type.value.lower() == equipment_id_or_type.lower()) or 
+                        (eq.equipment_type and eq.equipment_type.name.lower() == equipment_id_or_type.lower())):
+                    equipment_ids.append(eq_id)
+        
+        if not equipment_ids:
+            # Maybe equipment_id_or_type is just equipment_id directly
+            equipment_ids = [equipment_id_or_type]
+
+        # 2. Get sim time
+        conn = await self.db._get_async_connection()
+        sim_now = datetime.now()
+        try:
+            async with conn.execute("SELECT MAX(timestamp) FROM data_points") as c:
+                row = await c.fetchone()
+                if row and row[0]:
+                    val_str = str(row[0])
+                    if "T" in val_str:
+                        sim_now = datetime.fromisoformat(val_str.split(".")[0].split("+")[0])
+                    else:
+                        sim_now = datetime.fromisoformat(val_str)
+        except Exception:
+            pass
+            
+        cutoff = (sim_now - timedelta(days=days)).isoformat()
+        
+        # 3. Retrieve points in bulk
+        placeholders = ",".join(["?"] * len(equipment_ids))
+        query = f"""
+            SELECT point_id, value, timestamp 
+            FROM data_points 
+            WHERE equipment_id IN ({placeholders}) AND timestamp > ?
+            ORDER BY timestamp ASC
+        """
+        params = tuple(equipment_ids) + (cutoff,)
+        
+        rows = []
+        async with conn.execute(query, params) as cursor:
+            rows = [dict(r) for r in await cursor.fetchall()]
+            
+        if not rows:
+            logger.warning(f"No historical telemetry found for {equipment_id_or_type} in last {days} days")
+            return pd.DataFrame()
+            
+        # 4. Pivot in Python for maximum control over column mappings
+        records = defaultdict(dict)
+        suffix_map = {
+            "CHWST": "evap_lwt",
+            "CHWRT": "evap_ewt",
+            "CWS": "cond_ewt",
+            "CWR": "cond_lwt",
+            "KW": "power_kw",
+            "LOAD": "capacity_tons",
+            "SAT": "sat",
+            "RAT": "rat",
+            "MAT": "mat",
+            "OAT": "oat",
+            "SAF": "sa_flow",
+            "RAF": "ra_flow",
+            "CLG_VLV": "cooling_valve",
+            "HTG_VLV": "heating_valve",
+            "OA_DMPR": "oa_damper",
+            "FLT_DP": "filter_dp",
+            "FAN_SPD": "fan_speed",
+        }
+        
+        for r in rows:
+            ts = r["timestamp"]
+            pt_id = r["point_id"]
+            val = r["value"]
+            
+            # Extract suffix
+            suffix = pt_id.split("/")[-1] if "/" in pt_id else pt_id
+            
+            # Add directly
+            records[ts][suffix] = val
+            records[ts][suffix.lower()] = val
+            
+            # Add mapped
+            if suffix in suffix_map:
+                records[ts][suffix_map[suffix]] = val
+                
+        # Build pandas DataFrame
+        df_data = []
+        for ts, pts in records.items():
+            pts["timestamp"] = ts
+            df_data.append(pts)
+            
+        df = pd.DataFrame(df_data)
+        if "timestamp" in df.columns:
+            df = df.sort_values("timestamp").reset_index(drop=True)
+            
+        logger.info(f"Pivoted historical telemetry: {len(df)} rows, columns: {list(df.columns)}")
+        return df
+

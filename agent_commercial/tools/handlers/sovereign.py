@@ -107,6 +107,47 @@ class SovereignHandlerMixin:
                 except Exception as e:
                     logger.error(f"query_skillbook native method failed: {e}")
 
+        # ── Fix #2: Local Skillbook fallback ─────────────────────────────
+        # The observation distiller writes skills directly into the
+        # agent_commercial.skillbook.Skillbook SQLite table (via
+        # skillbook.add_skill). NEITHER the MemoryOrchestrator T5 path NOR
+        # the knowledge_base.query_specs path queries that table — they look
+        # in different stores. Result: P1 wrote 6 skills, P4 got 0 matches.
+        # This direct path closes the write→read gap.
+        if not results:
+            try:
+                from agent_commercial.skillbook import get_skillbook
+                _sb = get_skillbook("default")
+                await _sb.ensure_initialized()
+                _ctx: Dict[str, Any] = {}
+                if query:
+                    _ctx["situation_query"] = query
+                    _ctx["query"] = query
+                if equipment_id:
+                    _ctx["equipment_id"] = equipment_id
+                if skill_type:
+                    _ctx["skill_type"] = skill_type
+                # Lower similarity threshold so distiller-written skills surface
+                _ctx["similarity_threshold"] = 0.2
+                _skills = await _sb.get_relevant_skills(_ctx, limit=limit)
+                for _s in _skills:
+                    _sd = _s.to_dict()
+                    results.append({
+                        "chunk_id": _sd.get("skill_id", ""),
+                        "title": _sd.get("title", ""),
+                        "content": _sd.get("description", ""),
+                        "equipment_id": _sd.get("equipment_id"),
+                        "skill_type": _sd.get("skill_type", "pattern"),
+                        "relevance": float(_sd.get("confidence", 0.5)),
+                    })
+                if results:
+                    logger.info(
+                        f"[Sovereign] Local skillbook fallback returned {len(results)} skill(s) "
+                        f"for query={query[:60]!r}"
+                    )
+            except Exception as _sb_err:
+                logger.warning(f"Local skillbook fallback failed: {_sb_err}")
+
         # Fallback: search in tracker
         if not results:
             tracker = getattr(self, "tracker", None)

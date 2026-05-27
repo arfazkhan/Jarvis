@@ -19,6 +19,7 @@ class VoteVerdict(str, Enum):
     APPROVE = "APPROVE"
     APPROVE_WITH_CONDITION = "APPROVE_WITH_CONDITION"
     VETO = "VETO"
+    ABSTAIN = "ABSTAIN"
 
 
 class VoteResult(BaseModel):
@@ -36,11 +37,12 @@ class VotingRound(BaseModel):
     
 class ConsensusEngine:
     """
-    Forces safety-critical constraints via peer review. 
+    Forces safety-critical constraints via peer review.
     1 Veto from a safety/comfort agent blocks an action.
     """
-    def __init__(self):
+    def __init__(self, db=None):
         self.llm = UnifiedLLM()
+        self._db = db
         
     async def run_debate(self, round_data: VotingRound, quorum: List[SwarmNode], channel: str = "chat", plan=None) -> Dict[str, Any]:
         """
@@ -140,24 +142,82 @@ class ConsensusEngine:
                     tool_observations=reviewer_context
                 )
             except Exception as e:
-                logger.error(f"[Consensus] Failed to parse vote from {node.name}: {e}. Defaulting to VETO for safety.")
+                # Transient failures should not poison quorum with a VETO
+                _is_transient = any(s in str(e) for s in (
+                    "Empty vote", "Bedrock", "ValidationException",
+                    "JSONDecodeError", "Read timeout", "ThrottlingException",
+                ))
+                _verdict = "ABSTAIN" if _is_transient else "VETO"
+                logger.error(
+                    f"[Consensus] Failed to parse vote from {node.name}: {e}. "
+                    f"Defaulting to {_verdict} ({'transient' if _is_transient else 'safety'})."
+                )
+                if self._db:
+                    try:
+                        await self._db.save_bft_abstention(
+                            round_id=f"r_{id(round_data):x}",
+                            plan_id=plan.id if plan else "",
+                            agent_name=node.name,
+                            reason=f"parse_error ({_verdict}): {e}",
+                        )
+                    except Exception:
+                        pass
                 return VoteResult(
                     agent_name=node.name,
-                    vote="VETO",
+                    vote=_verdict,
                     reasoning=f"Agent exception/Parse error: {e}",
                     tool_observations={}
                 )
 
-        tasks = [run_vote(node) for node in quorum]
-        results = await asyncio.gather(*tasks)
-        
-        for res in results:
+        BFT_TIMEOUT_S = 15.0
+        tasks = {asyncio.ensure_future(run_vote(node)): node for node in quorum}
+        done, pending = await asyncio.wait(tasks.keys(), timeout=BFT_TIMEOUT_S)
+
+        for task in done:
+            res = task.result()
             if res:
                 votes.append(res)
-            
-        vetoes = [v for v in votes if v.vote == VoteVerdict.VETO.value]
-        conditional = [v for v in votes if v.vote == VoteVerdict.APPROVE_WITH_CONDITION.value]
-        approvals = [v for v in votes if v.vote == VoteVerdict.APPROVE.value]
+
+        if pending:
+            timed_out_names = [tasks[t].name for t in pending]
+            logger.warning(f"[Consensus] BFT timeout ({BFT_TIMEOUT_S}s) — {len(pending)} agent(s) timed out: {timed_out_names}")
+            for t in pending:
+                t.cancel()
+                node = tasks[t]
+                votes.append(VoteResult(
+                    agent_name=node.name,
+                    vote=VoteVerdict.ABSTAIN.value,
+                    reasoning=f"Timed out after {BFT_TIMEOUT_S}s",
+                    tool_observations={},
+                ))
+
+        if self._db and votes:
+            round_id = f"r_{id(round_data):x}"
+            for v in votes:
+                try:
+                    await self._db.save_bft_vote(
+                        round_id=round_id,
+                        plan_id=plan.id if plan else "",
+                        agent_name=v.agent_name,
+                        vote=v.vote,
+                        confidence=v.confidence,
+                        conditions=v.conditions,
+                        reasoning=v.reasoning,
+                        proposal=round_data.proposal[:500],
+                        proposer_name=round_data.proposer_name,
+                    )
+                except Exception as e:
+                    logger.debug(f"[Consensus] Failed to persist vote: {e}")
+
+        # Exclude ABSTAIN votes from quorum (transient failures, not reasoned vetoes)
+        participating = [v for v in votes if v.vote != VoteVerdict.ABSTAIN.value]
+        abstained = [v for v in votes if v.vote == VoteVerdict.ABSTAIN.value]
+        if abstained:
+            logger.info(f"[Consensus] {len(abstained)} agent(s) abstained (transient failure): {[a.agent_name for a in abstained]}")
+
+        vetoes = [v for v in participating if v.vote == VoteVerdict.VETO.value]
+        conditional = [v for v in participating if v.vote == VoteVerdict.APPROVE_WITH_CONDITION.value]
+        approvals = [v for v in participating if v.vote == VoteVerdict.APPROVE.value]
 
         # Collect all conditions that must be satisfied
         all_conditions: List[str] = []
@@ -173,9 +233,14 @@ class ConsensusEngine:
                 f"{len(conditional)} node(s) imposed {len(all_conditions)} condition(s)."
             )
             status = "APPROVED_WITH_CONDITIONS"
-        else:
+        elif approvals:
             logger.info(f"[Consensus] Proposal unanimously APPROVED by quorum.")
             status = "APPROVED"
+        else:
+            # Fix 2: No affirmative votes — all peers abstained/timed out.
+            # Refuse to silently APPROVE; downgrade to advisory for Queen post-process.
+            logger.warning("[Consensus] No affirmative votes — downgrading to advisory tier")
+            status = "DOWNGRADED_TO_ADVISORY"
 
         # Weighted confidence: average across all votes
         avg_confidence = (

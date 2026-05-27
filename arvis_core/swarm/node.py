@@ -26,6 +26,7 @@ class SwarmNode(BaseModel):
 
     tool_handler: Any = Field(default=None, exclude=True)
     llm: Any = Field(default=None, exclude=True)
+    shared_kb: Any = Field(default=None, exclude=True)
 
     class Config:
         arbitrary_types_allowed = True
@@ -47,26 +48,45 @@ class SwarmNode(BaseModel):
           - Checks plan.budget before each tool call
         """
         logger.info(f"[Node: {self.name}] Processing query: {query[:50]}...")
-        
+
         system_msgs = [{"role": "system", "content": self.role}]
 
-        # Load distilled rules from DB for this agent (learned constraints)
-        try:
-            from agent_commercial.database import get_database as _get_db
-            import asyncio as _asyncio
-            _db = _get_db()
-            _rules = await _db.get_distilled_rules(self.name)
-            if _rules:
-                _rule_block = "\n".join(
-                    f"  LEARNED CONSTRAINT: {r['rule_text']}"
-                    for r in _rules
+        # Load distilled rules from DB for this agent (learned constraints).
+        # CRITICAL: bounded by 3s timeout to prevent WAL-lock starvation during
+        # live emulator runs. The live emulator's background _persist_point_to_db
+        # tasks can hold WAL pages long enough that a fresh read blocks past
+        # busy_timeout (60s) with retries, hanging the node for 4+ minutes.
+        # If we can't get rules in 3s, proceed without them — degraded behavior
+        # is "no learned constraints injected", not a crash.
+        #
+        # System_Capability_Agent has zero tools and only serves capability/
+        # boundary responses — skip DB entirely. Saves ~50-200ms on every
+        # write_attempt turn and avoids the lock-contention hazard entirely.
+        if self.name == "System_Capability_Agent":
+            pass  # boundary node has no use for distilled rules
+        else:
+            try:
+                from agent_commercial.database import get_database as _get_db
+                import asyncio as _asyncio
+                _db = _get_db()
+                _rules = await _asyncio.wait_for(
+                    _db.get_distilled_rules(self.name),
+                    timeout=3.0,
                 )
-                system_msgs.append({
-                    "role": "system",
-                    "content": f"DISTILLED RULES (from past experience):\n{_rule_block}",
-                })
-        except Exception as _dr_err:
-            pass  # DB unavailable — degrade gracefully
+                if _rules:
+                    _rule_block = "\n".join(
+                        f"  LEARNED CONSTRAINT: {r['rule_text']}"
+                        for r in _rules
+                    )
+                    system_msgs.append({
+                        "role": "system",
+                        "content": f"DISTILLED RULES (from past experience):\n{_rule_block}",
+                    })
+            except _asyncio.TimeoutError:
+                logger.warning(f"[Node: {self.name}] distilled_rules query timed out (>3s); "
+                               f"proceeding without learned constraints")
+            except Exception:
+                pass  # DB unavailable — degrade gracefully
 
         # Inject plan state so model sees externalized checklist
         if plan is not None:
@@ -83,16 +103,33 @@ class SwarmNode(BaseModel):
         if context:
             # Exclude RECALL_CONTEXT from the raw JSON dump to avoid duplication
             _ctx_for_dump = {k: v for k, v in context.items() if k != "RECALL_CONTEXT"}
+            # Fix 16: Briefing_Agent isolation — exclude LIVE_BMS_SNAPSHOT, chat history,
+            # and cross-agent findings so the briefing reflects only its own tool results.
+            if self.name == "Briefing_Agent":
+                for _excl in ("LIVE_BMS_SNAPSHOT", "chat_history", "cross_agent_findings"):
+                    _ctx_for_dump.pop(_excl, None)
             if _ctx_for_dump:
                 system_msgs.append({
                     "role": "system",
                     "content": f"Global Context:\n{json.dumps(_ctx_for_dump, default=str)}"
                 })
+            if context.get("SYSTEM_CONTRACT"):
+                system_msgs.append({
+                    "role": "system",
+                    "content": (
+                        "SYSTEM CONTRACT: ARVIS is read-only advisory software. "
+                        "It has no BMS/Desigo write access and no control authority. "
+                        "For direct write/control requests, answer this boundary clearly and do not simulate, execute, "
+                        "or imply that ARVIS attempted the write."
+                    ),
+                })
 
         messages = list(history) if history else []
         messages.append({"role": "user", "content": query})
 
-        HARD_CEILING = 8      # absolute safety net — never exceeded
+        # Dynamic ceiling based on query complexity (risk_tier passed via context)
+        _rt = (context or {}).get("_risk_tier", 3)
+        HARD_CEILING = {1: 2, 2: 6}.get(_rt, 8)
         STAGNATION_LIMIT = 3  # consecutive error/spin turns → force synthesis
 
         tools_def = []
@@ -110,7 +147,17 @@ class SwarmNode(BaseModel):
             ]
 
         # ── LLM plans depth once upfront (cheap single call → Nova Micro) ──────
-        planned_turns = await self._llm_plan_depth(query)
+        if (context or {}).get("SYSTEM_CONTRACT") and not (context or {}).get("REQUIRES_LIVE_DATA"):
+            planned_turns = 1
+            logger.info(f"[Node: {self.name}] System-contract query: using 1-turn plan")
+        else:
+            planned_turns = await self._llm_plan_depth(query)
+
+        # Context-driven depth cap (e.g., Memory_Agent capped to 2 for T1/T2)
+        _node_max = (context or {}).get(f"_max_turns_{self.name}")
+        if _node_max and planned_turns > _node_max:
+            logger.info(f"[Node: {self.name}] Depth capped: {planned_turns} → {_node_max} (context override)")
+            planned_turns = _node_max
         logger.info(f"[Node: {self.name}] LLM planned depth: {planned_turns} turns (ceiling={HARD_CEILING})")
 
         # Pre-import plan types (avoid repeated import in hot loop)
@@ -120,6 +167,7 @@ class SwarmNode(BaseModel):
 
         seen_call_sigs: Set[str] = set()  # spin detection: (tool:args_hash)
         consecutive_errors: int = 0
+        consecutive_empty: int = 0        # early exit when retrieval tools return no data
         nudged: bool = False              # soft-nudge sent at most once
         turn: int = 0
 
@@ -152,6 +200,7 @@ class SwarmNode(BaseModel):
                     # A7: Adequacy check — if plan coverage is low, allow one extra round
                     if (
                         plan is not None
+                        and not (context or {}).get("SKIP_ADEQUACY_RETRY")
                         and plan.coverage < 0.5
                         and plan.check_budget()
                         and turn < HARD_CEILING - 1
@@ -178,15 +227,35 @@ class SwarmNode(BaseModel):
                     logger.info(f"[Node: {self.name}] Natural exit after {turn} turns (planned={planned_turns}).")
                     return {"response": response, "history": messages}
 
+                # Filter invalid tool calls (empty name/id from some models)
+                valid_tool_calls = [
+                    tc for tc in response.tool_calls
+                    if getattr(tc.function, "name", "") and getattr(tc, "id", "")
+                ]
+                if len(valid_tool_calls) < len(response.tool_calls):
+                    logger.warning(
+                        f"[Node: {self.name}] Filtered {len(response.tool_calls) - len(valid_tool_calls)} "
+                        f"invalid tool call(s) with empty name/id"
+                    )
+
+                # Store only valid tool_calls in history to avoid Bedrock validation errors
+                _raw = response.model_dump().get("tool_calls", [])
+                _valid_ids = {tc.id for tc in valid_tool_calls}
+                _filtered_tc = [tc for tc in (_raw or []) if tc.get("id") in _valid_ids]
+
                 messages.append({
                     "role": "assistant",
                     "content": response.content,
-                    "tool_calls": response.model_dump().get("tool_calls"),
+                    "tool_calls": _filtered_tc or None,
                 })
 
                 made_progress_this_turn = False
 
-                for tool_call in response.tool_calls:
+                if not valid_tool_calls:
+                    logger.info(f"[Node: {self.name}] No valid tool calls — treating as natural exit after {turn} turns.")
+                    return {"response": response, "history": messages}
+
+                for tool_call in valid_tool_calls:
                     tool_name = tool_call.function.name
                     args_str = tool_call.function.arguments
                     logger.info(f"[Node: {self.name}] Turn {turn}/{planned_turns}: calling {tool_name}")
@@ -236,6 +305,24 @@ class SwarmNode(BaseModel):
                     seen_call_sigs.add(call_sig)
                     if plan is not None:
                         plan.register_call(call_sig)
+
+                    # ── Fix 15: Pre-dispatch shared KB hit check ────────────
+                    _shared_kb = getattr(self, "shared_kb", None)
+                    if isinstance(_shared_kb, dict):
+                        _kb_key = f"{tool_name}:{args_hash}"
+                        if _kb_key in _shared_kb:
+                            logger.info(f"[Node: {self.name}] Pre-dispatch KB hit on '{tool_name}'")
+                            _cached_kb = _shared_kb[_kb_key]
+                            _kb_content = json.dumps(_cached_kb, default=str) if isinstance(_cached_kb, dict) else str(_cached_kb)
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "name": tool_name,
+                                "content": f"[SHARED_KB_HIT] {_kb_content}",
+                            })
+                            made_progress_this_turn = True
+                            consecutive_errors = 0
+                            continue
 
                     # ── Budget check (if plan provided) ─────────────────────
                     if plan is not None and not plan.check_budget():
@@ -316,6 +403,47 @@ class SwarmNode(BaseModel):
                         result = {"error": str(e)}
                         consecutive_errors += 1
 
+                    # ── Empty retrieval detection (prevent Memory_Agent spin) ─────
+                    if isinstance(result, dict) and not result.get("error"):
+                        _is_retrieval_empty = (
+                            result.get("skills") == []
+                            or result.get("similar_skills") == []
+                            or (result.get("count") == 0 and "alarms" not in result)
+                            or result.get("matches") == 0
+                            or result.get("results") == []
+                        )
+                        if _is_retrieval_empty:
+                            consecutive_empty += 1
+                            if consecutive_empty >= 2:
+                                logger.info(f"[Node: {self.name}] Early exit: {consecutive_empty} consecutive empty retrieval results.")
+                                messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": tool_call.id,
+                                    "name": tool_name,
+                                    "content": tool_content,
+                                })
+                                break
+                        else:
+                            consecutive_empty = 0
+                    elif isinstance(result, dict) and result.get("error") in (
+                        "no_data", "not_available", "insufficient_data"
+                    ):
+                        # Soft error: tool executed but has no data — treat like empty retrieval
+                        consecutive_empty += 1
+                        tool_content += (
+                            "\n\nNOTE: No data available for this query. "
+                            "Do NOT retry with the same arguments — summarize what you know and conclude."
+                        )
+                        if consecutive_empty >= 2:
+                            logger.info(f"[Node: {self.name}] Early exit: {consecutive_empty} consecutive no_data results.")
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "name": tool_name,
+                                "content": tool_content,
+                            })
+                            break
+
                     # ── Error hint injection ──────────────────────────────────
                     if tool_content.startswith("Error executing tool"):
                         tool_content += (
@@ -363,7 +491,11 @@ class SwarmNode(BaseModel):
             f"ceiling={HARD_CEILING}, errors={consecutive_errors})."
         )
         messages.append({"role": "user", "content": "Please synthesize a final proposal based on your observations so far."})
-        final_response = await self.llm.ask(messages=messages, system_msgs=system_msgs, channel=self.llm_channel)
+        # Pass tools_def so Bedrock includes toolConfig (required when history has tool blocks)
+        final_response = await self.llm.ask(
+            messages=messages, system_msgs=system_msgs, channel=self.llm_channel,
+            tools=tools_def or None,
+        )
         if plan is not None and final_response.usage:
             plan.budget.record_llm_call(
                 input_tokens=final_response.usage.input_tokens,

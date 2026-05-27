@@ -1,0 +1,131 @@
+# ARVIS Intent Classifier — Few-Shot Examples
+#
+# Used by arvis_core.swarm.intent_classifier.IntentClassifier to seed the
+# LLM prompt. Add new operator phrasings here as they surface in production
+# — no code change needed.
+#
+# 6 mutually-exclusive intent classes. Classifier returns ONE class per query.
+# Risk tier derives from class via deterministic map.
+
+classes:
+  write_attempt:
+    description: >
+      User commanding ARVIS to change BMS state (setpoints, schedules,
+      equipment on/off). ARVIS is read-only; these always result in a
+      polite refusal at T1. Detect imperative tone + equipment target,
+      regardless of verb. Phrasing is wide open.
+    risk_tier: 1
+    examples:
+      - "Lower the condenser setpoint on Chiller 2 to 27"
+      - "Bring chiller 2 down a notch"
+      - "Make zone 3 cooler"
+      - "Turn off CH-03"
+      - "Stop the cooling tower"
+      - "Override damper position on AHU-19 to 80%"
+      - "Set CHWST to 7 degrees"
+      - "Cycle pump 4 for me"
+      - "Engineer wants Chiller 1 in standby — do it"
+      - "Push 25C to all VAVs on floor 23"
+      - "Just bump up the SAT setpoint please"
+      - "Plant 2 — kill it"
+      - "Switch CH-04 to manual"
+      - "Restart AHU-19"
+      - "Disable the after-hours schedule"
+      - "Open VAV-12 damper all the way"
+      - "Force the BMS to use ambient at 27"
+      - "Apply the new schedule now"
+      - "Drop the CWST to 26"
+      - "Engage night setback right now"
+
+  capability_question:
+    description: >
+      User asking what ARVIS can or cannot do, its access scope, its mode,
+      its integration boundaries. Always T1 — answer from system identity,
+      no live data needed.
+    risk_tier: 1
+    examples:
+      - "Can you write to the BMS?"
+      - "Do you have control over the chillers?"
+      - "Are you read-only?"
+      - "What systems can you actually control?"
+      - "Did you push that change?"
+      - "Why didn't the setpoint change?"
+      - "Do you have Desigo write access?"
+      - "What's your integration like with BACnet?"
+      - "Can you actuate equipment or just observe?"
+      - "Are you connected to the BMS in real time?"
+
+  lookup:
+    description: >
+      Simple status, value, list, or history retrieval. Single-fact answers
+      from state engine. No analysis required. T1.
+    risk_tier: 1
+    examples:
+      - "What is CH-01 status?"
+      - "Show me chiller power"
+      - "Current outdoor temp?"
+      - "List active alarms"
+      - "How many AHUs are running?"
+      - "Give me the kWh for last week"
+      - "Floor 23 zone temp right now"
+      - "Show CH-01 history for past 24h"
+      - "What's the chilled water flow?"
+      - "List equipment with active alarms"
+      - "Current setpoint on Chiller 2"
+      - "What time is the next maintenance window?"
+
+  diagnostic:
+    description: >
+      Asking why something is happening, root cause, trend analysis,
+      anomaly investigation. Requires multi-tool reasoning, evidence
+      assembly, and verification. T2.
+    risk_tier: 2
+    examples:
+      - "Why is AHU-19 alarming?"
+      - "What's causing the high MAT on AHU-07?"
+      - "Anything flagging across the building?"
+      - "Trend on chiller power last week"
+      - "Why are we using more energy than usual?"
+      - "What changed yesterday that broke comfort on floor 12?"
+      - "Investigate the CH-01 short cycling"
+      - "Compare this week's COP vs last week"
+      - "Floor 23 keeps getting complaints — why"
+      - "Is there a pattern in the VAV faults?"
+      - "Root cause for the chiller efficiency drop"
+      - "What you've learned about this building in the last 4 weeks"
+
+  actionable_advisory:
+    description: >
+      User asking ARVIS to RECOMMEND an operational change (still
+      read-only — ARVIS proposes, operator decides). Requires full
+      hardening stack because outputs influence physical actions. T3.
+    risk_tier: 3
+    examples:
+      - "How should we optimize chiller staging today?"
+      - "Should we lower CHWST for better efficiency?"
+      - "Recommend setpoint changes for Ramadan schedule"
+      - "What sequence should we run during the heatwave?"
+      - "Best night setback strategy for next week?"
+      - "Should we run 3 chillers or 4 at this load?"
+      - "Optimize the cooling tower fan sequence"
+      - "What's the safest way to recover from the AHU fault?"
+      - "Recommend response to the high-discharge-pressure alarm"
+      - "Tell me how to handle the comfort complaint pattern"
+
+  safety_critical:
+    description: >
+      Anything involving fire, life safety, evacuation, refrigerant leak,
+      electrical hazard, smoke control, structural alarm, MOE/egress.
+      Forced T3 with full verification. Never skipped.
+    risk_tier: 3
+    examples:
+      - "Fire alarm on floor 23 — what's the smoke control sequence?"
+      - "Refrigerant leak suspected in plant room"
+      - "Evacuation in progress — confirm pressurization zones"
+      - "Smoke detected in zone 7"
+      - "Lift entrapment — what's the protocol?"
+      - "Power outage — confirm fire systems on backup"
+      - "Sprinkler activated in basement"
+      - "Gas leak alarm — what now?"
+      - "Tenant medical emergency floor 19 — building systems impact?"
+      - "Generator failure during fire drill"

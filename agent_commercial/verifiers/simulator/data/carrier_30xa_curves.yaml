@@ -1,0 +1,55 @@
+# Carrier 30XA400 Air-Cooled Twin-Screw Chiller — DOE-2 Curve Coefficients
+# Calibrated for Celsius inputs at AHRI 550/590-2023 design conditions.
+# Normalization: all curves = 1.0 at AHRI design point (6.67°C LWT, 35°C EDB, PLR=1.0).
+# Temperature sensitivities from ASHRAE 90.1 Appendix G, Table G3.1.3 (air-cooled screw).
+# EIR-FPLR fitted to marina_physics.py CarrierChillerModel COP polynomial (cross-reference only).
+
+version: "1.0.0"
+model: "Carrier 30XA400"
+condenser_type: "air"   # air-cooled: EDB input; water-cooled would use "water" (ECWT)
+capacity_tr: 400
+capacity_kw: 1409.6  # 400 TR × 3.517 kW/TR (AHRI 550/590 rated)
+
+design_conditions:
+  chwst_c: 6.67   # AHRI LWT: 44°F = 6.67°C
+  ecwt_c: 35.0    # AHRI air-cooled design EDB: 95°F = 35°C
+  cop: 3.10       # AHRI full-load COP = EER 10.7 ÷ 3.412
+  plr: 1.0
+
+# CAP-FT: f(CHWST_°C, ECWT_°C). Normalized to 1.0 at (7, 32).
+# Sensitivity: +2.0%/°C lower CHWST, -0.5%/°C higher ECWT.
+# Form: c0 + c1*x + c2*x² + c3*y + c4*y² + c5*x*y
+cap_ft:
+  - 1.020000   # c0 — anchored so f(7,32)=1.0
+  - 0.020000   # c1 — CHWST sensitivity (+2%/°C)
+  - 0.000000   # c2
+  - -0.005000  # c3 — ECWT sensitivity (-0.5%/°C)
+  - 0.000000   # c4
+  - 0.000000   # c5
+
+# EIR-FT: f(CHWST_°C, ECWT_°C). Normalized to 1.0 at (7, 32).
+# Sensitivity: -1.0%/°C lower CHWST, +2.0%/°C higher ECWT.
+eir_ft:
+  - 0.430000   # c0
+  - -0.010000  # c1 — CHWST sensitivity
+  - 0.000000   # c2
+  - 0.020000   # c3 — ECWT sensitivity (+2%/°C)
+  - 0.000000   # c4
+  - 0.000000   # c5
+
+# EIR-FPLR: f(PLR). Fitted to CarrierChillerModel COP polynomial from marina_physics.py.
+# Normalized: = 1.0 at PLR=1.0. RMSE < 0.01 across PLR=[0.1, 1.0].
+eir_fplr:
+  - 2.785324
+  - -3.167667
+  - 1.348787
+  - 0.038704
+
+limits:
+  min_plr: 0.10
+  max_plr: 1.0
+  min_chwst_c: 4.0
+  max_chwst_c: 12.0
+  min_ecwt_c: 18.0
+  max_ecwt_c: 42.0
+  surge_plr: 0.15

@@ -475,6 +475,18 @@ def get_mission_agent() -> SwarmNode:
 # ASSEMBLY — Build the complete swarm topology
 # =============================================================================
 
+def get_discovery_agent() -> SwarmNode:
+    """🛰️ Discovery Agent — autonomous BACnet point onboarding.
+
+    Probes blind spots (BLIND_SPOT_DETECTED tags), classifies criticality via
+    HybridClassifier (rules now, ML in Phase 2), registers points with 24h
+    probation + signed audit log + tiered rate limits. Two-person rule for
+    writable points on critical equipment (CH-*, FIRE-*, ELEV-*, LS-*).
+    """
+    from arvis_core.swarm.agents.discovery import build_discovery_agent
+    return build_discovery_agent()
+
+
 def get_all_swarm_nodes() -> List[SwarmNode]:
     """
     Returns all 12 initialized agents for the ARVIS Commercial Queen.
@@ -489,6 +501,7 @@ def get_all_swarm_nodes() -> List[SwarmNode]:
         get_maintenance_agent(),
         get_comfort_agent(),
         get_sensor_fusion_agent(),
+        get_discovery_agent(),
     ]
     nodes.extend(tier1)
     logger.info(f"[SwarmTopology] Tier 1 (Perception): {len(tier1)} agents loaded")

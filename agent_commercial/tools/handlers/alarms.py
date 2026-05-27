@@ -40,23 +40,28 @@ class AlarmHandlerMixin:
         severity = args.get("severity")
         equipment_id = args.get("equipment_id")
         limit = args.get("limit", 20)
+        include_inference = args.get("include_inference", False)
         
         alarm_engine = getattr(self, "alarm_engine", None)
         if alarm_engine and hasattr(alarm_engine, "get_priority_queue"):
             try:
                 queue = alarm_engine.get_priority_queue()
-                
+
                 # Defensive filtering
                 if severity:
-                    queue = [a for a in queue if str(getattr(getattr(a, "alarm", a), "severity", "")).lower() == str(severity).lower() or 
+                    queue = [a for a in queue if str(getattr(getattr(a, "alarm", a), "severity", "")).lower() == str(severity).lower() or
                              str(getattr(getattr(getattr(a, "alarm", a), "severity", None), "value", "")).lower() == str(severity).lower()]
                 if equipment_id:
                     queue = [a for a in queue if getattr(getattr(a, "alarm", a), "equipment_id", None) == equipment_id]
-                
-                return {
-                    "count": len(queue[:limit]),
-                    "alarms": [a.to_dict() if hasattr(a, "to_dict") else a for a in queue[:limit]]
-                }
+                if not include_inference:
+                    queue = [a for a in queue if getattr(getattr(a, "alarm", a), "source_point_id", "") not in (None, "")]
+
+                if queue:
+                    return {
+                        "count": len(queue[:limit]),
+                        "alarms": [a.to_dict() if hasattr(a, "to_dict") else a for a in queue[:limit]]
+                    }
+                # Empty queue — fall through to bms_state which may have alarms injected directly
             except Exception as e:
                 logger.error(f"Error getting priority queue: {e}")
         
@@ -64,7 +69,7 @@ class AlarmHandlerMixin:
         if hasattr(self, "bms_state"):
             all_alarms = []
             if hasattr(self.bms_state, "_alarms"):
-                all_alarms = self.bms_state._alarms
+                all_alarms = list(self.bms_state._alarms.values())
             elif hasattr(self.bms_state, "get_active_alarms"):
                 all_alarms = await self.bms_state.get_active_alarms()
             
@@ -86,6 +91,8 @@ class AlarmHandlerMixin:
                 filtered = [a for a in filtered if get_val(a, "severity") == severity]
             if equipment_id:
                 filtered = [a for a in filtered if get_val(a, "equipment_id") == equipment_id]
+            if not include_inference:
+                filtered = [a for a in filtered if get_val(a, "source_point_id") not in (None, "")]
             
             # Sort critical first if possible
             def sort_key(a):
@@ -163,25 +170,37 @@ class AlarmHandlerMixin:
         return {"error": "Alarm system not configured", "success": False}
     
     async def _handle_analyze_cascade(self, args: Dict) -> Dict:
-        """Analyze alarm cascade to find root cause"""
+        """Analyze alarm cascade to find root cause.
+
+        Returns canonical schema: root_cause_alarm_id, root_cause_equipment,
+        cascade_tree, confidence, affected_systems. Any partial response from
+        alarm_engine is back-filled with safe defaults (B11 schema fix).
+        """
         alarm_ids = args.get("alarm_ids", [])
         time_window = args.get("time_window_minutes", 30)
-        
-        # Get cascade analysis from alarm engine
+
+        # Default response — guarantees all schema keys present
+        default_response = {
+            "root_cause_alarm_id": alarm_ids[0] if alarm_ids else "",
+            "root_cause_equipment": "",
+            "cascade_tree": {},
+            "confidence": 0.0,
+            "affected_systems": [],
+        }
+
         alarm_engine = getattr(self, "alarm_engine", None)
         if alarm_engine and hasattr(alarm_engine, "analyze_cascade"):
             try:
-                return await alarm_engine.analyze_cascade(alarm_ids, time_window)
+                result = await alarm_engine.analyze_cascade(alarm_ids, time_window)
+                if isinstance(result, dict):
+                    # Back-fill any missing schema keys (B11 fix)
+                    for key, fallback in default_response.items():
+                        result.setdefault(key, fallback)
+                    return result
             except Exception as e:
                 logger.error(f"Error in cascade analysis: {e}")
-        
-        # Fallback: basic cascade detection
-        return {
-            "alarm_ids": alarm_ids,
-            "root_cause_alarm": alarm_ids[0] if alarm_ids else None,
-            "cascade_tree": [],
-            "analysis_note": "Cascade analysis requires enhanced alarm engine"
-        }
+
+        return default_response
 
     async def _handle_escalate_alarm(self, args: Dict) -> Dict:
         """Escalate an alarm to a higher level or notify supervisor"""
@@ -235,14 +254,54 @@ class AlarmHandlerMixin:
         return {"error": f"Cluster {cluster_id} not found"}
 
     async def _handle_get_alarm_clusters(self, args: Dict) -> Dict:
-        """Get all active alarm clusters with root cause summaries."""
-        alarm_engine = getattr(self, "alarm_engine", None)
-        if not alarm_engine:
-            return {"cluster_count": 0, "total_alarms_collapsed": 0, "clusters": []}
+        """Get all active alarm clusters with root cause summaries.
 
-        clusters = alarm_engine.get_active_clusters_summary()
-        return {
-            "cluster_count": len(clusters),
-            "total_alarms_collapsed": sum(c["active_alarm_count"] for c in clusters),
-            "clusters": clusters,
-        }
+        Returns canonical schema: cluster_count, total_alarms_collapsed, clusters.
+        Each cluster entry guaranteed to have active_alarm_count (B11 schema fix).
+        """
+        alarm_engine = getattr(self, "alarm_engine", None)
+        if alarm_engine:
+            clusters = alarm_engine.get_active_clusters_summary()
+            if clusters:
+                # B11: ensure each cluster has active_alarm_count key
+                for c in clusters:
+                    c.setdefault("active_alarm_count", len(c.get("alarm_ids", [])))
+                return {
+                    "cluster_count": len(clusters),
+                    "total_alarms_collapsed": sum(c.get("active_alarm_count", 0) for c in clusters),
+                    "clusters": clusters,
+                }
+
+        # Fallback: build simple clusters from bms_state alarms grouped by equipment_id
+        if hasattr(self, "bms_state"):
+            try:
+                alarms = await self.bms_state.get_active_alarms() if hasattr(self.bms_state, "get_active_alarms") else []
+                if not alarms and hasattr(self.bms_state, "_alarms"):
+                    from agent_commercial.bms_data_model import AlarmState
+                    alarms = [a for a in self.bms_state._alarms.values()
+                              if getattr(a, "state", None) in (AlarmState.ACTIVE, AlarmState.ACKNOWLEDGED)]
+                if alarms:
+                    from collections import defaultdict
+                    by_eq = defaultdict(list)
+                    for a in alarms:
+                        eq = getattr(a, "equipment_id", "unknown")
+                        by_eq[eq].append(a)
+                    clusters = []
+                    for eq_id, eq_alarms in by_eq.items():
+                        clusters.append({
+                            "cluster_id": f"cluster_{eq_id}",
+                            "equipment_id": eq_id,
+                            "active_alarm_count": len(eq_alarms),
+                            "severity_max": max((getattr(a.severity, "value", str(a.severity)) for a in eq_alarms), default="medium"),
+                            "alarm_ids": [a.alarm_id for a in eq_alarms[:10]],
+                            "summary": f"{len(eq_alarms)} alarms on {eq_id}",
+                        })
+                    return {
+                        "cluster_count": len(clusters),
+                        "total_alarms_collapsed": sum(c["active_alarm_count"] for c in clusters),
+                        "clusters": clusters,
+                    }
+            except Exception as e:
+                logger.error(f"Error building alarm clusters from bms_state: {e}")
+
+        return {"cluster_count": 0, "total_alarms_collapsed": 0, "clusters": []}

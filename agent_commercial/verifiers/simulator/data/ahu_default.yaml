@@ -1,0 +1,28 @@
+# Default AHU parameters — 20,000 CFM air handler
+# Representative of Marina Heights AHU-01 through AHU-12
+
+version: "1.0.0"
+
+design:
+  cfm: 20000
+  fan_motor_kw: 15.0
+  fan_exponent: 2.7       # ASHRAE 2020 HVAC Systems & Equipment, Ch.21 Table 4
+  min_oa_fraction: 0.15   # ASHRAE 62.1 minimum outdoor air
+
+coil:
+  rows: 6
+  tubes_per_row: 40
+  tube_od_m: 0.016
+  fin_pitch_per_m: 394
+  face_area_m2: 3.5
+  # Derived: 6-row, 3.5m² face, 10 FPI, per ASHRAE Fundamentals Ch.23 Table 6
+  ua_design_w_per_k: 85000
+
+setpoints:
+  sat_c: 14.0
+  sat_reset_lo_c: 12.0
+  sat_reset_hi_c: 16.0
+
+fan:
+  min_speed: 0.30
+  max_speed: 1.00

@@ -857,3 +857,70 @@ class AlarmEngine:
                 self.stats["alarms_suppressed"] / max(1, self.stats["alarms_processed"]) * 100
             ),
         }
+
+    async def analyze_cascade(self, alarm_ids: List[str], time_window_minutes: int = 30) -> Dict[str, Any]:
+        """
+        Analyze alarm cascade using Causal Inference Engine.
+        """
+        # Fetch active alarms corresponding to these alarm_ids
+        alarms_to_analyze = []
+        for aid in alarm_ids:
+            processed = self.active_alarms.get(aid)
+            if processed:
+                alarms_to_analyze.append({
+                    "equipment_id": processed.alarm.equipment_id,
+                    "fault_type": getattr(processed.alarm, "alarm_type", processed.alarm.message),
+                    "timestamp": processed.alarm.triggered_at or datetime.now(),
+                })
+            else:
+                # Find in history if not active
+                for h in self.alarm_history:
+                    if h.alarm_id == aid:
+                        alarms_to_analyze.append({
+                            "equipment_id": h.equipment_id,
+                            "fault_type": getattr(h, "alarm_type", h.message),
+                            "timestamp": h.triggered_at or datetime.now(),
+                        })
+                        break
+                        
+        if not alarms_to_analyze:
+            # Safe default
+            return {
+                "root_cause_alarm_id": alarm_ids[0] if alarm_ids else "",
+                "root_cause_equipment": "",
+                "cascade_tree": {},
+                "confidence": 0.5,
+                "affected_systems": [],
+                "ml_status": "structural_only",
+            }
+            
+        from agent_commercial.ml.causal_inference import get_causal_engine
+        engine = get_causal_engine()
+        
+        # Perform inference
+        chain = engine.infer_cause(alarms_to_analyze, time_window_minutes)
+        
+        # Match root cause node back to an alarm_id
+        root_eq = chain.root_cause.equipment_id
+        root_alarm_id = alarm_ids[0] if alarm_ids else ""
+        for aid in alarm_ids:
+            processed = self.active_alarms.get(aid)
+            if processed and processed.alarm.equipment_id == root_eq:
+                root_alarm_id = aid
+                break
+                
+        affected_systems = list(set(e.equipment_type for e in chain.effects))
+        
+        return {
+            "root_cause_alarm_id": root_alarm_id,
+            "root_cause_equipment": root_eq,
+            "cascade_tree": {
+                "node": root_eq,
+                "children": [e.equipment_id for e in chain.effects]
+            },
+            "confidence": round(chain.confidence, 3),
+            "affected_systems": affected_systems,
+            "ml_status": "structural_only" if not engine.is_trained else "online",
+            "explanation": chain.explanation,
+        }
+

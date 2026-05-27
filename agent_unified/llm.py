@@ -1,4 +1,5 @@
 from typing import List, Optional, Dict, Any, Union
+import asyncio
 import json
 import os
 import logging
@@ -13,6 +14,25 @@ from agent_unified.schema import Message, ToolCall
 
 import re
 
+_QUARANTINE_BLOCKLIST = {}
+_RESPONSE_HISTORY = {}
+
+def get_session_key(messages: List[Dict[str, str]]) -> Optional[str]:
+    if not messages:
+        return None
+    content = messages[0].get("content") or ""
+    return str(hash(content))
+
+def quarantine_values(session_key: str, values: List[str]):
+    if not session_key:
+        return
+    if session_key not in _QUARANTINE_BLOCKLIST:
+        _QUARANTINE_BLOCKLIST[session_key] = set()
+    for v in values:
+        if v and len(str(v).strip()) > 0:
+            _QUARANTINE_BLOCKLIST[session_key].add(str(v).strip())
+    logger.info(f"[Quarantine] Quarantined values for session {session_key}: {_QUARANTINE_BLOCKLIST[session_key]}")
+
 # Global singletons for hybrid architecture
 _REASONING_AGENT = None  # K2 Think (Reasoning Layer)
 _TOOL_AGENT = None       # Primary Execution Layer (Configurable)
@@ -24,10 +44,11 @@ _FALLBACK_TOOL_AGENT = None # Groq Fallback Layer
 # Channels are set per-call-site (see arvis_core/swarm/node.py and swarm_nodes.py).
 # ═══════════════════════════════════════════════════════════════════════════════
 BEDROCK_MODEL_MAP: Dict[str, str] = {
-    # Ultra-cheap classification/planning — Nova Micro
-    "classify":    "amazon.nova-micro-v1:0",
-    "depth_plan":  "amazon.nova-micro-v1:0",
-    "feedback":    "amazon.nova-micro-v1:0",
+    # Classification/planning — Nova Lite (reliable JSON; Nova Micro returns prose)
+    "classify":         "us.amazon.nova-lite-v1:0",
+    "intent_classify":  "us.amazon.nova-lite-v1:0",  # IntentClassifier 6-class router
+    "depth_plan":       "us.amazon.nova-lite-v1:0",
+    "feedback":         "us.amazon.nova-lite-v1:0",
 
     # Tool-call execution — Kimi K2.5
     "tool":        "moonshotai.kimi-k2.5",
@@ -38,30 +59,51 @@ BEDROCK_MODEL_MAP: Dict[str, str] = {
     "root_cause":  "moonshot.kimi-k2-thinking",
 
     # Narrative reports / briefings — Nova Lite
-    "narrative":   "amazon.nova-lite-v1:0",
-    "report":      "amazon.nova-lite-v1:0",
+    "narrative":   "us.amazon.nova-lite-v1:0",
+    "report":      "us.amazon.nova-lite-v1:0",
 
     # Structured JSON extraction — GLM 4.7 Flash
     "extract":     "zai.glm-4.7-flash",
     "structured":  "zai.glm-4.7-flash",
 
-    # Meta-cognition / continual reflection — MiniMax M2.1
-    "reflect":     "minimax.minimax-m2.1",
-    "meta":        "minimax.minimax-m2.1",
+    # Meta-cognition / continual reflection — Nova Lite
+    "reflect":     "us.amazon.nova-lite-v1:0",
+    "meta":        "us.amazon.nova-lite-v1:0",
 
-    # Multi-agent consensus / synthesis — Claude Sonnet 4.6
-    "consensus":   "us.anthropic.claude-sonnet-4-6",
-    "synthesis":   "us.anthropic.claude-sonnet-4-6",
+    # Multi-agent consensus — MiniMax M2.5 (agent-native, token-efficient)
+    "consensus":   "minimax.minimax-m2.5",
 
-    # General swarm node work — Claude Sonnet 4.6
-    "swarm":       "us.anthropic.claude-sonnet-4-6",
+    # Synthesis — MiniMax M2.5 (frontier-class, token-efficient, replaces GLM 5)
+    "synthesis":   "minimax.minimax-m2.5",
 
-    # Chat / default — Claude Sonnet 4.6
-    "chat":        "us.anthropic.claude-sonnet-4-6",
+    # General swarm node work — MiniMax M2.5 (agent-native, 6× cheaper than Sonnet)
+    "swarm":       "minimax.minimax-m2.5",
 
-    # Escalation / complex audit — Claude Opus 4.6
-    "escalation":  "us.anthropic.claude-opus-4-6-v1",
-    "audit":       "us.anthropic.claude-opus-4-6-v1",
+    # Chat / default — MiniMax M2.5 (frontier-class, tool use, replaces GLM 5)
+    "chat":        "minimax.minimax-m2.5",
+
+    # Verification channels — Nova Lite for checks, MiniMax for corrections, MiniMax for faithfulness
+    "faithfulness":             "minimax.minimax-m2.5",
+    "faithfulness_correction":  "minimax.minimax-m2.5",
+    "claim_verify":             "us.amazon.nova-lite-v1:0",
+    "claim_correction":         "minimax.minimax-m2.5",
+    "physics_regen":            "minimax.minimax-m2.5",
+    "self_consistency":         "us.amazon.nova-lite-v1:0",
+    "consolidator":             "minimax.minimax-m2.5",
+
+    # Escalation / complex audit — Kimi K2 Thinking (replaces Opus)
+    "escalation":  "moonshot.kimi-k2-thinking",
+    "audit":       "moonshot.kimi-k2-thinking",
+}
+
+# Bedrock fallback model — used when primary model for a channel fails
+BEDROCK_FALLBACK_MAP: Dict[str, str] = {
+    "moonshotai.kimi-k2.5":      "zai.glm-5",
+    "moonshot.kimi-k2-thinking": "zai.glm-5",
+    "us.amazon.nova-lite-v1:0":  "minimax.minimax-m2.5",
+    "zai.glm-5":                 "minimax.minimax-m2.5",
+    "zai.glm-4.7-flash":         "us.amazon.nova-lite-v1:0",
+    "minimax.minimax-m2.5":      "us.amazon.nova-lite-v1:0",
 }
 
 # Bedrock provider prefix detection
@@ -72,14 +114,14 @@ _BEDROCK_PREFIXES = ("amazon.", "anthropic.", "moonshot.", "moonshotai.", "minim
 # BEDROCK COST METERING — per-model pricing ($/1M tokens: input, output)
 # ═══════════════════════════════════════════════════════════════════════════════
 _BEDROCK_PRICING: Dict[str, tuple] = {
-    "us.anthropic.claude-sonnet-4-6": (3.0, 15.0),
-    "us.anthropic.claude-opus-4-6-v1": (15.0, 75.0),
-    "amazon.nova-micro-v1:0": (0.035, 0.14),
-    "amazon.nova-lite-v1:0": (0.06, 0.24),
-    "moonshotai.kimi-k2.5": (1.0, 4.0),
+    "amazon.nova-micro-v1:0":    (0.035, 0.14),
+    "us.amazon.nova-lite-v1:0":  (0.06, 0.24),
+    "moonshotai.kimi-k2.5":      (1.0, 4.0),
     "moonshot.kimi-k2-thinking": (1.0, 4.0),
-    "zai.glm-4.7-flash": (0.3, 0.6),
-    "minimax.minimax-m2.1": (0.5, 1.5),
+    "zai.glm-4.7-flash":         (0.3, 0.6),
+    "zai.glm-5":                 (1.0, 3.0),
+    "minimax.minimax-m2.1":      (0.5, 1.5),
+    "minimax.minimax-m2.5":      (0.5, 1.5),
 }
 
 _LLM_USAGE_LOG: List[Dict[str, Any]] = []
@@ -152,6 +194,67 @@ def _extract_k2_answer(content: str) -> str:
     """Legacy wrapper for _robust_extract."""
     _, answer = _robust_extract(content)
     return answer
+
+
+def _coerce_prose_to_json(channel: str, content: str) -> Optional[Dict[str, Any]]:
+    """
+    Last-resort coercion for models that return prose instead of JSON.
+    Handles known simple channels: classify (tier 1/2/3) and depth_plan (turn count).
+    Returns None if coercion not applicable.
+    """
+    if not content:
+        return None
+    c = content.lower()
+
+    if channel == "classify":
+        # Look for tier number in prose: "T3", "tier 3", "tier: 3", "3 (actionable)"
+        m = re.search(r"t(?:ier)?\s*[:\-]?\s*([123])\b", c)
+        if m:
+            return {"tier": int(m.group(1))}
+        # Keyword fallback — T3 first (most specific), then T2, then T1
+        if any(w in c for w in ("action", "change", "optim", "fix", "simulat", "recommend",
+                                 "write", "setpoint", "push", "command", "execute", "modify")):
+            return {"tier": 3}
+        if any(w in c for w in ("diagnos", "fault", "root cause", "why", "trend", "analyz",
+                                 "investigate", "inspect", "assess", "evaluate")):
+            return {"tier": 2}
+        if any(w in c for w in ("lookup", "status", "list", "current", "what is", "show me",
+                                 "tell me", "have you", "do you", "are you", "can you")):
+            return {"tier": 1}
+        return {"tier": 2}  # safe default
+
+    if channel == "depth_plan":
+        # Look for turn count: "3 turns", "plan 3", "depth: 3", etc.
+        m = re.search(r"\b([1-9])\s*turns?\b", c)
+        if m:
+            return {"turns": int(m.group(1))}
+        m = re.search(r"(?:depth|turns?|rounds?)\s*[:\-]?\s*([1-9])\b", c)
+        if m:
+            return {"turns": int(m.group(1))}
+        return {"turns": 3}  # safe default
+
+    if channel == "intent_classify":
+        # IntentClassifier expects {"class": "<name>", "confidence": 0.x, "reason": "..."}.
+        # When Nova returns prose, salvage what we can. Order matters — most
+        # specific class checks first.
+        intent_keywords = [
+            ("safety_critical",     ["fire alarm", "evacuat", "smoke detect", "refrigerant leak",
+                                     "gas leak", "sprinkler", "life-safety", "life safety", "emergency"]),
+            ("write_attempt",       ["write_attempt", "write attempt", "imperative",
+                                     "command", "set point", "setpoint command", "operator commanding"]),
+            ("capability_question", ["capability_question", "capability question", "asking what arvis",
+                                     "read-only", "read only", "access scope"]),
+            ("actionable_advisory", ["actionable_advisory", "actionable advisory", "recommend",
+                                     "what should we", "optimi"]),
+            ("diagnostic",          ["diagnostic", "root cause", "why is", "trend", "anomaly"]),
+            ("lookup",              ["lookup", "simple lookup", "status check", "current value"]),
+        ]
+        for cls, kws in intent_keywords:
+            if any(kw in c for kw in kws):
+                return {"class": cls, "confidence": 0.55, "reason": f"prose coercion → {cls}"}
+        return {"class": "diagnostic", "confidence": 0.30, "reason": "prose coercion default"}
+
+    return None
 
 class DummyBus:
     def subscribe(self, *args, **kwargs): pass
@@ -258,6 +361,130 @@ class UnifiedLLM(BaseModel):
             else:
                 _FALLBACK_TOOL_AGENT = _TOOL_AGENT
 
+    def _prune_and_budget_context(
+        self,
+        messages: List[Dict[str, str]],
+        system_msgs: Optional[List[Dict[str, str]]],
+        channel: str
+    ) -> tuple[List[Dict[str, str]], Optional[List[Dict[str, str]]]]:
+        """Prune and budget evidence ledger based on channel limits and relevance sorting."""
+        LIMITS = {
+            "synthesis": 120000,
+            "depth_plan": 20000,
+            "faithfulness": 60000,
+            "claim_verify": 40000,
+            "chat": 80000
+        }
+        if channel not in LIMITS:
+            return messages, system_msgs
+
+        token_limit = LIMITS[channel]
+        char_limit = int(token_limit * 3.5)
+
+        # Extract queries from messages to build keyword overlap set
+        user_queries = [m.get("content", "") for m in messages if m.get("role") == "user"]
+        query_text = " ".join(user_queries)
+        import re
+        query_words = set(re.findall(r"\w+", query_text.lower()))
+        eq_ids_in_query = set(re.findall(r"\b(?:CH|AHU|VAV|FCU|CT|CHWP|CDWP|ZONE|FLOOR|METER|PCHWP|SCHWP)-\d+[A-Z]?\b", query_text.upper()))
+        ev_ids_in_query = set(re.findall(r"\b[a-fA-F0-9\-]{8,36}\b", query_text))
+
+        def prune_text(text: str) -> str:
+            if not text:
+                return text
+            start_marker = "--- EVIDENCE LEDGER (authoritative, from tool results) ---"
+            end_marker = "--- END EVIDENCE LEDGER ---"
+
+            if start_marker not in text or end_marker not in text:
+                start_marker = "--- EVIDENCE LEDGER"
+                end_marker = "--- END EVIDENCE"
+                if start_marker not in text or end_marker not in text:
+                    return text
+
+            parts = text.split(start_marker, 1)
+            before = parts[0]
+            after_parts = parts[1].split(end_marker, 1)
+            ledger_content = after_parts[0]
+            after = after_parts[1] if len(after_parts) > 1 else ""
+
+            # Parse entries starting with [uuid] or similar alphanumeric id in brackets
+            entries = []
+            current_entry = []
+            for line in ledger_content.splitlines():
+                if re.match(r"^\[[a-fA-F0-9\-]{8,36}\]", line.strip()):
+                    if current_entry:
+                        entries.append("\n".join(current_entry))
+                    current_entry = [line]
+                else:
+                    if current_entry:
+                        current_entry.append(line)
+            if current_entry:
+                entries.append("\n".join(current_entry))
+
+            if not entries:
+                return text
+
+            scored_entries = []
+            for idx, entry in enumerate(entries):
+                entry_lower = entry.lower()
+                entry_words = set(re.findall(r"\w+", entry_lower))
+                overlap = len(query_words.intersection(entry_words))
+                sub_matches = sum(1 for qw in query_words if qw in entry_lower)
+                eq_matches = sum(100 for eq in eq_ids_in_query if eq in entry.upper())
+                
+                # Boost if this specific evidence UUID is explicitly cited in the query/chat
+                id_match = re.match(r"^\[([a-fA-F0-9\-]{8,36})\]", entry.strip())
+                citation_boost = 0
+                if id_match:
+                    eid = id_match.group(1)
+                    if eid in ev_ids_in_query:
+                        citation_boost = 50000
+                
+                # Recency boost (drop oldest first if score ties, newer = higher index)
+                recency_boost = (idx / max(1, len(entries))) * 10.0
+                
+                score = float(overlap + 5 * sub_matches + eq_matches + citation_boost + recency_boost)
+                scored_entries.append((score, entry))
+
+            scored_entries.sort(key=lambda x: x[0], reverse=True)
+
+            non_evidence_len = len(before) + len(after) + len(start_marker) + len(end_marker) + 100
+            remaining_char_budget = char_limit - non_evidence_len
+
+            packed_entries = []
+            current_len = 0
+            for score, entry in scored_entries:
+                entry_len = len(entry) + 1
+                if current_len + entry_len > remaining_char_budget:
+                    break
+                packed_entries.append(entry)
+                current_len += entry_len
+
+            new_ledger = "\n" + "\n".join(packed_entries) + "\n"
+            return f"{before}{start_marker}{new_ledger}{end_marker}{after}"
+
+        new_messages = []
+        for m in messages:
+            new_m = m.copy()
+            if m.get("content"):
+                new_m["content"] = prune_text(m["content"])
+            new_messages.append(new_m)
+
+        new_system_msgs = None
+        if system_msgs:
+            new_system_msgs = []
+            for m in system_msgs:
+                new_m = m.copy()
+                if m.get("content"):
+                    new_m["content"] = prune_text(m["content"])
+                new_system_msgs.append(new_m)
+
+        return new_messages, new_system_msgs
+
+    @classmethod
+    def quarantine_values(cls, session_key: str, values: List[str]):
+        quarantine_values(session_key, values)
+
     async def ask(
         self,
         messages: List[Dict[str, str]],
@@ -269,6 +496,20 @@ class UnifiedLLM(BaseModel):
         stream_as: str = "message",
         channel: str = "chat"
     ) -> Message:
+        # P1 Task 6: cross-turn hallucination quarantine
+        session_key = get_session_key(messages)
+        quarantined = _QUARANTINE_BLOCKLIST.get(session_key) if session_key else None
+        if quarantined:
+            q_list = ", ".join(f"'{q}'" for q in quarantined)
+            q_instruction = f"\n\nCRITICAL SYSTEM BLOCKLIST: Do NOT mention any of the following values/IDs: {q_list}."
+            if system_msgs:
+                system_msgs = [m.copy() for m in system_msgs]
+                system_msgs[-1]["content"] += q_instruction
+            else:
+                system_msgs = [{"role": "system", "content": q_instruction.strip()}]
+
+        # Budget and prune context before send
+        messages, system_msgs = self._prune_and_budget_context(messages, system_msgs, channel)
         """
         Send a request. If a Bedrock model is mapped for this channel, route to Bedrock.
         Otherwise fall through to the legacy REASONING_AGENT.
@@ -279,8 +520,10 @@ class UnifiedLLM(BaseModel):
 
         bedrock_model = BEDROCK_MODEL_MAP.get(channel)
         if bedrock_model and (os.getenv("BEDROCK_API_KEY") or os.getenv("AWS_ACCESS_KEY_ID") or os.getenv("AWS_PROFILE")):
-            return await self._ask_bedrock(
-                model_id=bedrock_model,
+            # Fix 14a: honour explicit override_model when caller requests a specific model.
+            _effective_model = override_model or bedrock_model
+            response = await self._ask_bedrock(
+                model_id=_effective_model,
                 system_prompt=full_system_prompt,
                 messages=messages,
                 tools=tools,
@@ -288,12 +531,65 @@ class UnifiedLLM(BaseModel):
                 max_tokens=max_tokens,
                 channel=channel,
             )
+        else:
+            if _REASONING_AGENT is None:
+                raise RuntimeError(f"[UnifiedLLM] No Bedrock model for channel '{channel}' and no legacy Reasoning Agent initialised. Check BEDROCK_MODEL_MAP or set LLM_PROVIDER.")
+            response = await self._ask_provider(_REASONING_AGENT, full_system_prompt, messages, tools, tool_choice, override_model, max_tokens=max_tokens, stream_as=stream_as, channel=channel)
+            if response.content and "LLM Error" in response.content:
+                raise RuntimeError(response.content)
 
-        if _REASONING_AGENT is None:
-            raise RuntimeError(f"[UnifiedLLM] No Bedrock model for channel '{channel}' and no legacy Reasoning Agent initialised. Check BEDROCK_MODEL_MAP or set LLM_PROVIDER.")
-        response = await self._ask_provider(_REASONING_AGENT, full_system_prompt, messages, tools, tool_choice, override_model, max_tokens=max_tokens, stream_as=stream_as, channel=channel)
-        if response.content and "LLM Error" in response.content:
-            raise RuntimeError(response.content)
+        # Post-process response to replace quarantined values
+        if response and response.content and quarantined:
+            for q in quarantined:
+                escaped_q = re.escape(q)
+                pattern = rf"\b{escaped_q}\b"
+                try:
+                    response.content = re.sub(pattern, "[unverified]", response.content)
+                except Exception:
+                    response.content = response.content.replace(q, "[unverified]")
+
+        # P3 Task 11: Looping response detector
+        if response and response.content and session_key:
+            last_resp = _RESPONSE_HISTORY.get(session_key)
+            norm_content = " ".join(response.content.strip().lower().split())
+            norm_last = " ".join(last_resp.strip().lower().split()) if last_resp else ""
+            
+            if norm_content and norm_content == norm_last:
+                logger.warning(f"[LoopDetector] Detected duplicate response in session {session_key}: {response.content[:80]}...")
+                loop_correction = {
+                    "role": "user",
+                    "content": "CORRECTION: Your previous response was a duplicate. Provide a different reasoning path and a highly specific analysis."
+                }
+                # Create a fresh copy to modify to avoid mutating original list
+                reg_messages = list(messages) + [loop_correction]
+                
+                if bedrock_model and (os.getenv("BEDROCK_API_KEY") or os.getenv("AWS_ACCESS_KEY_ID") or os.getenv("AWS_PROFILE")):
+                    _effective_model = override_model or bedrock_model
+                    response = await self._ask_bedrock(
+                        model_id=_effective_model,
+                        system_prompt=full_system_prompt,
+                        messages=reg_messages,
+                        tools=tools,
+                        tool_choice=tool_choice,
+                        max_tokens=max_tokens,
+                        channel=channel,
+                    )
+                else:
+                    response = await self._ask_provider(_REASONING_AGENT, full_system_prompt, reg_messages, tools, tool_choice, override_model, max_tokens=max_tokens, stream_as=stream_as, channel=channel)
+                    if response.content and "LLM Error" in response.content:
+                        raise RuntimeError(response.content)
+
+                if response and response.content and quarantined:
+                    for q in quarantined:
+                        escaped_q = re.escape(q)
+                        pattern = rf"\b{escaped_q}\b"
+                        try:
+                            response.content = re.sub(pattern, "[unverified]", response.content)
+                        except Exception:
+                            response.content = response.content.replace(q, "[unverified]")
+
+            if response and response.content:
+                _RESPONSE_HISTORY[session_key] = response.content
         return response
 
     async def chat(self, messages: List[Dict[str, str]], **kwargs) -> Message:
@@ -368,6 +664,10 @@ class UnifiedLLM(BaseModel):
         """
         attempts = 0
         current_messages = list(messages)
+        # Fix 14b: track whether we've already switched to fallback model after
+        # the first parse failure. Avoids three retries on the same model that
+        # already produced unparseable output.
+        _fallback_override: Optional[str] = None
 
         while attempts <= retries:
             try:
@@ -376,6 +676,7 @@ class UnifiedLLM(BaseModel):
                     system_msgs=system_msgs,
                     stream_as=stream_as,
                     channel=channel,
+                    override_model=_fallback_override,
                 )
                 content = response.content or "{}"
 
@@ -434,11 +735,32 @@ class UnifiedLLM(BaseModel):
                     except json.JSONDecodeError:
                         pass
 
+                # Channel-specific prose coercion — last resort before retry
+                # Nova Lite/Micro may respond with prose instead of {"tier":2}
+                _coerced = _coerce_prose_to_json(channel, response.content or "")
+                if _coerced is not None:
+                    logger.info(f"[UnifiedLLM] Prose coercion succeeded for channel='{channel}'")
+                    return _coerced
+
                 raise json.JSONDecodeError("No valid JSON found", content[:100], 0)
 
             except json.JSONDecodeError as e:
                 attempts += 1
-                logger.warning(f"[UnifiedLLM] JSON parse failed (attempt {attempts}/{retries+1}): {e}")
+                raw_preview = (response.content or "")[:200] if 'response' in locals() else ""
+                logger.warning(f"[UnifiedLLM] JSON parse failed (attempt {attempts}/{retries+1}): {e} | raw='{raw_preview}'")
+
+                # Fix 14b: on first parse failure, switch to mapped fallback model
+                # rather than re-prompting the primary model up to `retries` times.
+                if _fallback_override is None:
+                    _primary_model = BEDROCK_MODEL_MAP.get(channel)
+                    if _primary_model:
+                        _fb = BEDROCK_FALLBACK_MAP.get(_primary_model)
+                        if _fb and _fb != _primary_model:
+                            _fallback_override = _fb
+                            logger.info(
+                                f"[UnifiedLLM] ask_json: switching to fallback model "
+                                f"'{_fb}' after first parse failure on channel='{channel}'"
+                            )
 
                 if attempts <= retries:
                     repair_prompt = "Your previous response was not valid JSON. Return ONLY the valid JSON object. No markdown, no explanation."
@@ -471,6 +793,7 @@ class UnifiedLLM(BaseModel):
         import asyncio
 
         region = os.getenv("AWS_BEDROCK_REGION", os.getenv("AWS_DEFAULT_REGION", "us-east-1"))
+        logger.info(f"[Bedrock] channel='{channel}' model='{model_id}' region='{region}'")
 
         # ── Build shared Converse payload ─────────────────────────────────────
         def _build_payload() -> Dict[str, Any]:
@@ -526,6 +849,30 @@ class UnifiedLLM(BaseModel):
                     merged.append({"role": msg["role"], "content": list(msg["content"])})
             converse_msgs = merged
 
+            # Collect all toolResult IDs present in user turns
+            result_ids: set = set()
+            for msg in converse_msgs:
+                if msg["role"] == "user":
+                    for blk in msg.get("content", []):
+                        tr = blk.get("toolResult")
+                        if tr:
+                            result_ids.add(tr.get("toolUseId", ""))
+
+            # Strip orphaned toolUse blocks from assistant turns (no matching toolResult).
+            # Bedrock rejects a conversation where toolUse has no paired toolResult.
+            for msg in converse_msgs:
+                if msg["role"] == "assistant":
+                    cleaned = []
+                    for blk in msg["content"]:
+                        tu = blk.get("toolUse")
+                        if tu and tu.get("toolUseId") not in result_ids:
+                            continue  # orphaned — drop it
+                        cleaned.append(blk)
+                    msg["content"] = cleaned if cleaned else [{"text": "[tool call omitted]"}]
+
+            # Drop any message that ended up with empty content (keeps alternation valid)
+            converse_msgs = [m for m in converse_msgs if m.get("content")]
+
             payload: Dict[str, Any] = {"modelId": model_id, "messages": converse_msgs}
             if system_prompt:
                 payload["system"] = [{"text": system_prompt}]
@@ -552,10 +899,13 @@ class UnifiedLLM(BaseModel):
         payload = _build_payload()
 
         # ── Auth path 1: BEDROCK_API_KEY via httpx ────────────────────────────
-        # Cross-region inference IDs (us./eu./ap. prefix) require boto3 path — httpx URL can't route them.
+        # Only Anthropic models accept x-api-key auth on the Bedrock endpoint.
+        # Cross-region inference IDs (us./eu./ap. prefix) also require boto3.
+        # All other providers (Nova, Kimi, Minimax, GLM, etc.) must use boto3 IAM.
         api_key = os.getenv("BEDROCK_API_KEY")
         _is_cross_region = model_id.startswith(("us.", "eu.", "ap."))
-        if api_key and not _is_cross_region:
+        _is_anthropic = "anthropic" in model_id
+        if api_key and not _is_cross_region and _is_anthropic:
             import httpx
             url = f"https://bedrock-runtime.{region}.amazonaws.com/model/{model_id}/converse"
             headers = {
@@ -597,7 +947,10 @@ class UnifiedLLM(BaseModel):
             return client.converse(**payload)
 
         try:
-            response = await asyncio.to_thread(_call_boto3)
+            response = await asyncio.wait_for(
+                asyncio.to_thread(_call_boto3),
+                timeout=60.0
+            )
         except Exception as e:
             error_str = str(e)
             # Adaptive mode handles most throttling; this catches residual bursts
@@ -606,13 +959,39 @@ class UnifiedLLM(BaseModel):
                     logger.warning(f"[Bedrock] ThrottlingException — retrying in {backoff_s}s ({model_id})")
                     await asyncio.sleep(backoff_s)
                     try:
-                        response = await asyncio.to_thread(_call_boto3)
+                        response = await asyncio.wait_for(
+                            asyncio.to_thread(_call_boto3),
+                            timeout=60.0
+                        )
                         return self._parse_bedrock_response(response, model_id, channel)
                     except Exception as retry_e:
                         if "ThrottlingException" not in str(retry_e) and "Too Many Requests" not in str(retry_e):
-                            return Message.assistant_message(f"Bedrock Error ({model_id}): {str(retry_e)}")
+                            break
                         error_str = str(retry_e)
                 logger.error(f"[Bedrock] Still throttled after 3 backoff retries ({model_id})")
+
+            # Fallback: try alternate model before giving up
+            fallback_model = BEDROCK_FALLBACK_MAP.get(model_id)
+            if fallback_model and fallback_model != model_id:
+                logger.warning(f"[Bedrock] Primary {model_id} failed. Trying fallback: {fallback_model}")
+                try:
+                    payload["modelId"] = fallback_model
+                    def _call_fallback():
+                        from botocore.config import Config
+                        client = boto3.client(
+                            "bedrock-runtime",
+                            region_name=region,
+                            config=Config(read_timeout=180, connect_timeout=10, retries={"max_attempts": 2, "mode": "adaptive"}),
+                        )
+                        return client.converse(**payload)
+                    response = await asyncio.wait_for(
+                        asyncio.to_thread(_call_fallback),
+                        timeout=45.0
+                    )
+                    return self._parse_bedrock_response(response, fallback_model, channel)
+                except Exception as fb_e:
+                    logger.error(f"[Bedrock] Fallback {fallback_model} also failed: {fb_e}")
+
             return Message.assistant_message(f"Bedrock Error ({model_id}): {error_str}")
 
         return self._parse_bedrock_response(response, model_id, channel)

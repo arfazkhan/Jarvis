@@ -146,12 +146,17 @@ class FleetIntelligence:
         """
         self.building_ids = building_ids
         
-        # Database path
+        # Database path. Honors ARVIS_DB_PATH for per-run isolation.
         if db_path is None:
-            db_dir = Path(__file__).parent / "data"
-            db_dir.mkdir(exist_ok=True)
-            db_path = str(db_dir / "arvis_bms.db")
-        
+            import os as _os
+            _env_db = _os.getenv("ARVIS_DB_PATH", "").strip()
+            if _env_db:
+                db_path = _env_db
+            else:
+                db_dir = Path(__file__).parent / "data"
+                db_dir.mkdir(exist_ok=True)
+                db_path = str(db_dir / "arvis_bms.db")
+
         self.db_path = db_path
         self._init_database()
         

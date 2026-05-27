@@ -173,13 +173,40 @@ class MLHandlerMixin:
         }
     
     async def _handle_find_similar_skills(self, args: Dict) -> Dict:
-        """Find similar skills via MemoryOrchestrator (T5), with semantic embeddings fallback."""
+        """Find similar skills via MemoryOrchestrator (T5), with semantic embeddings fallback.
+
+        Always returns canonical schema: skills, total_matches, query_embedding_used.
+        Error paths back-fill the keys to satisfy downstream schema validators (B11 fix).
+        """
         query = args.get("query")
         top_k = args.get("top_k", 5)
         equipment_type = args.get("equipment_type")
 
         if not query:
-            return {"error": "query is required"}
+            # B11: return canonical schema even on validation error
+            return {
+                "skills": [],
+                "total_matches": 0,
+                "query_embedding_used": False,
+                "error": "query is required",
+            }
+
+        def _normalize_skills_response(raw_results, used_embedding: bool, model_name: str):
+            """Normalize any results list to schema-compliant response."""
+            skills = []
+            for r in raw_results:
+                skills.append({
+                    "skill_id": r.get("skill_id", r.get("id", "")),
+                    "title": r.get("title", r.get("content", "")[:80]),
+                    "skill_type": r.get("skill_type", r.get("source", "operational")),
+                    "similarity_score": r.get("score", r.get("similarity_score", 0.0)),
+                    "description": r.get("description", r.get("content", "")),
+                })
+            return {
+                "skills": skills,
+                "total_matches": len(skills),
+                "query_embedding_used": used_embedding,
+            }
 
         # Mem-8: Primary path — MemoryOrchestrator T5 (institutional)
         _mo = getattr(self, "memory_orchestrator", None)
@@ -192,17 +219,13 @@ class MLHandlerMixin:
                     top_k=top_k,
                 )
                 if hits:
-                    raw = {
-                        "results": [
-                            {"skill_id": h.id, "score": h.confidence, "content": h.content,
-                             "source": h.source, "equipment_type": equipment_type}
-                            for h in hits
-                        ],
-                        "query": query,
-                        "equipment_type": equipment_type,
-                        "model": "MemoryOrchestrator:T5",
-                    }
-                    return _inject_lineage(raw, "semantic_skill_matcher", "orchestrator_t5")
+                    raw_results = [
+                        {"skill_id": h.id, "score": h.confidence, "content": h.content,
+                         "source": h.source, "equipment_type": equipment_type}
+                        for h in hits
+                    ]
+                    result = _normalize_skills_response(raw_results, True, "MemoryOrchestrator:T5")
+                    return _inject_lineage(result, "semantic_skill_matcher", "orchestrator_t5")
             except Exception as e:
                 logger.debug(f"find_similar_skills via orchestrator failed: {e}")
 
@@ -212,34 +235,65 @@ class MLHandlerMixin:
                 raw = await knowledge_base.find_similar_skills(
                     query=query, top_k=top_k, equipment_type=equipment_type
                 )
-                return _inject_lineage(raw, "semantic_skill_matcher", "sentence-transformers")
+                if isinstance(raw, dict) and "results" in raw:
+                    result = _normalize_skills_response(raw["results"], True, "sentence-transformers")
+                elif isinstance(raw, list):
+                    result = _normalize_skills_response(raw, True, "sentence-transformers")
+                else:
+                    result = _normalize_skills_response([], True, "sentence-transformers")
+                return _inject_lineage(result, "semantic_skill_matcher", "sentence-transformers")
             except Exception as e:
                 logger.error(f"Error finding similar skills: {e}")
-        
+
         try:
             from agent_commercial.ml.building_embeddings import SemanticSkillMatcher
             _matcher = SemanticSkillMatcher()
-            _matcher.load_model()  # loads persisted embeddings if available
+            _matcher.load_model()
             _results = _matcher.find_similar(query=query, top_k=top_k)
-            raw = {
-                "results": [{"skill_id": sid, "score": float(score)} for sid, score in _results],
-                "query": query,
-                "equipment_type": equipment_type,
-                "model": "SemanticSkillMatcher",
-            }
-            return _inject_lineage(raw, "semantic_skill_matcher", "sentence-transformers")
+            raw_results = [{"skill_id": sid, "score": float(score)} for sid, score in _results]
+            result = _normalize_skills_response(raw_results, True, "SemanticSkillMatcher")
+            return _inject_lineage(result, "semantic_skill_matcher", "sentence-transformers")
         except Exception as _e:
             logger.debug(f"SemanticSkillMatcher fallback failed: {_e}")
 
+        # ── Fix #2: Local Skillbook fallback ─────────────────────────────
+        # Same gap as query_skillbook handler — observation distiller writes
+        # to local Skillbook SQLite table that none of the above paths read.
+        # Query it directly as last resort so P1-distilled skills surface in
+        # P4+ queries instead of returning empty.
+        try:
+            from agent_commercial.skillbook import get_skillbook
+            _sb = get_skillbook("default")
+            await _sb.ensure_initialized()
+            _ctx: Dict[str, Any] = {"situation_query": query, "query": query,
+                                    "similarity_threshold": 0.2}
+            if equipment_type:
+                _ctx["equipment_type"] = equipment_type
+            _skills = await _sb.get_relevant_skills(_ctx, limit=top_k)
+            raw_results = []
+            for _s in _skills:
+                _sd = _s.to_dict()
+                raw_results.append({
+                    "skill_id": _sd.get("skill_id", ""),
+                    "title": _sd.get("title", ""),
+                    "skill_type": _sd.get("skill_type", "pattern"),
+                    "score": float(_sd.get("confidence", 0.5)),
+                    "description": _sd.get("description", ""),
+                })
+            if raw_results:
+                logger.info(
+                    f"[ML] find_similar_skills local-skillbook fallback returned "
+                    f"{len(raw_results)} skill(s) for query={query[:60]!r}"
+                )
+            result = _normalize_skills_response(raw_results, True, "local_skillbook_fallback")
+            return _inject_lineage(result, "semantic_skill_matcher", "local_skillbook")
+        except Exception as _sb_err:
+            logger.warning(f"Local skillbook fallback failed: {_sb_err}")
+
         return {
-            "ml_status": "unavailable",
-            "fallback": True,
-            "model_id": None,
-            "query": query,
-            "results": [],
-            "confidence": None,
-            "reason": "Semantic skill search requires knowledge_base with sentence embeddings.",
-            "required_for_ml": ["knowledge_base", "sentence-transformers"],
+            "skills": [],
+            "total_matches": 0,
+            "query_embedding_used": False,
         }
     
     async def _handle_benchmark_building_ml(self, args: Dict) -> Dict:

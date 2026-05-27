@@ -55,6 +55,7 @@ class SkillType(Enum):
     CONTRACTOR_NOTE = "contractor_note"
     SCHEDULE = "schedule"
     THRESHOLD = "threshold"
+    PROCEDURE = "procedure"
 
 
 class SkillStatus(Enum):
@@ -171,12 +172,18 @@ class BuildingSkillbook:
         self.reranker = CrossEncoderReranker()
         self.chunker = BMSChunker(chunk_size=600, overlap=100)
         
-        # Database path
+        # Database path. Honors ARVIS_DB_PATH so test harnesses can
+        # redirect skillbook to the same per-run isolated file as BMSDatabase.
         if db_path is None:
-            db_dir = Path(__file__).parent / "data"
-            db_dir.mkdir(exist_ok=True)
-            db_path = str(db_dir / "arvis_bms.db")
-        
+            import os as _os
+            _env_db = _os.getenv("ARVIS_DB_PATH", "").strip()
+            if _env_db:
+                db_path = _env_db
+            else:
+                db_dir = Path(__file__).parent / "data"
+                db_dir.mkdir(exist_ok=True)
+                db_path = str(db_dir / "arvis_bms.db")
+
         self.db_path = db_path
         self._async_conn: Optional[aiosqlite.Connection] = None
         self._lock = asyncio.Lock()
@@ -195,6 +202,7 @@ class BuildingSkillbook:
             
             # Enable WAL mode for high concurrency
             try:
+                await conn.execute("PRAGMA busy_timeout=5000")
                 await conn.execute("PRAGMA journal_mode=WAL")
                 await conn.execute("PRAGMA synchronous=NORMAL")
             except Exception as e:
@@ -224,6 +232,7 @@ class BuildingSkillbook:
         # Connect directly to avoid recursive lock in get_db
         async with aiosqlite.connect(self.db_path) as conn:
             # Enable WAL mode for high concurrency
+            await conn.execute("PRAGMA busy_timeout=5000")
             await conn.execute("PRAGMA journal_mode=WAL")
             await conn.execute("PRAGMA synchronous=NORMAL")
             
@@ -347,6 +356,7 @@ class BuildingSkillbook:
         Returns:
             List of created Skills
         """
+        await self.ensure_initialized()
         created_skills = []
         
         # Determine if we should chunk
@@ -615,8 +625,25 @@ class BuildingSkillbook:
                             except:
                                 d[col] = None
                     decisions.append(d)
-        return decisions
-    
+    async def query_skillbook(self,
+                              building_id: str,
+                              context: Dict[str, Any],
+                              equipment_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Query skillbook wrapper matching the interface called by InstitutionalStoreAdapter.
+        """
+        await self.ensure_initialized()
+        query_context = {
+            "query": context.get("query", ""),
+            "situation_query": context.get("query", ""),
+            "equipment_id": equipment_id,
+            "building_id": building_id,
+        }
+        skills = await self.get_relevant_skills(query_context)
+        return {
+            "skills": [skill.to_dict() for skill in skills]
+        }
+
     async def get_relevant_skills(self, 
                            context: Dict[str, Any],
                            limit: int = 10) -> List[Skill]:
@@ -646,9 +673,10 @@ class BuildingSkillbook:
         
         # 1.1: Semantic Match (if supported by context)
         semantic_ids = []
-        if self.matcher.is_available and context.get("situation_query"):
+        _semantic_query = context.get("situation_query") or context.get("query")
+        if self.matcher.is_available and _semantic_query:
             similar = self.matcher.find_similar(
-                context["situation_query"], 
+                _semantic_query,
                 top_k=limit,
                 threshold=context.get("similarity_threshold", 0.3)
             )

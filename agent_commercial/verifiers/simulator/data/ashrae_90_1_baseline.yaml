@@ -1,0 +1,238 @@
+# ASHRAE 90.1-2022 Minimum Efficiency Requirements — Liquid-Chilling Packages
+# ============================================================================
+#
+# Extracted from: ASHRAE-90.1-2022-.pdf, Table 6.8.1-3
+#                 "Liquid-Chilling Packages — Minimum Efficiency Requirements"
+#
+# Used by: simulator/chiller.py:validate_against_ashrae_minimum()
+#
+# COMPLIANCE LOGIC:
+#   For each chiller category, the chiller must meet EITHER Path A FL+IPLV
+#   OR Path B FL+IPLV (both metrics within the chosen path must be met).
+#
+# NOTES (from Table 6.8.1-3 footnotes):
+#   a. Centrifugal requirements adjusted for nonstandard conditions per
+#      Section 6.4.1.2.1.
+#   b. Both FL and IPLV must be met or exceeded within the chosen path.
+#   d. NA in Path B = only Path A applies.
+#   e. FL = full-load; IPLV.IP = part-load (integrated).
+#
+# UNITS:
+#   - Air-cooled, electrically operated: EER (Btu/Wh)
+#   - Liquid-cooled, electrically operated: kW/ton
+#   - Air-cooled absorption: COP (W/W)
+#   - Liquid-cooled absorption: COP (W/W)
+#
+# TEST PROCEDURE: AHRI 550/590 (for electrically operated)
+#                 AHRI 560 (for absorption)
+
+version: "2022.1"
+table_reference: "ASHRAE 90.1-2022 Table 6.8.1-3"
+source_document: "ASHRAE-90.1-2022-.pdf"
+
+# ============================================================================
+# Air-Cooled, Electrically Operated Chillers  (Units: EER, higher is better)
+# ============================================================================
+air_cooled_electrically_operated:
+  units: "EER (Btu/Wh)"
+  test_procedure: "AHRI 550/590"
+  brackets:
+    - capacity_tons: "<150"
+      path_a:
+        full_load_eer_min: 10.100
+        iplv_eer_min: 13.700
+      path_b:
+        full_load_eer_min: 9.700
+        iplv_eer_min: 15.800
+    - capacity_tons: ">=150"
+      path_a:
+        full_load_eer_min: 10.100
+        iplv_eer_min: 14.000
+      path_b:
+        full_load_eer_min: 9.700
+        iplv_eer_min: 16.100
+
+# ============================================================================
+# Liquid-Cooled, Electrically Operated Positive Displacement
+# (Screw, Scroll, Reciprocating)            Units: kW/ton, lower is better
+# ============================================================================
+liquid_cooled_positive_displacement:
+  units: "kW/ton"
+  test_procedure: "AHRI 550/590"
+  brackets:
+    - capacity_tons: "<75"
+      path_a:
+        full_load_max: 0.750
+        iplv_max: 0.600
+      path_b:
+        full_load_max: 0.780
+        iplv_max: 0.500
+    - capacity_tons: "75 to <150"
+      path_a:
+        full_load_max: 0.720
+        iplv_max: 0.560
+      path_b:
+        full_load_max: 0.750
+        iplv_max: 0.490
+    - capacity_tons: "150 to <300"
+      path_a:
+        full_load_max: 0.660
+        iplv_max: 0.540
+      path_b:
+        full_load_max: 0.680
+        iplv_max: 0.440
+    - capacity_tons: "300 to <600"
+      path_a:
+        full_load_max: 0.610
+        iplv_max: 0.520
+      path_b:
+        full_load_max: 0.625
+        iplv_max: 0.410
+    - capacity_tons: ">=600"
+      path_a:
+        full_load_max: 0.560
+        iplv_max: 0.500
+      path_b:
+        full_load_max: 0.585
+        iplv_max: 0.380
+
+# ============================================================================
+# Liquid-Cooled, Electrically Operated Centrifugal
+# ============================================================================
+liquid_cooled_centrifugal:
+  units: "kW/ton"
+  test_procedure: "AHRI 550/590"
+  brackets:
+    - capacity_tons: "<150"
+      path_a:
+        full_load_max: 0.610
+        iplv_max: 0.550
+      path_b:
+        full_load_max: 0.695
+        iplv_max: 0.440
+    - capacity_tons: "150 to <300"
+      path_a:
+        full_load_max: 0.610
+        iplv_max: 0.550
+      path_b:
+        full_load_max: 0.635
+        iplv_max: 0.400
+    - capacity_tons: "300 to <400"
+      path_a:
+        full_load_max: 0.560
+        iplv_max: 0.520
+      path_b:
+        full_load_max: 0.595
+        iplv_max: 0.390
+    - capacity_tons: "400 to <600"
+      path_a:
+        full_load_max: 0.560
+        iplv_max: 0.500
+      path_b:
+        full_load_max: 0.585
+        iplv_max: 0.380
+    - capacity_tons: ">=600"
+      path_a:
+        full_load_max: 0.560
+        iplv_max: 0.500
+      path_b:
+        full_load_max: 0.585
+        iplv_max: 0.380
+
+# ============================================================================
+# Absorption Chillers (FYI — not relevant to 30XA but included for completeness)
+# ============================================================================
+air_cooled_absorption_single_effect:
+  units: "COP (W/W)"
+  test_procedure: "AHRI 560"
+  path_a:
+    full_load_min: 0.600
+  path_b: NA
+
+liquid_cooled_absorption_single_effect:
+  units: "COP (W/W)"
+  test_procedure: "AHRI 560"
+  path_a:
+    full_load_min: 0.700
+  path_b: NA
+
+absorption_double_effect_indirect_fired:
+  units: "COP (W/W)"
+  test_procedure: "AHRI 560"
+  path_a:
+    full_load_min: 1.000
+    iplv_min: 1.050
+  path_b: NA
+
+absorption_double_effect_direct_fired:
+  units: "COP (W/W)"
+  test_procedure: "AHRI 560"
+  path_a:
+    full_load_min: 1.000
+    iplv_min: 1.000
+  path_b: NA
+
+# ============================================================================
+# Helper: AHRI 550/590 Standard Test Conditions
+# ============================================================================
+# Reproduced from AHRI 550/590 (referenced by Table 6.8.1-3)
+ahri_test_conditions:
+  evaporator_lwt_design_f: 44.0       # 6.67 C
+  evaporator_lwt_design_c: 6.67
+  evaporator_fouling_factor: 0.00010
+
+  # Condenser entering temperature varies by PLR and condenser type
+  load_schedule:
+    - plr: 1.00
+      water_cooled_ewt_f: 85.0        # 29.4 C
+      water_cooled_ewt_c: 29.4
+      air_cooled_edb_f: 95.0          # 35.0 C
+      air_cooled_edb_c: 35.0
+      weight: 0.01
+    - plr: 0.75
+      water_cooled_ewt_f: 75.0        # 23.9 C
+      water_cooled_ewt_c: 23.9
+      air_cooled_edb_f: 80.0          # 26.7 C
+      air_cooled_edb_c: 26.7
+      weight: 0.42
+    - plr: 0.50
+      water_cooled_ewt_f: 65.0        # 18.3 C
+      water_cooled_ewt_c: 18.3
+      air_cooled_edb_f: 65.0          # 18.3 C
+      air_cooled_edb_c: 18.3
+      weight: 0.45
+    - plr: 0.25
+      water_cooled_ewt_f: 65.0        # 18.3 C (constant below 50%)
+      water_cooled_ewt_c: 18.3
+      air_cooled_edb_f: 55.0          # 12.8 C
+      air_cooled_edb_c: 12.8
+      weight: 0.12
+
+  condenser_fouling_factor_water: 0.00025
+  condenser_fouling_factor_air: 0.00000
+
+# ============================================================================
+# IPLV Harmonic-Mean Formula
+# ============================================================================
+# Both kW/ton (lower better) and EER (higher better) variants:
+#
+#   For kW/ton:
+#     IPLV = 1 / ( 0.01/A + 0.42/B + 0.45/C + 0.12/D )
+#     where A, B, C, D are kW/ton at 100%, 75%, 50%, 25% PLR respectively.
+#
+#   For EER:
+#     IPLV.EER = 1 / ( 0.01/A + 0.42/B + 0.45/C + 0.12/D )
+#     where A, B, C, D are EER at 100%, 75%, 50%, 25% PLR respectively.
+#
+# IPLV.IP weights tested by AHRI:
+#   100% : 1% of seasonal operating hours
+#    75% : 42%
+#    50% : 45%
+#    25% : 12%
+iplv_formula:
+  type: "harmonic_mean_weighted"
+  weights:
+    - { plr: 1.00, weight: 0.01 }
+    - { plr: 0.75, weight: 0.42 }
+    - { plr: 0.50, weight: 0.45 }
+    - { plr: 0.25, weight: 0.12 }

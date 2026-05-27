@@ -1,0 +1,60 @@
+# Building Physics Parameters — Marina Heights Tower
+# West Bay, Doha, Qatar. 32 floors, 78,000 m² (gross).
+# Simulator uses 50,000 m² conditioned area for thermal calculations.
+
+version: "1.0.0"
+
+building:
+  id: "marina-heights"
+  name: "Marina Heights Tower"
+  floors: 32
+  gross_area_m2: 78000
+  conditioned_area_m2: 50000
+  area_per_floor_m2: 2437
+
+thermal_mass:
+  # Effective diurnal participation mass, NOT total structural mass.
+  # ~10 kJ/(m²·K) × 50,000 m² = 500 MJ/K
+  # Represents top 50mm concrete slab + furnishings participating in diurnal swing.
+  # Reference: Incropera §5.1 + CIBSE Guide A §5.6 (effective diurnal participation mass).
+  capacitance_j_per_k: 500000000
+  envelope_ua_w_per_k: 25000.0
+
+internal_gains:
+  equipment_w_per_m2: 15.0
+  lighting_w_per_m2: 10.0
+  total_w_per_m2: 25.0
+  occupancy_density_per_m2: 0.10
+  gain_per_person_w: 120.0
+
+chw_loop:
+  design_flow_lps: 120.0
+  design_delta_t_c: 5.0
+  design_head_kpa: 250.0
+  pump_efficiency: 0.75
+  n_pumps: 2
+  pump_kw: 45.0
+
+chillers:
+  count: 4
+  model: "Carrier 30XA400"
+  capacity_tr_each: 400
+  capacity_kw_each: 1409.6  # AHRI 550/590 rated; total plant = 4 × 1409.6 = 5638 kW
+  curves_file: "carrier_30xa_curves.yaml"
+
+ahus:
+  count: 12
+  config_file: "ahu_default.yaml"
+
+# Default operating conditions (Qatar mid-load, method-overridable)
+default_conditions:
+  oat_c: 38.0
+  zone_temp_c: 23.0
+  rat_c: 24.0
+  chwst_c: 7.0
+  chwrt_c: 12.0
+  fan_speed: 0.75
+  oa_damper: 0.20
+  plr: 0.70
+  chw_flow_fraction: 0.70
+  ecwt_c: 32.0

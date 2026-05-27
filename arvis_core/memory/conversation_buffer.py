@@ -49,9 +49,14 @@ class ConversationBuffer:
         self._init_db()
         self._restore_session()
     
+    def _get_connection(self):
+        """Get database connection using centralized get_sync_db factory."""
+        from agent_commercial.database import get_sync_db
+        return get_sync_db(self.db_path)
+    
     def _init_db(self):
         """Initialize SQLite for session persistence."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS sessions (
                     id TEXT PRIMARY KEY,
@@ -79,8 +84,7 @@ class ConversationBuffer:
     
     def _restore_session(self):
         """Restore the most recent active session on startup."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
+        with self._get_connection() as conn:
             # Find most recent session within timeout
             cutoff = datetime.now() - self.session_timeout
             row = conn.execute("""
@@ -129,7 +133,7 @@ class ConversationBuffer:
         self._history.clear()
         self._summary = None
         
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             conn.execute(
                 "INSERT INTO sessions (id, last_activity) VALUES (?, ?)",
                 (self._session_id, datetime.now())
@@ -157,7 +161,7 @@ class ConversationBuffer:
         self._history.append(message)
         
         # Persist to SQLite
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             conn.execute(
                 "INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)",
                 (self._session_id, role, content)
@@ -197,7 +201,7 @@ class ConversationBuffer:
                 self._summary = new_summary
         
         # Persist summary
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             conn.execute(
                 "UPDATE sessions SET summary = ? WHERE id = ?",
                 (self._summary, self._session_id)
@@ -236,7 +240,7 @@ class ConversationBuffer:
         self._history.clear()
         self._summary = None
         if self._session_id:
-            with sqlite3.connect(self.db_path) as conn:
+            with self._get_connection() as conn:
                 conn.execute("DELETE FROM messages WHERE session_id = ?", 
                            (self._session_id,))
                 conn.execute("DELETE FROM sessions WHERE id = ?",
@@ -255,8 +259,7 @@ class ConversationBuffer:
     
     def export_all(self) -> Dict:
         """Export all conversations (GDPR)."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
+        with self._get_connection() as conn:
             sessions = conn.execute("SELECT * FROM sessions").fetchall()
             
             data = []
@@ -286,7 +289,7 @@ class ConversationBuffer:
         self._summary = None
         self._session_id = None
         
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_connection() as conn:
             conn.execute("DELETE FROM messages")
             conn.execute("DELETE FROM sessions")
             conn.commit()

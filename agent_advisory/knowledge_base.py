@@ -135,6 +135,11 @@ class TechnicalKnowledgeBase:
             chunk_types: Filter by chunk types (table, procedure, parameters, etc.)
             limit: Maximum results to return
         """
+        if not query:
+            if equipment_id:
+                query = equipment_id
+            else:
+                return []
         where_filters = []
         expanded_query = query
         

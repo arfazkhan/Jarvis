@@ -229,6 +229,8 @@ def expand_query(query: str) -> str:
         "30XWP cooling capacity"   → "30XWP cooling capacity 30XW-P"
         "30XW.S specifications"    → "30XW.S specifications 30XW-S"
     """
+    if not query or not isinstance(query, str):
+        return ""
     expanded = query
     for pattern, replacement in SERIES_EXPANSIONS:
         matches = pattern.findall(query)

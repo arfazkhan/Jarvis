@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("arvis.ml.registry")
 
-DEFAULT_MODELS_DIR = Path(__file__).parent.parent / "data" / "models"
+DEFAULT_MODELS_DIR = Path(__file__).parent.parent.parent / "data" / "models"
 
 
 class ModelRegistry:

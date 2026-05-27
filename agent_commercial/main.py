@@ -115,6 +115,10 @@ class OpsCopilot:
         self.alarm_engine = AlarmEngine()
         self.energy_analyzer = EnergyAnalyzer()
         self.predictive_engine = PredictiveMaintenanceEngine()
+
+        # Operator activity feed for concurrent awareness
+        from agent_commercial.operator_activity import OperatorActivityFeed
+        self.activity_feed = OperatorActivityFeed()
         self.water_adapter = WaterMeterAdapter(
             baseline_m3_monthly=2000.0,
             building_id="BUILDING-01"
@@ -182,6 +186,7 @@ class OpsCopilot:
                 energy_analyzer=self.energy_analyzer,
                 predictive_engine=self.predictive_engine,
             )
+            self.llm_agent._activity_feed = self.activity_feed
         else:
             logger.info("Initializing Lite Cognitive Layer (BMSLLMAgent only, no swarm)...")
             self.llm_agent = BMSLLMAgent(
@@ -326,6 +331,85 @@ class OpsCopilot:
             logger.warning(f"MemoryOrchestrator init failed (non-critical): {_mo_err}")
             self.memory_orchestrator = None
 
+        # ── TerminalAdvisoryStore — persistent critical advisory registry ──
+        # Critical findings (life safety, predictive failure, compliance breach)
+        # MUST survive across swarm turns until operator acknowledges. Without
+        # this, operators can dismiss life-safety calls with one follow-up
+        # question because each turn starts a fresh swarm.
+        try:
+            from agent_commercial.terminal_advisory_store import TerminalAdvisoryStore
+            self.terminal_advisory_store = TerminalAdvisoryStore()
+            # Wire into Queen so post-synthesis detection + pre-swarm injection work
+            if hasattr(self.llm_agent, "queen") and self.llm_agent.queen:
+                self.llm_agent.queen.terminal_advisory_store = self.terminal_advisory_store
+            logger.info("[ARVIS] TerminalAdvisoryStore wired into Queen")
+        except Exception as _tas_err:
+            logger.warning(f"TerminalAdvisoryStore init failed (non-critical): {_tas_err}")
+            self.terminal_advisory_store = None
+
+        # ── B9: Autonomous Monitoring — Watchdog + Investigation Dispatcher ────
+        # AnomalyWatchdog computes per-point rolling Z-score on every BMS update
+        # and emits "anomaly_detected" events to EventBus. InvestigationDispatcher
+        # subscribes and routes anomalies into autonomous Queen swarm investigations.
+        # This makes ARVIS proactive (24/7 watchdog) instead of reactive (operator-prompted).
+        self._watchdog = None
+        self._dispatcher = None
+        self._event_bus = None
+        if not self.lite_mode:
+            try:
+                from arvis_core.event_bus.event_bus import EventBus
+                from agent_commercial.anomaly_watchdog import AnomalyWatchdog
+                from agent_commercial.investigation_dispatcher import InvestigationDispatcher
+
+                self._event_bus = EventBus()
+
+                # Physics hard-limit bounds (backstop for near-constant signals)
+                _physics_bounds = {
+                    "chw_supply": (4.0, 12.0),     # CHW supply temp (°C)
+                    "cop": (1.5, 7.0),             # COP plausibility
+                    "zone_temp": (18.0, 30.0),     # comfort zone (°C)
+                    "sat": (10.0, 22.0),           # supply air temp (°C)
+                    "condenser": (20.0, 40.0),     # condenser water (°C)
+                    "filter_dp": (0.0, 500.0),     # filter DP (Pa)
+                    "vibration": (0.0, 10.0),      # vibration (mm/s)
+                }
+
+                self._watchdog = AnomalyWatchdog(
+                    event_bus=self._event_bus,
+                    physics_bounds=_physics_bounds,
+                    min_history=30,
+                    cooldown_seconds=180,
+                    db_conn=None,
+                )
+
+                # Dispatcher routes anomaly events → Queen swarm
+                _queen = getattr(self.llm_agent, "queen", None)
+                _sse = getattr(self, "sse_broadcaster", None)
+                self._dispatcher = InvestigationDispatcher(
+                    queen=_queen,
+                    bms_state=self.state_engine,
+                    sse_broadcaster=_sse,
+                    memory_orchestrator=self.memory_orchestrator,
+                    event_bus=self._event_bus,
+                    max_concurrent=2,
+                    cooldown_per_equipment=300,
+                )
+
+                # Register watchdog on every point update
+                self.state_engine.on_point_update(self._watchdog.on_point_update)
+                # Register autonomous alarm investigation
+                self.state_engine.on_alarm(self._on_alarm_auto_investigate)
+
+                logger.info(
+                    "[ARVIS] B9 Autonomous Monitor active: AnomalyWatchdog "
+                    "+ InvestigationDispatcher wired, queue=2 max, 5min/equipment cooldown"
+                )
+            except Exception as _b9_err:
+                logger.warning(f"B9 Autonomous Monitor init failed (non-critical): {_b9_err}")
+                self._watchdog = None
+                self._dispatcher = None
+                self._event_bus = None
+
         # State
         self._running = False
         self._tasks = []
@@ -357,6 +441,13 @@ class OpsCopilot:
         """Start the Ops Copilot"""
         logger.info("Starting ARVIS Ops Copilot...")
 
+        if self._watchdog:
+            try:
+                self._watchdog.db_conn = await self.database._get_async_connection()
+                await self._watchdog.reload_thresholds()
+            except Exception as e:
+                logger.warning(f"Failed to initialize watchdog DB connection: {e}")
+
         self._running = True
 
         # Warm-start: restore previous state from DB snapshot
@@ -380,6 +471,8 @@ class OpsCopilot:
 
             # Feed alarm events to correlator for real-time correlation
             self.state_engine.on_alarm(self._on_alarm_for_correlator)
+            # Sync alarms injected via state_engine into alarm_engine (ensures tool handler finds them)
+            self.state_engine.on_alarm(self._on_alarm_sync_to_engine)
             logger.info("EventCorrelator wired: LLM + alarm callback active")
         except Exception as e:
             logger.debug(f"Event correlator warm-start skipped: {e}")
@@ -465,6 +558,29 @@ class OpsCopilot:
             logger.info("[Mem-7] IngestionWatcher started")
         except Exception as _iw_err:
             logger.warning(f"[Mem-7] IngestionWatcher init failed (non-critical): {_iw_err}")
+
+        # Register and start the ThresholdCalibrator service!
+        if not self.lite_mode:
+            try:
+                from agent_commercial.threshold_calibrator import ThresholdCalibrator
+                self.calibrator = ThresholdCalibrator(
+                    db_conn=await self.database._get_async_connection(),
+                    event_bus=self._event_bus,
+                    building_id="default"
+                )
+                self._tasks.append(
+                    asyncio.create_task(self._calibration_loop())
+                )
+                logger.info("[Calibrator] ThresholdCalibrator service started!")
+            except Exception as _cal_err:
+                logger.warning(f"ThresholdCalibrator init failed (non-critical): {_cal_err}")
+
+        # Terminal advisory escalation loop — hourly check for unack > 4h
+        if getattr(self, "terminal_advisory_store", None) is not None:
+            self._tasks.append(
+                asyncio.create_task(self._terminal_escalation_loop())
+            )
+            logger.info("[TerminalAdvisory] Escalation loop started (checks every 1h, threshold 4h)")
 
         logger.info(f"Ops Copilot started! API available at http://localhost:{self.api_port}/api/docs")
     
@@ -933,6 +1049,103 @@ class OpsCopilot:
             except Exception as e:
                 logger.error(f"Snapshot loop error: {e}")
 
+    async def _terminal_escalation_loop(self) -> None:
+        """
+        Periodic terminal advisory escalation check. Runs hourly. For each
+        ACTIVE advisory unacknowledged > 4h, fires escalation event (records
+        in store + logs warning). In production this would emit SMS/email; for
+        Marina pilot it's an auditable log + DB row.
+        """
+        while self._running:
+            try:
+                await asyncio.sleep(3600)  # 1 hour
+                if self.terminal_advisory_store is not None:
+                    escalated = await self.terminal_advisory_store.escalate_overdue(
+                        threshold_hours=4.0,
+                        building_id="default",
+                    )
+                    if escalated:
+                        logger.warning(
+                            f"[TerminalAdvisory] Escalation tick: {len(escalated)} advisory(ies) "
+                            f"surpassed 4h ack threshold — escalation events fired"
+                        )
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"[TerminalAdvisory] escalation loop error: {e}")
+
+    async def _calibration_loop(self) -> None:
+        """Periodic threshold calibration background loop."""
+        logger.info("[Calibrator] Background calibration loop started.")
+        
+        # Initial catch-up on startup so we have baselines immediately!
+        # Skip in simulator mode — scenarios will inject specific baselines manually.
+        if self.mode != "simulator":
+            try:
+                await self._run_digest_catchup()
+                await self.calibrator.run_calibration_cycle(trigger_source="startup")
+            except Exception as e:
+                logger.warning(f"[Calibrator] Initial startup calibration skipped: {e}")
+
+        last_checked_date = None
+        while self._running:
+            try:
+                await asyncio.sleep(60)  # Check every minute
+                
+                # Check current simulated date (from data_points)
+                current_date = None
+                query = "SELECT MAX(timestamp) as max_ts FROM data_points"
+                async with self.database._execute(query) as cursor:
+                    row = await cursor.fetchone()
+                    if row and row["max_ts"]:
+                        current_date = row["max_ts"][:10]
+
+                if current_date and current_date != last_checked_date:
+                    logger.info(f"[Calibrator] New date detected: {current_date}. Building daily digests...")
+                    # Build digest for the day that just completed!
+                    if last_checked_date:
+                        await self.calibrator.digest_builder.build_digest_for_date(last_checked_date)
+
+                    last_checked_date = current_date
+
+                    # Daily auto-rollback safety check BEFORE recalibration so
+                    # any blown calibrations from yesterday revert immediately.
+                    try:
+                        rolled = await self.calibrator.auto_rollback_check()
+                        if rolled:
+                            logger.warning(
+                                f"[Calibrator] Auto-rollback reverted {rolled} scope(s) "
+                                f"due to observed FP > 5x target."
+                            )
+                    except Exception as _rb_err:
+                        logger.error(f"[Calibrator] auto_rollback_check failed: {_rb_err}")
+
+                    await self.calibrator.run_calibration_cycle(trigger_source="daily_schedule")
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"[Calibrator] Error in background calibration loop: {e}")
+
+    async def _run_digest_catchup(self) -> None:
+        """Catch up digests for all raw telemetry currently in the database."""
+        logger.info("[Calibrator] Running daily digest catchup...")
+        query_dates = "SELECT DISTINCT SUBSTR(timestamp, 1, 10) as date_str FROM data_points"
+        async with self.database._execute(query_dates) as cursor:
+            rows = await cursor.fetchall()
+            dates = [r["date_str"] for r in rows if r["date_str"]]
+            
+        for d in sorted(dates):
+            # Check if digest already exists
+            check_query = "SELECT COUNT(*) as cnt FROM point_baselines WHERE date = ? AND building_id = ?"
+            async with self.database._execute(check_query, (d, "default")) as cursor:
+                row = await cursor.fetchone()
+                if row and row["cnt"] > 0:
+                    continue  # Already built
+            
+            logger.info(f"[Calibrator] Catching up digest for date: {d}")
+            await self.calibrator.digest_builder.build_digest_for_date(d)
+
     async def _memory_consolidation_loop(self) -> None:
         """Nightly memory consolidation — stale rule decay + episodic distillation + skillbook decay."""
         await asyncio.sleep(3600)  # wait 1h after startup before first run
@@ -1129,6 +1342,20 @@ class OpsCopilot:
             except Exception as _e:
                 logger.debug("Outcome measurement for %s failed: %s", outcome.get("outcome_id"), _e)
 
+    def _on_alarm_sync_to_engine(self, alarm) -> None:
+        """Sync alarms added via state_engine into alarm_engine for tool handler access."""
+        if not hasattr(self, "alarm_engine") or not self.alarm_engine:
+            return
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(self.alarm_engine.ingest_alarm(alarm))
+            else:
+                loop.run_until_complete(self.alarm_engine.ingest_alarm(alarm))
+        except Exception as e:
+            logger.debug(f"Alarm sync to engine failed (non-fatal): {e}")
+
     def _on_alarm_for_correlator(self, alarm) -> None:
         """Feed alarm events to EventCorrelator for real-time correlation."""
         if not hasattr(self, '_event_correlator') or not self._event_correlator:
@@ -1180,6 +1407,23 @@ class OpsCopilot:
             except Exception as _fe:
                 logger.debug("FAISS alarm store skipped: %s", _fe)
 
+    def _on_alarm_auto_investigate(self, alarm) -> None:
+        """B9 callback: fire autonomous investigation for critical/high alarms."""
+        if not self._dispatcher:
+            return
+        severity = getattr(alarm, "severity", None)
+        severity_str = getattr(severity, "value", str(severity)).lower() if severity else ""
+        if severity_str in ("critical", "high"):
+            try:
+                import asyncio
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(self._dispatcher.investigate_alarm(alarm))
+                else:
+                    loop.run_until_complete(self._dispatcher.investigate_alarm(alarm))
+            except Exception as e:
+                logger.debug(f"Autonomous alarm investigation failed (non-fatal): {e}")
+
     async def _run_correlation(self, event) -> None:
         """Run correlation analysis for a significant alarm event."""
         try:
@@ -1217,6 +1461,33 @@ class OpsCopilot:
     def get_system_prompt(self, language: str = "en") -> str:
         """Get the Ops Copilot system prompt"""
         return get_ops_copilot_prompt(language)
+
+    async def train_fdd_autoencoders(self) -> None:
+        """
+        Train unsupervised FDD autoencoders using historical telemetry.
+        """
+        logger.info("[ML-FDD] Bootstrapping unsupervised FDD VAE autoencoders...")
+        from agent_commercial.ml.fdd_autoencoder import get_fdd_engine
+        
+        equipment_types = ["chiller", "ahu", "vav", "cooling_tower"]
+        for eq_type in equipment_types:
+            try:
+                df = await self.state_engine.get_historical_telemetry(eq_type, days=28)
+                if df.empty:
+                    logger.warning(f"[ML-FDD] No historical telemetry for {eq_type}; skipping training.")
+                    continue
+                
+                fdd = get_fdd_engine(eq_type)
+                logger.info(f"[ML-FDD] Training FDD VAE for {eq_type} with {len(df)} rows of data...")
+                result = fdd.train(df)
+                if result.get("status") == "trained":
+                    version = fdd.save_model(result)
+                    logger.info(f"🎉 [ML-FDD] Successfully trained and saved VAE for {eq_type} (version: {version})")
+                else:
+                    logger.warning(f"[ML-FDD] VAE training for {eq_type} did not complete: {result}")
+            except Exception as e:
+                logger.error(f"❌ [ML-FDD] Error training VAE for {eq_type}: {e}", exc_info=True)
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════

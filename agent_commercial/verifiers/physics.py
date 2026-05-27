@@ -54,8 +54,34 @@ _BOUNDS = {
 _MAX_CAUSAL_HOPS = 4
 
 
+# Building ID aliases — map historical/display names to canonical slugs
+_BUILDING_ALIASES: Dict[str, str] = {
+    "QNB-TOWER-DOHA": "marina-heights",
+    "BUILDING-01": "marina-heights",
+    "Marina Heights Tower": "marina-heights",
+    "West Bay Tower": "marina-heights",
+}
+
+
 class PhysicsVerifier:
     """Deterministic physics validator. No LLM, no tolerance, no bypass."""
+
+    def __init__(self, building_id: str = "marina-heights") -> None:
+        self._simulator = None
+        self._last_ledger = None
+        slug = _BUILDING_ALIASES.get(building_id, building_id)
+        try:
+            from agent_commercial.verifiers.simulator import BuildingPhysicsSimulator, ViolationLedger
+            self._simulator = BuildingPhysicsSimulator(slug)
+            self._ViolationLedger = ViolationLedger
+        except Exception as e:
+            logger.debug(f"Physics simulator unavailable, bounds-only mode: {e}")
+
+    def get_constraint_prompt(self) -> Optional[str]:
+        """Return rich constraint prompt from last simulation for LLM regeneration."""
+        if self._last_ledger is not None and not self._last_ledger.passed:
+            return self._last_ledger.to_constraint_prompt()
+        return None
 
     def verify_evidence(self, evidence_payload: Dict[str, Any]) -> VerificationResult:
         """Verify a tool result payload against physics bounds."""
@@ -141,8 +167,25 @@ class PhysicsVerifier:
         """
         result = VerificationResult(passed=True)
 
+        # Extract narrative text if the input is a valid JSON to avoid matching JSON structural elements
+        import json
+        narrative_texts = []
+        try:
+            data = json.loads(advisory_text)
+            if isinstance(data, dict):
+                # Extract message fields
+                for adv in data.get("advisories", []):
+                    if isinstance(adv, dict) and "message" in adv:
+                        narrative_texts.append(adv["message"])
+                if "analysis" in data:
+                    narrative_texts.append(data["analysis"])
+        except Exception:
+            pass
+
+        scan_text = "\n".join(narrative_texts) if narrative_texts else advisory_text
+
         # Extract COP claims
-        cop_matches = re.findall(r"COP\s*(?:of|:|\s)\s*([\d.]+)", advisory_text, re.IGNORECASE)
+        cop_matches = re.findall(r"COP\s*(?:of|:|\s)\s*([\d.]+)", scan_text, re.IGNORECASE)
         for cop_str in cop_matches:
             try:
                 cop = float(cop_str)
@@ -160,7 +203,7 @@ class PhysicsVerifier:
             (r"(?:outdoor|outside|ambient)\s*(?:air)?\s*temp(?:erature)?\s*(?:of|:|\s)?\s*([\d.]+)\s*°?[cC]", "oat"),
         ]
         for pattern, bound_key in temp_patterns:
-            for m in re.finditer(pattern, advisory_text, re.IGNORECASE):
+            for m in re.finditer(pattern, scan_text, re.IGNORECASE):
                 try:
                     temp = float(m.group(1))
                     result.checks_run += 1
@@ -173,11 +216,31 @@ class PhysicsVerifier:
                     pass
 
         # Check causal chain depth
-        causal_result = self.verify_causal_chain(advisory_text)
+        causal_result = self.verify_causal_chain(scan_text)
         result.checks_run += causal_result.checks_run
         result.violations.extend(causal_result.violations)
         if causal_result.violations:
             result.passed = False
+
+        if self._simulator is not None:
+            try:
+                parsed = self._simulator.parse_advisory(advisory_text)
+                if parsed.has_actionable_change:
+                    sim_result = self._simulator.predict_advisory(parsed)
+                    result.checks_run += len(sim_result.outputs)
+                    for v in sim_result.violations:
+                        violation_str = f"{v.code}: {v.description}"
+                        if v.expected_value is not None and v.cited_value is not None:
+                            violation_str += f" (expected={v.expected_value:.2f}, cited={v.cited_value:.2f})"
+                        result.add_violation(violation_str)
+                    self._last_ledger = self._ViolationLedger(
+                        violations=sim_result.violations,
+                        checks_run=len(sim_result.outputs),
+                        simulation_outputs=sim_result.outputs,
+                        passed=sim_result.passed,
+                    )
+            except Exception as e:
+                logger.debug(f"Simulator check failed (non-fatal): {e}")
 
         return result
 

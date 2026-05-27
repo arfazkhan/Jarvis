@@ -51,6 +51,7 @@ if ARVIS_VERTICAL == "COMMERCIAL":
     from agent_commercial.bms_llm_agent import BMSLLMAgent
     from agent_unified.engines.real_bms import RealBMS # Used as adapter
     from agent_commercial.api.routes_omega import router as omega_router
+    from agent_commercial.api.routes_demo import router as demo_router
     from agent_commercial.api.sim_service import SimServiceMaster
     from agent_commercial.bms_state_engine import BMSStateEngine
     from agent_commercial.learning.learning_engine import BMSLearningEngine
@@ -219,6 +220,7 @@ elif ARVIS_VERTICAL == "COMMERCIAL":
     app.include_router(sensors.router, prefix="/api/v1/sensors", tags=["Sensors"])
     app.include_router(learning.router, prefix="/api/v1/learning", tags=["Learning"])
     app.include_router(omega_router)
+    app.include_router(demo_router)
 
 # Shared / Admin
 app.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin"])

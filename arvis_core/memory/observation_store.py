@@ -69,16 +69,8 @@ class ObservationStore:
     @contextmanager
     def _get_connection(self):
         """Context manager for database connections with WAL mode enabled."""
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        
-        # Enable WAL mode for high concurrency
-        try:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-        except sqlite3.Error as e:
-            logger.warning(f"Failed to enable WAL mode in ObservationStore: {e}")
-            
+        from agent_commercial.database import get_sync_db
+        conn = get_sync_db(self.db_path)
         try:
             yield conn
         finally:
