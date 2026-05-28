@@ -125,9 +125,14 @@ class ThresholdCalibrator:
         scopes_rolled_back = 0
 
         calibrations_upsert = []
+        _scope_cache: dict = {}  # scope_key → (floor, z, rejection_rate, promoted, reject_reason)
 
         # 2. Process each point
-        for pt in active_points:
+        _total_pts = len(active_points)
+        logger.info(f"[Calibration] Processing {_total_pts} active points (unique scope_keys will be cached)")
+        for _pt_idx, pt in enumerate(active_points):
+            if _pt_idx % 500 == 0 and _pt_idx > 0:
+                logger.info(f"[Calibration] {_pt_idx}/{_total_pts} points processed ({len(_scope_cache)} unique scopes)")
             point_id = pt["point_id"]
             eq_id = pt["equipment_id"]
             eq_type = pt["equipment_type"]
@@ -139,6 +144,15 @@ class ThresholdCalibrator:
             )
 
             if not digests:
+                continue
+
+            # Compute scope_key early so we can short-circuit duplicate work.
+            # type/equipment scopes are shared across many point_ids — skip re-computation.
+            scope_key = f"point:{point_id}" if resolved_scope == "point" else (
+                f"eq:{eq_id}" if resolved_scope == "equipment" else f"type:{eq_type}:{pt_type}"
+            )
+            if scope_key in _scope_cache:
+                calibrations_upsert.append(_scope_cache[scope_key])
                 continue
 
             rows_scanned += len(digests)
@@ -171,11 +185,6 @@ class ThresholdCalibrator:
             calibrated_z = await self._derive_z_threshold(
                 point_id, eq_id, eq_type, pt_type, recent_dates_all,
                 resolved_scope, digests, calibrated_floor,
-            )
-
-            # Generate shadow record
-            scope_key = f"point:{point_id}" if resolved_scope == "point" else (
-                f"eq:{eq_id}" if resolved_scope == "equipment" else f"type:{eq_type}:{pt_type}"
             )
 
             # Replay / Shadow Test — per-reading FP rate over last 7 days raw data.
@@ -215,7 +224,7 @@ class ThresholdCalibrator:
             next_due = (datetime.now() + timedelta(days=28)).isoformat()
 
             # Prepare transactional write
-            calibrations_upsert.append((
+            _row = (
                 self.building_id,
                 scope_key,
                 resolved_scope,
@@ -233,7 +242,9 @@ class ThresholdCalibrator:
                 now_str,
                 now_str if promoted else None,
                 next_due
-            ))
+            )
+            _scope_cache[scope_key] = _row
+            calibrations_upsert.append(_row)
 
         # 3. Upsert point_calibrations
         if calibrations_upsert:

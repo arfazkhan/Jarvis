@@ -587,7 +587,7 @@ class FeedbackProcessor:
         
         # 2. Feed OnlineLearner
         if self.online_learner:
-            self._feed_online_learner(rec, validation)
+            await self._feed_online_learner(rec, validation)
             results["actions_taken"].append("online_learner_updated")
         
         # 3. Store in memory
@@ -667,7 +667,7 @@ class FeedbackProcessor:
         except Exception as e:
             logger.error(f"Failed to update trust: {e}")
     
-    def _feed_online_learner(self, rec: Recommendation, validation: ValidationResult) -> None:
+    async def _feed_online_learner(self, rec: Recommendation, validation: ValidationResult) -> None:
         """Feed ground truth to OnlineLearner"""
         if not self.online_learner:
             return
@@ -678,7 +678,13 @@ class FeedbackProcessor:
             actual = validation.actual_values
             
             if prediction and actual:
-                self.online_learner.log_observation(prediction, actual)
+                await self.online_learner.log_observation(
+                    prediction_type=rec.recommendation_type or "general",
+                    predicted_values=prediction,
+                    actual_values=actual,
+                    equipment_id=rec.equipment_id or "",
+                    building_id=rec.building_id or ""
+                )
                 
         except Exception as e:
             logger.error(f"Failed to feed online learner: {e}")

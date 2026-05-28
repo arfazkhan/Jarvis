@@ -72,6 +72,7 @@ class CrossEncoderReranker:
                 "query": query,
                 "documents": documents,
                 "top_n": min(top_n, len(documents)),
+                "api_version": 2,
             })
             response = client.invoke_model(
                 modelId=self._model_id,

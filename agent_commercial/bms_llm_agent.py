@@ -493,7 +493,8 @@ class BMSLLMAgent:
             from agent_commercial.database import get_database
             import sqlite3
             db = get_database()
-            conn = sqlite3.connect(str(db.db_path))
+            conn = sqlite3.connect(str(db.db_path), timeout=30.0)
+            conn.execute("PRAGMA busy_timeout=60000")
             cursor = conn.execute(
                 "SELECT value FROM system_config WHERE key = 'pilot_start_date'"
             )
@@ -1906,9 +1907,75 @@ class BMSLLMAgent:
         State-machine triggered skillbook write — not LLM-optional.
         Called after every chat response that contains a confirmed diagnosis.
         """
+        # 1. Abort write if text contains unverified markers
+        unverified_markers = ["[unverified]", "[unverified_synthesis]"]
+        text_lower = text.lower()
+        if any(marker in text_lower for marker in unverified_markers):
+            logger.info("[Skillbook] Auto-write aborted: text contains unverified markers.")
+            return
+
         diagnosis = self._extract_fault_diagnosis(text, query)
         if diagnosis is None:
             return
+
+        # 2. Programmatic Memory Write-Gating for confirmed mechanical faults without physical inspection
+        # If diagnosis asserts 'confirmed mechanical faults' (e.g. 'physical slippage')
+        # without physical inspection/technician verification words in query or text,
+        # dynamically downgrade the description/title to qualitative, 'probable/inferred' terms.
+        mechanical_fault_words = ["slippage", "slip", "stuck", "mechanic", "physically", "broken", "failed", "failure", "clogged", "leak"]
+        inspection_words = ["inspection", "verified", "manual check", "inspected", "technician verified", "site visit", "physically checked"]
+        
+        title_lower = diagnosis.get("title", "").lower()
+        desc_lower = diagnosis.get("description", "").lower()
+        query_lower = query.lower()
+
+        has_mechanical_fault = any(w in title_lower or w in desc_lower for w in mechanical_fault_words)
+        
+        # Refined semantic physical inspection check:
+        # Exclude inspection/verification matches that are future-oriented recommendations
+        has_physical_inspection = False
+        if any(w in query_lower for w in inspection_words):
+            has_physical_inspection = True
+        else:
+            future_recommendation_patterns = [
+                r"\brecommend\b.*?\b(inspect|verify|check)\b",
+                r"\bshould\b.*?\b(inspect|verify|check)\b",
+                r"\buntil\b.*?\b(inspected|verified|checked)\b",
+                r"\bneed\s+to\b.*?\b(inspect|verify|check)\b",
+                r"\bto\s+be\b.*?\b(inspected|verified|checked)\b",
+                r"\bschedule\b.*?\b(inspect|verify|check)\b",
+                r"\badvise\b.*?\b(inspect|verify|check)\b",
+                r"\bsuggest\b.*?\b(inspect|verify|check)\b",
+                r"\brequire\b.*?\b(inspect|verify|check)\b"
+            ]
+            has_raw_inspection_word = any(w in text_lower for w in inspection_words)
+            if has_raw_inspection_word:
+                # If there are raw inspection words, ensure they are not part of a future recommendation
+                is_pure_recommendation = any(re.search(pat, text_lower, re.IGNORECASE) for pat in future_recommendation_patterns)
+                if not is_pure_recommendation:
+                    has_physical_inspection = True
+
+        if has_mechanical_fault and not has_physical_inspection:
+            logger.info("[Skillbook] Gating mechanical fault auto-write: no physical inspection found. Downgrading assertions to 'probable/inferred' qualitative language.")
+            
+            # Helper to downgrade confirmed statements
+            def downgrade_text(t: str) -> str:
+                # Replace confirmed/absolute claims with inferred/probable phrasing
+                t = re.sub(r'\bconfirmed\b', 'probable', t, flags=re.IGNORECASE)
+                t = re.sub(r'\bmechanical fault\b', 'inferred mechanical fault', t, flags=re.IGNORECASE)
+                t = re.sub(r'\bphysical slippage\b', 'probable mechanical slippage', t, flags=re.IGNORECASE)
+                t = re.sub(r'\b(is stuck|are stuck)\b', 'appears probable stuck', t, flags=re.IGNORECASE)
+                t = re.sub(r'\b(has failed|have failed)\b', 'probably failed', t, flags=re.IGNORECASE)
+                if not any(prefix in t.lower() for prefix in ["probable", "inferred", "suspected"]):
+                    t = f"Inferred/Probable: {t}"
+                return t
+
+            diagnosis["title"] = downgrade_text(diagnosis.get("title", ""))
+            diagnosis["description"] = downgrade_text(diagnosis.get("description", ""))
+            
+            # Downgrade confidence
+            diagnosis["confidence"] = min(diagnosis.get("confidence", 0.7), 0.5)
+
         try:
             result = await self.tool_handler.execute("add_to_skillbook", diagnosis)
             logger.info(

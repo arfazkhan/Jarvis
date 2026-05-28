@@ -37,10 +37,12 @@ EMBEDDING_DIM = EMBEDDING_CONFIG.get("embedding_dim", 384)
 _MODEL_SINGLETON: "SentenceTransformer | None" = None
 
 def _get_model():
-    global _MODEL_SINGLETON
-    if _MODEL_SINGLETON is None and SentenceTransformer is not None:
-        _MODEL_SINGLETON = SentenceTransformer(MODEL_NAME)
-    return _MODEL_SINGLETON
+    import sys
+    if not hasattr(sys, "_arvis_st_model_cache"):
+        sys._arvis_st_model_cache = {}
+    if MODEL_NAME not in sys._arvis_st_model_cache and SentenceTransformer is not None:
+        sys._arvis_st_model_cache[MODEL_NAME] = SentenceTransformer(MODEL_NAME)
+    return sys._arvis_st_model_cache.get(MODEL_NAME)
 
 
 class EmbeddingsStore:

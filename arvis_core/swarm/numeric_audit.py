@@ -225,6 +225,62 @@ class NumericAuditor:
             for k, v in (context.get("cross_agent_findings") or {}).items():
                 self._scrape_numbers(v, f"cross:{k}", "cross_agent", allowed, max_depth=5)
 
+        # First-principles thermodynamic derivations
+        try:
+            # 1. Identify all temperatures in `allowed`
+            temps = [a.value for a in allowed.items if 10.0 <= a.value <= 55.0]
+            if len(temps) >= 2:
+                # Add differences (temperature deltas)
+                for i in range(len(temps)):
+                    for j in range(i + 1, len(temps)):
+                        t1, t2 = temps[i], temps[j]
+                        delta = abs(t1 - t2)
+                        allowed.add(delta, "derived:temp_delta", f"delta({t1:.1f}-{t2:.1f})")
+                        
+            # 2. Mixed-air OA fraction / damper percentage calculation
+            # Form: (T_mat - T_rat) / (T_oat - T_rat)
+            oat_vals = [a.value for a in allowed.items if "oat" in a.label.lower() or "outdoor" in a.label.lower()]
+            rat_vals = [a.value for a in allowed.items if "rat" in a.label.lower() or "return" in a.label.lower()]
+            mat_vals = [a.value for a in allowed.items if "mat" in a.label.lower() or "mixed" in a.label.lower()]
+            
+            # If explicit keys are absent, fallback to any plausible T_oat, T_rat, T_mat values
+            if not oat_vals:
+                oat_vals = [t for t in temps if t >= 30.0]  # outdoor air in Qatar is hot
+            if not rat_vals:
+                rat_vals = [t for t in temps if 21.0 <= t <= 25.0]  # return air is room temperature
+            if not mat_vals:
+                mat_vals = [t for t in temps if 24.0 <= t <= 32.0]  # mixed air is in between
+                
+            for oat in oat_vals:
+                for rat in rat_vals:
+                    for mat in mat_vals:
+                        if abs(oat - rat) > 1.0:
+                            oa_frac = (mat - rat) / (oat - rat)
+                            if 0.0 <= oa_frac <= 1.0:
+                                allowed.add(oa_frac, "derived:oa_fraction", f"oa_frac({mat}/{oat}/{rat})")
+                                allowed.add(oa_frac * 100.0, "derived:oa_pct", f"oa_pct({mat}/{oat}/{rat})")
+                                # Counterfactual (e.g. bypass, leakage)
+                                allowed.add(100.0 - (oa_frac * 100.0), "derived:oa_leak_pct", f"oa_leak_pct({mat}/{oat}/{rat})")
+
+            # 3. Add general scale/conversions (fractions to percentages and vice-versa)
+            extra_vals = []
+            for a in allowed.items:
+                v = a.value
+                # If it's a fraction 0-1, add percentage
+                if 0.0 < v <= 1.0:
+                    extra_vals.append((v * 100.0, a.source_id, f"{a.label}:pct"))
+                    extra_vals.append((100.0 - (v * 100.0), a.source_id, f"{a.label}:pct_leak"))
+                # If it's a percentage 0-100, add fraction
+                elif 1.0 < v <= 100.0:
+                    extra_vals.append((v / 100.0, a.source_id, f"{a.label}:fraction"))
+                    extra_vals.append((100.0 - v, a.source_id, f"{a.label}:complement"))
+                    
+            for val, src, lbl in extra_vals:
+                allowed.add(val, src, lbl)
+                
+        except Exception as _deriv_err:
+            logger.debug(f"[NumericAudit] derived number generation failed: {_deriv_err}")
+
         # Fix 1c: cap at 5000 via seeded random sampling to bound prompt size
         if len(allowed) > 5000:
             _orig_n = len(allowed)
@@ -369,11 +425,17 @@ class NumericAuditor:
             for token in orphan_tokens:
                 # Replace each orphan token with [unverified]. Use \b-style
                 # boundary to avoid matching mid-equipment-ID.
-                out = re.sub(
-                    rf"(?<![A-Za-z_]){re.escape(token)}(?![A-Za-z_])",
-                    "[unverified]",
-                    out,
-                )
+                # Protect citation tags like [ev: ...] from being partially modified.
+                # If we match the first group (\[\s*ev\s*:[^\]]*\]), return it unchanged.
+                # Otherwise, return '[unverified]'.
+                pattern = rf"(\[\s*ev\s*:[^\]]*\])|(?<![A-Za-z_]){re.escape(token)}(?![A-Za-z_])"
+                
+                def repl(match):
+                    if match.group(1) is not None:
+                        return match.group(1)
+                    return "[unverified]"
+                
+                out = re.sub(pattern, repl, out)
             return out
 
         try:

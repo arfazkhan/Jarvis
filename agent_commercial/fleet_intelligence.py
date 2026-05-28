@@ -216,7 +216,8 @@ class FleetIntelligence:
     
     def update_metrics(self, building_id: str, metrics: Dict[str, float]) -> None:
         """Update metrics for a building."""
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, timeout=30.0) as conn:
+            conn.execute("PRAGMA busy_timeout=60000")
             for name, value in metrics.items():
                 conn.execute("""
                     INSERT OR REPLACE INTO fleet_metrics 
@@ -702,7 +703,8 @@ def get_fleet_intelligence(building_ids: Optional[List[str]] = None) -> FleetInt
                 from pathlib import Path
                 import sqlite3
                 db_path = str(Path(__file__).parent / "data" / "arvis_bms.db")
-                with sqlite3.connect(db_path) as conn:
+                with sqlite3.connect(db_path, timeout=30.0) as conn:
+                    conn.execute("PRAGMA busy_timeout=60000")
                     cursor = conn.execute("SELECT DISTINCT building_id FROM fleet_metrics")
                     building_ids = [row[0] for row in cursor.fetchall()]
             except Exception:

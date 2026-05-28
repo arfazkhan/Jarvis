@@ -169,7 +169,7 @@ class ConsensusEngine:
                     tool_observations={}
                 )
 
-        BFT_TIMEOUT_S = 15.0
+        BFT_TIMEOUT_S = 30.0
         tasks = {asyncio.ensure_future(run_vote(node)): node for node in quorum}
         done, pending = await asyncio.wait(tasks.keys(), timeout=BFT_TIMEOUT_S)
 

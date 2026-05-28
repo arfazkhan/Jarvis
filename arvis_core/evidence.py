@@ -38,6 +38,9 @@ class Evidence:
     plan_task_id: Optional[str] = None
     call_sig: Optional[str] = None
     summary: str = ""
+    # Equipment binding — set by snapshot promoter so ledger entries are unambiguously tied to one device
+    equipment_id: Optional[str] = None
+    equipment_type: Optional[str] = None
     # ML lineage (WS-M1/M2)
     is_ml_fallback: bool = False
     model_id: Optional[str] = None
@@ -106,6 +109,8 @@ class Evidence:
             call_sig=d.get("call_sig"),
             summary=d.get("summary", ""),
             is_ml_fallback=d.get("is_ml_fallback", False),
+            equipment_id=d.get("equipment_id"),
+            equipment_type=d.get("equipment_type"),
             model_id=d.get("model_id"),
             model_version=d.get("model_version"),
             algorithm=d.get("algorithm"),
@@ -127,6 +132,10 @@ class Evidence:
             "summary": self.summary,
             "is_ml_fallback": self.is_ml_fallback,
         }
+        if self.equipment_id is not None:
+            d["equipment_id"] = self.equipment_id
+        if self.equipment_type is not None:
+            d["equipment_type"] = self.equipment_type
         if self.model_id is not None:
             d["model_id"] = self.model_id
         if self.model_version is not None:
@@ -218,7 +227,8 @@ class EvidenceLedger:
                 tag = f" [ML: {e.model_id}{ver_str}{drift_str}]"
             else:
                 tag = ""
-            lines.append(f"[{e.id}] {e.source_tool} ({e.node_name}){tag}: {e.summary}")
+            eq_tag = f" [EQ:{e.equipment_id}]" if e.equipment_id else ""
+            lines.append(f"[{e.id}]{eq_tag} {e.source_tool} ({e.node_name}){tag}: {e.summary}")
             if e.raw_payload and not e.raw_payload.get("error"):
                 payload = {k: v for k, v in e.raw_payload.items() if k != "_ml_lineage"}
                 lines.append(f"  DATA: {json.dumps(payload, default=str)[:400]}")

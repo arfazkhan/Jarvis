@@ -186,32 +186,45 @@ class BuildingSkillbook:
 
         self.db_path = db_path
         self._async_conn: Optional[aiosqlite.Connection] = None
-        self._lock = asyncio.Lock()
+        self._conn_lock = asyncio.Lock()   # guards _async_conn creation
+        self._lock = asyncio.Lock()        # guards _initialized state
         self._initialized = False
         
         logger.info(f"BuildingSkillbook initialized for {building_id}")
     
     from contextlib import asynccontextmanager
-    
+
+    async def _get_async_conn(self) -> aiosqlite.Connection:
+        """Return the persistent skillbook connection, creating it on first call."""
+        async with self._conn_lock:
+            if self._async_conn is None:
+                conn = await aiosqlite.connect(self.db_path)
+                conn.row_factory = aiosqlite.Row
+                try:
+                    await conn.execute("PRAGMA busy_timeout=60000")
+                    await conn.execute("PRAGMA journal_mode=WAL")
+                    await conn.execute("PRAGMA synchronous=NORMAL")
+                except Exception as e:
+                    logger.warning(f"Failed to set Skillbook PRAGMAs: {e}")
+                self._async_conn = conn
+            return self._async_conn
+
+    async def close(self) -> None:
+        """Close the persistent skillbook connection."""
+        async with self._conn_lock:
+            if self._async_conn is not None:
+                try:
+                    await self._async_conn.close()
+                except Exception:
+                    pass
+                finally:
+                    self._async_conn = None
+
     @asynccontextmanager
     async def get_db(self):
-        """Get or create asynchronous database connection with WAL mode enabled"""
-        async with self._lock:
-            conn = await aiosqlite.connect(self.db_path)
-            conn.row_factory = aiosqlite.Row
-            
-            # Enable WAL mode for high concurrency
-            try:
-                await conn.execute("PRAGMA busy_timeout=5000")
-                await conn.execute("PRAGMA journal_mode=WAL")
-                await conn.execute("PRAGMA synchronous=NORMAL")
-            except Exception as e:
-                logger.warning(f"Failed to enable WAL mode in Skillbook: {e}")
-                
-            try:
-                yield conn
-            finally:
-                await conn.close()
+        """Yield the persistent skillbook connection (no open/close per call)."""
+        conn = await self._get_async_conn()
+        yield conn
     
     async def ensure_initialized(self) -> None:
         """Initialize database tables for skillbook (Async)."""
@@ -229,98 +242,89 @@ class BuildingSkillbook:
     
     async def _init_database(self) -> None:
         """Initialize database tables for skillbook (Async)."""
-        # Connect directly to avoid recursive lock in get_db
-        async with aiosqlite.connect(self.db_path) as conn:
-            # Enable WAL mode for high concurrency
-            await conn.execute("PRAGMA busy_timeout=5000")
-            await conn.execute("PRAGMA journal_mode=WAL")
-            await conn.execute("PRAGMA synchronous=NORMAL")
-            
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS skills (
-                    skill_id TEXT PRIMARY KEY,
-                    building_id TEXT NOT NULL,
-                    skill_type TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    description TEXT NOT NULL,
-                    confidence REAL DEFAULT 0.5,
-                    verified_count INTEGER DEFAULT 0,
-                    failed_count INTEGER DEFAULT 0,
-                    status TEXT DEFAULT 'unverified',
-                    equipment_id TEXT,
-                    zone_id TEXT,
-                    contractor_id TEXT,
-                    evidence TEXT,
-                    context_signature TEXT,
-                    confidence_history TEXT,
-                    tags TEXT,
-                    created_at TEXT,
-                    updated_at TEXT,
-                    created_by TEXT DEFAULT 'system'
-                )
-            """)
-            
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_skills_building ON skills(building_id)")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_skills_equipment ON skills(equipment_id)")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_skills_type ON skills(skill_type)")
-            
-            # Unified Decisions Table
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS decisions (
-                    decision_id TEXT PRIMARY KEY,
-                    building_id TEXT NOT NULL,
-                    timestamp TEXT NOT NULL,
-                    context TEXT,
-                    chosen_action TEXT NOT NULL,
-                    alternatives TEXT,
-                    confidence REAL,
-                    reasoning TEXT,
-                    outcome TEXT,
-                    outcome_quality TEXT,
-                    event_id TEXT,
-                    trajectory TEXT
-                )
-            """)
-            
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_decisions_timestamp ON decisions(timestamp DESC)")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_decisions_building ON decisions(building_id)")
-    
-            # Tool Observability: Usage Table
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS tool_usage (
-                    usage_id TEXT PRIMARY KEY,
-                    building_id TEXT NOT NULL,
-                    timestamp TEXT NOT NULL,
-                    tool_name TEXT NOT NULL,
-                    args TEXT,
-                    success INTEGER,
-                    error TEXT,
-                    duration_ms REAL,
-                    relevant_skill_id TEXT,
-                    FOREIGN KEY (relevant_skill_id) REFERENCES skills(skill_id)
-                )
-            """)
-    
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_usage_name ON tool_usage(tool_name)")
-            
-            await conn.commit()
-            logger.info("Database schema initialized")
+        conn = await self._get_async_conn()
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS skills (
+                skill_id TEXT PRIMARY KEY,
+                building_id TEXT NOT NULL,
+                skill_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL,
+                confidence REAL DEFAULT 0.5,
+                verified_count INTEGER DEFAULT 0,
+                failed_count INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'unverified',
+                equipment_id TEXT,
+                zone_id TEXT,
+                contractor_id TEXT,
+                evidence TEXT,
+                context_signature TEXT,
+                confidence_history TEXT,
+                tags TEXT,
+                created_at TEXT,
+                updated_at TEXT,
+                created_by TEXT DEFAULT 'system'
+            )
+        """)
+
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_skills_building ON skills(building_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_skills_equipment ON skills(equipment_id)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_skills_type ON skills(skill_type)")
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS decisions (
+                decision_id TEXT PRIMARY KEY,
+                building_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                context TEXT,
+                chosen_action TEXT NOT NULL,
+                alternatives TEXT,
+                confidence REAL,
+                reasoning TEXT,
+                outcome TEXT,
+                outcome_quality TEXT,
+                event_id TEXT,
+                trajectory TEXT
+            )
+        """)
+
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_decisions_timestamp ON decisions(timestamp DESC)")
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_decisions_building ON decisions(building_id)")
+
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS tool_usage (
+                usage_id TEXT PRIMARY KEY,
+                building_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                tool_name TEXT NOT NULL,
+                args TEXT,
+                success INTEGER,
+                error TEXT,
+                duration_ms REAL,
+                relevant_skill_id TEXT,
+                FOREIGN KEY (relevant_skill_id) REFERENCES skills(skill_id)
+            )
+        """)
+
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_tool_usage_name ON tool_usage(tool_name)")
+
+        await conn.commit()
+        logger.info("Database schema initialized")
 
     async def _load_skills_to_matcher(self) -> None:
         """Load all skills from database into the semantic matcher (Async)."""
         try:
-            # Connect directly to avoid recursive lock in get_db
-            async with aiosqlite.connect(self.db_path) as conn:
-                conn.row_factory = aiosqlite.Row
-                async with conn.execute(
-                    "SELECT skill_id, title, description FROM skills WHERE building_id = ?",
-                    (self.building_id,)
-                ) as cursor:
-                    rows = await cursor.fetchall()
-                    for row in rows:
-                        text = f"{row['title']} {row['description']}"
-                        self.matcher.add_skill(row['skill_id'], text)
-                logger.info(f"Loaded {len(rows)} skills into semantic matcher.")
+            conn = await self._get_async_conn()
+            async with conn.execute(
+                "SELECT skill_id, title, description FROM skills WHERE building_id = ?",
+                (self.building_id,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                for row in rows:
+                    text = f"{row['title']} {row['description']}"
+                    self.matcher.add_skill(row['skill_id'], text)
+            logger.info(f"Loaded {len(rows)} skills into semantic matcher.")
         except Exception as e:
             logger.error(f"Error loading skills to matcher: {e}")
     

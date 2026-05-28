@@ -37,9 +37,12 @@ except ImportError:
 _ST_MODEL_CACHE: dict = {}
 
 def _get_st_model(model_name: str):
-    if model_name not in _ST_MODEL_CACHE and ST_AVAILABLE:
-        _ST_MODEL_CACHE[model_name] = SentenceTransformer(model_name)
-    return _ST_MODEL_CACHE.get(model_name)
+    import sys
+    if not hasattr(sys, "_arvis_st_model_cache"):
+        sys._arvis_st_model_cache = {}
+    if model_name not in sys._arvis_st_model_cache and ST_AVAILABLE:
+        sys._arvis_st_model_cache[model_name] = SentenceTransformer(model_name)
+    return sys._arvis_st_model_cache.get(model_name)
 
 try:
     from sklearn.metrics.pairwise import cosine_similarity

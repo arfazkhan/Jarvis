@@ -653,7 +653,8 @@ class EventCorrelator:
                 db = get_database()
 
             import sqlite3
-            conn = sqlite3.connect(str(db.db_path))
+            conn = sqlite3.connect(str(db.db_path), timeout=30.0)
+            conn.execute("PRAGMA busy_timeout=60000")
             cutoff = (datetime.now() - timedelta(hours=self.max_history_hours)).isoformat()
 
             cursor = conn.execute(

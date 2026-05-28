@@ -265,7 +265,7 @@ class InvestigationDispatcher:
             logger.info(f"[Dispatcher] Launching swarm: {query[:80]}...")
             result = await self.queen.execute_swarm(
                 query=query,
-                context=context,
+                context={**context, "autonomous": True},
                 channel="monitor",
             )
             return result

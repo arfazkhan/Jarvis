@@ -248,6 +248,11 @@ class SovereignHandlerMixin:
             except Exception as e:
                 logger.error(f"add_to_skillbook write failed: {e}")
 
+        import uuid
+        from datetime import datetime
+        skill_id = f"skill_{uuid.uuid4().hex[:8]}"
+        created_at = datetime.now().isoformat()
+
         if not written:
             # Fallback: try legacy add_skill if it exists
             if knowledge_base and hasattr(knowledge_base, "add_skill"):
@@ -261,10 +266,12 @@ class SovereignHandlerMixin:
 
         return {
             "status": "recorded" if written else "fallback_stored",
+            "skill_id": skill_id,
             "title": title,
             "skill_type": skill_type,
             "equipment_id": equipment_id,
             "confidence": confidence,
+            "created_at": created_at,
         }
     
     async def _handle_compare_to_fleet(self, args: Dict) -> Dict:

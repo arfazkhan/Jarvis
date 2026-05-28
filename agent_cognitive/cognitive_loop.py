@@ -501,7 +501,7 @@ class CognitiveLoop:
                 )
                 loop = asyncio.get_event_loop()
                 dream_result = loop.run_until_complete(
-                    dreaming_queen.execute_swarm(dream_query, {})
+                    dreaming_queen.execute_swarm(dream_query, {"autonomous": True})
                 )
                 dream_advice = dream_result.get("advice", "")
                 if dream_advice:

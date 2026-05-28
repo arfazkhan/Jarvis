@@ -166,12 +166,12 @@ class _VAEEncoder(nn.Module if TORCH_AVAILABLE else object):
         if not TORCH_AVAILABLE:
             return
         super().__init__()
-        self.fc_mu = nn.Linear(input_dim, latent_dim)
-        self.fc_log_var = nn.Linear(input_dim, latent_dim)
         self.encoder = nn.Sequential(
             nn.Linear(input_dim, 64), nn.ReLU(),
             nn.Linear(64, 32), nn.ReLU(),
         )
+        self.fc_mu = nn.Linear(32, latent_dim)
+        self.fc_log_var = nn.Linear(32, latent_dim)
 
     def forward(self, x):
         h = self.encoder(x)
@@ -296,7 +296,7 @@ class FDDAutoencoder:
             logger.warning("[FDD] PyTorch unavailable — VAE not built. ASHRAE rules only.")
             self._vae = None
             return
-        input_dim = len(self.feature_names) if hasattr(self, 'feature_names') and self.feature_names else self.n_features
+        input_dim = self.sequence_length * self.n_features
         self._vae = _VAE(input_dim=input_dim, latent_dim=self.latent_dim)
         self._vae_optimizer = torch.optim.Adam(self._vae.parameters(), lr=1e-3)
         logger.info(f"[FDD] PyTorch VAE built (input_dim={input_dim})")
@@ -345,8 +345,9 @@ class FDDAutoencoder:
         self.features = available_features
         self.n_features = len(self.features)
         
-        # Prepare data
-        data = historical_data[self.features].values
+        # Prepare data and impute missing values (NaNs)
+        clean_df = historical_data[self.features].ffill().bfill().fillna(0.0)
+        data = clean_df.values
         
         # Scale data
         if self.scaler:
@@ -359,8 +360,8 @@ class FDDAutoencoder:
         
         X = np.array(sequences)
         
-        if len(X) < 100:
-            logger.warning(f"Insufficient training data: {len(X)} sequences")
+        if len(X) < max(10, self.sequence_length * 2):
+            logger.warning(f"Insufficient training data: {len(X)} sequences (need {max(10, self.sequence_length * 2)})")
             return {"status": "failed", "error": "insufficient_data"}
         
         # Build model
@@ -477,7 +478,8 @@ class FDDAutoencoder:
             available_features = [f for f in self.features if f in current_data.columns]
 
             if len(available_features) == self.n_features:
-                data = current_data[self.features].values[-self.sequence_length:]
+                clean_df = current_data[self.features].ffill().bfill().fillna(0.0)
+                data = clean_df.values[-self.sequence_length:]
 
                 if self.scaler:
                     data = self.scaler.transform(data)
@@ -524,7 +526,8 @@ class FDDAutoencoder:
             try:
                 available_features = [f for f in self.features if f in current_data.columns]
                 if len(available_features) == self.n_features:
-                    data = current_data[self.features].values[-self.sequence_length:]
+                    clean_df = current_data[self.features].ffill().bfill().fillna(0.0)
+                    data = clean_df.values[-self.sequence_length:]
                     if self.scaler:
                         data = self.scaler.transform(data)
                     X_flat = data.reshape(1, self.sequence_length * self.n_features)
@@ -596,7 +599,8 @@ class FDDAutoencoder:
         if len(available_features) != self.n_features:
             return 80.0
 
-        data = current_data[self.features].values[-self.sequence_length:]
+        clean_df = current_data[self.features].ffill().bfill().fillna(0.0)
+        data = clean_df.values[-self.sequence_length:]
         if self.scaler:
             data = self.scaler.transform(data)
 

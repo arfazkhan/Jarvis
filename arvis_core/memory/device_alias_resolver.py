@@ -29,9 +29,12 @@ except Exception as e:
 _ALIAS_MODEL_CACHE: dict = {}
 
 def _get_alias_model(model_name: str):
-    if model_name not in _ALIAS_MODEL_CACHE and EMBEDDINGS_AVAILABLE:
-        _ALIAS_MODEL_CACHE[model_name] = SentenceTransformer(model_name)
-    return _ALIAS_MODEL_CACHE.get(model_name)
+    import sys
+    if not hasattr(sys, "_arvis_st_model_cache"):
+        sys._arvis_st_model_cache = {}
+    if model_name not in sys._arvis_st_model_cache and EMBEDDINGS_AVAILABLE:
+        sys._arvis_st_model_cache[model_name] = SentenceTransformer(model_name)
+    return sys._arvis_st_model_cache.get(model_name)
 
 # Try to import ChromaDB for learned aliases
 try:

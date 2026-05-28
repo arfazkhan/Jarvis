@@ -27,9 +27,13 @@ except ImportError:
 _ROUTER_MODEL_CACHE: dict = {}  # keyed by model_name
 
 def _get_router_model(model_name: str):
-    if model_name not in _ROUTER_MODEL_CACHE and SentenceTransformer is not None:
-        _ROUTER_MODEL_CACHE[model_name] = SentenceTransformer(model_name)
-    return _ROUTER_MODEL_CACHE.get(model_name)
+    import sys
+    if not hasattr(sys, "_arvis_st_model_cache"):
+        sys._arvis_st_model_cache = {}
+    if model_name not in sys._arvis_st_model_cache and SentenceTransformer is not None:
+        logger.info(f"[IntentRouter] Loading SentenceTransformer({model_name}) globally...")
+        sys._arvis_st_model_cache[model_name] = SentenceTransformer(model_name)
+    return sys._arvis_st_model_cache.get(model_name)
 
 
 class EmbeddingIntentRouter:

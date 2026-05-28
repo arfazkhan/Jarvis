@@ -582,6 +582,10 @@ class OpsCopilot:
             )
             logger.info("[TerminalAdvisory] Escalation loop started (checks every 1h, threshold 4h)")
 
+        # Fix 4: FDD VAE bootstrap — 30s delayed so BMS data flows first
+        self._tasks.append(asyncio.create_task(self._fdd_bootstrap_task()))
+        logger.info("[ML-FDD] FDD bootstrap task scheduled (fires in 30s)")
+
         logger.info(f"Ops Copilot started! API available at http://localhost:{self.api_port}/api/docs")
     
     async def stop(self) -> None:
@@ -954,9 +958,10 @@ class OpsCopilot:
                     if self.last_prediction:
                         # Feed the error signal back to the Online Learner
                         # This triggers self-repair if reality deviates from the mental model
-                        self.llm_agent.online_learner.log_observation(
-                            prediction=self.last_prediction,
-                            actual=current_state
+                        await self.llm_agent.online_learner.log_observation(
+                            prediction_type="world_model",
+                            predicted_values=self.last_prediction.features,
+                            actual_values=current_state
                         )
 
                     # 3. ANTICIPATE (Predictive Survival - Tier 11)
@@ -964,7 +969,7 @@ class OpsCopilot:
                     # "What will happen in 30 seconds?"
                     if hasattr(self.llm_agent, 'world_model'):
                         trajectory = self.llm_agent.world_model.simulate_action(
-                            current_state=current_state,
+                            initial_context=current_state,
                             action="wait", # Passive observation
                             horizon=1
                         )
@@ -1462,6 +1467,14 @@ class OpsCopilot:
         """Get the Ops Copilot system prompt"""
         return get_ops_copilot_prompt(language)
 
+    async def _fdd_bootstrap_task(self) -> None:
+        """Background task: waits for BMS data to accumulate, then trains FDD autoencoders."""
+        await asyncio.sleep(300)  # 5 min — enough for sim to write ~60+ rows per equipment
+        try:
+            await self.train_fdd_autoencoders()
+        except Exception as e:
+            logger.warning(f"[ML-FDD] Bootstrap failed (non-critical): {e}")
+
     async def train_fdd_autoencoders(self) -> None:
         """
         Train unsupervised FDD autoencoders using historical telemetry.
@@ -1478,6 +1491,10 @@ class OpsCopilot:
                     continue
                 
                 fdd = get_fdd_engine(eq_type)
+                min_rows = fdd.sequence_length * 2
+                if len(df) < min_rows:
+                    logger.warning(f"[ML-FDD] {eq_type}: only {len(df)} rows (need {min_rows}); skipping.")
+                    continue
                 logger.info(f"[ML-FDD] Training FDD VAE for {eq_type} with {len(df)} rows of data...")
                 result = fdd.train(df)
                 if result.get("status") == "trained":

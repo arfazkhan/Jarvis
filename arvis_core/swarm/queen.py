@@ -207,6 +207,16 @@ class QueenCoordinator(BaseModel):
         # ── SILENT PHASE P1 SUPPRESSOR ──────────────────────────────────────
         phase = (context or {}).get("phase", "")
         if "P1" in str(phase):
+            # Fix 5: autonomous dispatches (watchdog, cognitive loop, escalation) must
+            # emit nothing during P1 — silence is the correct output, not a sentence.
+            if (context or {}).get("autonomous", False):
+                logger.info(f"[Queen] P1 autonomous dispatch suppressed — silence.")
+                return {
+                    "advice": "",
+                    "context": context or {},
+                    "plan": plan,
+                    "decision": "SILENCE",
+                }
             logger.info(f"[Queen] Silent observation phase P1 detected ({phase}). Bypassing full Swarm for concise responder.")
             prompt = (
                 f"You are ARVIS, in a 28-day silent observation phase. A user asks: '{query}'\n"
@@ -344,6 +354,8 @@ class QueenCoordinator(BaseModel):
                             node_name="LiveSnapshotPromoter",
                             freshness=FreshnessStatus.RECENT,
                             summary=f"{_eq_id} standby — no live metrics",
+                            equipment_id=_eq_id,
+                            equipment_type=_eq_block.get("kind", ""),
                         ))
                         continue
                     # Fix 7: filter stale points (age > 300s) and detect majority-stale equipment
@@ -382,6 +394,8 @@ class QueenCoordinator(BaseModel):
                         summary=f"{_eq_id} live points: " + ", ".join(
                             f"{k}={v.get('value')}{v.get('unit','')}" for k, v in list(_fresh_points.items())[:5]
                         ),
+                        equipment_id=_eq_id,
+                        equipment_type=_eq_block.get("kind", ""),
                     ))
 
                 # Promote weather + meters as standalone evidence so H4 can verify
@@ -404,6 +418,69 @@ class QueenCoordinator(BaseModel):
                         freshness=FreshnessStatus.RECENT,
                         summary=f"Meters: {_meters}",
                     ))
+                
+                # ── Derived Thermodynamic Evidence Promotion ──────────────────
+                try:
+                    for _eq_block in _snapshot.get("equipment_status", [])[:60]:
+                        _eq_id = _eq_block.get("id", "unknown")
+                        _points = _eq_block.get("points", {}) or {}
+                        
+                        def _get_val(p):
+                            if isinstance(p, dict):
+                                return p.get("value")
+                            if isinstance(p, (int, float)):
+                                return p
+                            return None
+                            
+                        mat = _get_val(_points.get("MAT")) or _get_val(_points.get("mat"))
+                        oat = _get_val(_points.get("OAT")) or _get_val(_points.get("oat")) or _get_val(_weather.get("oat"))
+                        rat = _get_val(_points.get("RAT")) or _get_val(_points.get("rat"))
+                        oa_dmpr_cmd = _get_val(_points.get("OA_DMPR_CMD")) or _get_val(_points.get("oa_dmpr_cmd")) or _get_val(_points.get("OA_DMPR"))
+                        
+                        if mat is not None and oat is not None and rat is not None:
+                            divisor = oat - rat
+                            if abs(divisor) > 1.0:
+                                oa_frac = (mat - rat) / divisor
+                                if -0.15 <= oa_frac <= 1.15:
+                                    oa_frac = max(0.0, min(1.0, oa_frac))
+                                    expected_mat = None
+                                    if oa_dmpr_cmd is not None:
+                                        expected_mat = oa_dmpr_cmd * oat + (1.0 - oa_dmpr_cmd) * rat
+                                    
+                                    # Add structured Derived Evidence to ledger
+                                    plan.evidence.add(Evidence(
+                                        source_tool="derived:thermodynamics",
+                                        raw_payload={
+                                            "type": "derived_inference",
+                                            "formula": "mixed_air_balance",
+                                            "equipment_id": _eq_id,
+                                            "inputs": {
+                                                "OAT": round(oat, 2),
+                                                "RAT": round(rat, 2),
+                                                "MAT": round(mat, 2),
+                                                "OA_DMPR_CMD": round(oa_dmpr_cmd, 3) if oa_dmpr_cmd is not None else None
+                                            },
+                                            "result": {
+                                                "derived_effective_oa_fraction": round(oa_frac, 4),
+                                                "derived_effective_oa_pct": round(oa_frac * 100.0, 2),
+                                                "derived_effective_damper_leak_pct": round(100.0 - (oa_frac * 100.0), 2),
+                                                "expected_mat_at_commanded_oa": round(expected_mat, 2) if expected_mat is not None else None
+                                            },
+                                            "confidence": 0.95,
+                                            "traceable": True
+                                        },
+                                        node_name="ThermodynamicDeriver",
+                                        freshness=FreshnessStatus.RECENT,
+                                        summary=(
+                                            f"{_eq_id} derived thermodynamics: effective_oa={round(oa_frac * 100.0, 1)}% "
+                                            f"expected_mat={round(expected_mat, 1)}°C" if expected_mat is not None else f"{_eq_id} derived thermodynamics: effective_oa={round(oa_frac * 100.0, 1)}%"
+                                        ),
+                                        equipment_id=_eq_id,
+                                        equipment_type=_eq_block.get("kind", ""),
+                                    ))
+                except Exception as _deriv_err:
+                    logger.debug(f"[Queen] Derived thermodynamic evidence promotion failed: {_deriv_err}")
+
                 logger.info(
                     f"[Queen] Promoted LIVE_BMS_SNAPSHOT to evidence: "
                     f"equipment={len(_snapshot.get('equipment_status', []))} "
@@ -785,6 +862,10 @@ class QueenCoordinator(BaseModel):
                         "avg_confidence": 1.0,
                         "original_proposal": proposal_text
                     }
+                elif len(quorum) < 2 and risk_tier < 3:
+                    # Fix 6b: solo quorum on T2 — skip BFT entirely, no timeout waste
+                    logger.info("[Queen] T2 solo quorum — skipping BFT, downgrading to advisory tier")
+                    debate_result = {"status": "DOWNGRADED_TO_ADVISORY", "votes": [], "conditions": [], "avg_confidence": 0.0, "original_proposal": proposal_text}
                 else:
                     debate_result = await engine.run_debate(round_obj, quorum, channel=channel, plan=plan)
             except Exception as _debate_err:
@@ -1049,17 +1130,38 @@ class QueenCoordinator(BaseModel):
         # Still run H2 (claim verifier) since it catches non-numeric claims.
         # Safety-critical T3 always runs full pipeline regardless.
         _audit = getattr(self, "_last_numeric_audit", None)
+        _causal_keywords = {"cause", "leak", "slip", "fail", "damper", "valve", "shaft"}
+        _contains_causal = False
+        _contains_derived = False
+        if final_advice:
+            _fa_lower = final_advice.lower()
+            _contains_causal = any(kw in _fa_lower for kw in _causal_keywords)
+            _contains_derived = "derived" in _fa_lower or "inferred" in _fa_lower or "physics" in _fa_lower
+
+        _has_causal_or_derived = _contains_causal or _contains_derived
+
         if (
             _run_h4
             and _audit is not None
             and _audit.fully_clean
+            and not _has_causal_or_derived
             and verification_policy.get("risk_tier", 2) < 3
         ):
             logger.info(
                 f"[Queen] H4 skipped — NumericAudit was fully clean "
-                f"({_audit.summary()}). Saves ~30-70s on this turn."
+                f"({_audit.summary()}) and no causal/derived assertions detected. Saves ~30-70s on this turn."
             )
             _run_h4 = False
+        elif (
+            _run_h4
+            and _audit is not None
+            and _audit.fully_clean
+            and _has_causal_or_derived
+        ):
+            logger.info(
+                f"[Queen] H4 RUNNING (cannot skip) — NumericAudit was fully clean "
+                f"but advice contains causal/derived keywords: causal={_contains_causal}, derived={_contains_derived}"
+            )
 
         if _run_h4 or _run_h2:
             logger.info(f"[Queen] Verification pipeline START (H4={_run_h4}, H2={_run_h2})")
@@ -1089,42 +1191,58 @@ class QueenCoordinator(BaseModel):
                 logger.info("[Queen][H6] Physics verifier START")
             else:
                 logger.info("[Queen][H6] Physics verifier LIGHTWEIGHT — deterministic scan only, no regeneration")
-        try:
-            from agent_commercial.verifiers.physics import PhysicsVerifier
-            pv = PhysicsVerifier()
-            pv_result = pv.verify_advisory_text(final_advice)
-            if verification_policy["h6_physics"] and not pv_result.passed:
-                logger.warning(f"[Queen][H6] Physics verifier FAILED: {pv_result.violations}")
-                # Attempt regeneration with violations as constraints
-                violations_text = "\n".join(f"- {v}" for v in pv_result.violations)
-                regen_prompt = (
-                    f"Your previous advisory contained physics violations:\n{violations_text}\n\n"
-                    f"Original advisory:\n{final_advice}\n\n"
-                    "Regenerate the advisory removing or correcting the implausible claims. "
-                    "Do NOT include numbers that violate physics bounds. Output valid JSON only."
-                )
-                try:
-                    regen_result = await self.llm.ask_json(
-                        messages=[{"role": "user", "content": regen_prompt}],
-                        system_msgs=[{"role": "system", "content": "You are ARVIS Queen. Fix physics violations. Output JSON advisory only."}],
-                        channel="physics_regen",
+            try:
+                from agent_commercial.verifiers.physics import PhysicsVerifier
+                pv = PhysicsVerifier()
+                pv_result = pv.verify_advisory_text(final_advice)
+                if verification_policy["h6_physics"] and not pv_result.passed:
+                    logger.warning(f"[Queen][H6] Physics verifier FAILED: {pv_result.violations}")
+                    # Attempt regeneration with violations as constraints
+                    violations_text = "\n".join(f"- {v}" for v in pv_result.violations)
+                    regen_prompt = (
+                        f"Your previous advisory contained physics violations:\n{violations_text}\n\n"
+                        f"Original advisory:\n{final_advice}\n\n"
+                        "Regenerate the advisory removing or correcting the implausible claims. "
+                        "Do NOT include numbers that violate physics bounds. Output valid JSON only."
                     )
-                    regen_str = json.dumps(regen_result) if isinstance(regen_result, dict) else str(regen_result)
-                    # Verify regeneration passes
-                    regen_check = pv.verify_advisory_text(regen_str)
-                    if regen_check.passed:
-                        final_advice = self._enforce_read_only(regen_str)
-                        logger.info("[Queen][H6] Physics regeneration succeeded.")
-                    else:
-                        # Second fail → abstain
-                        logger.error(f"[Queen][H6] Physics regeneration still failed: {regen_check.violations}. Abstaining.")
+                    try:
+                        regen_result = await self.llm.ask_json(
+                            messages=[{"role": "user", "content": regen_prompt}],
+                            system_msgs=[{"role": "system", "content": "You are ARVIS Queen. Fix physics violations. Output JSON advisory only."}],
+                            channel="physics_regen",
+                        )
+                        regen_str = json.dumps(regen_result) if isinstance(regen_result, dict) else str(regen_result)
+                        # Verify regeneration passes
+                        regen_check = pv.verify_advisory_text(regen_str)
+                        if regen_check.passed:
+                            final_advice = self._enforce_read_only(regen_str)
+                            logger.info("[Queen][H6] Physics regeneration succeeded.")
+                        else:
+                            # Second fail → abstain
+                            logger.error(f"[Queen][H6] Physics regeneration still failed: {regen_check.violations}. Abstaining.")
+                            final_advice = json.dumps({
+                                "analysis": "Advisory contained physically implausible claims that could not be corrected.",
+                                "advisories": [{
+                                    "id": "physics-block-1",
+                                    "type": "system_notice",
+                                    "severity": "medium",
+                                    "message": "ARVIS detected implausible physics in its analysis and cannot deliver a verified advisory. Please re-query or consult your FM engineer.",
+                                    "confidence": 0.2,
+                                    "evidence_ids": [],
+                                    "impact": {"timeframe": "N/A", "energy_kwh": 0.0, "cost_qar": 0.0, "is_savings": False},
+                                    "recommended_action": {"type": "retry"},
+                                    "counterfactual_check": False
+                                }]
+                            })
+                    except Exception as _regen_err:
+                        logger.error(f"[Queen][H6] Physics regeneration error: {_regen_err}. Abstaining.")
                         final_advice = json.dumps({
-                            "analysis": "Advisory contained physically implausible claims that could not be corrected.",
+                            "analysis": "Physics verification failed and regeneration unavailable.",
                             "advisories": [{
                                 "id": "physics-block-1",
                                 "type": "system_notice",
                                 "severity": "medium",
-                                "message": "ARVIS detected implausible physics in its analysis and cannot deliver a verified advisory. Please re-query or consult your FM engineer.",
+                                "message": "ARVIS cannot verify the physical plausibility of its analysis. Please retry or consult FM engineer.",
                                 "confidence": 0.2,
                                 "evidence_ids": [],
                                 "impact": {"timeframe": "N/A", "energy_kwh": 0.0, "cost_qar": 0.0, "is_savings": False},
@@ -1132,28 +1250,12 @@ class QueenCoordinator(BaseModel):
                                 "counterfactual_check": False
                             }]
                         })
-                except Exception as _regen_err:
-                    logger.error(f"[Queen][H6] Physics regeneration error: {_regen_err}. Abstaining.")
-                    final_advice = json.dumps({
-                        "analysis": "Physics verification failed and regeneration unavailable.",
-                        "advisories": [{
-                            "id": "physics-block-1",
-                            "type": "system_notice",
-                            "severity": "medium",
-                            "message": "ARVIS cannot verify the physical plausibility of its analysis. Please retry or consult FM engineer.",
-                            "confidence": 0.2,
-                            "evidence_ids": [],
-                            "impact": {"timeframe": "N/A", "energy_kwh": 0.0, "cost_qar": 0.0, "is_savings": False},
-                            "recommended_action": {"type": "retry"},
-                            "counterfactual_check": False
-                        }]
-                    })
-            elif pv_result.passed:
-                logger.info("[Queen][H6] Physics verifier PASSED")
-            else:
-                logger.info(f"[Queen][H6] Physics violations observed but deferred by policy: {pv_result.violations}")
-        except Exception as _pv_err:
-            logger.warning(f"[Queen][H6] Physics verifier unavailable (non-fatal): {_pv_err}")
+                elif pv_result.passed:
+                    logger.info("[Queen][H6] Physics verifier PASSED")
+                else:
+                    logger.info(f"[Queen][H6] Physics violations observed but deferred by policy: {pv_result.violations}")
+            except Exception as _pv_err:
+                logger.warning(f"[Queen][H6] Physics verifier unavailable (non-fatal): {_pv_err}")
 
         # Surface structured tool calls for ChatResponse auditability
         _tool_calls = []
@@ -1340,6 +1442,7 @@ class QueenCoordinator(BaseModel):
 
         # Build evidence ledger block if plan has evidence
         evidence_ledger_block = ""
+        _allowed_ev_ids_block = ""
         if plan and len(plan.evidence) > 0:
             _ev_text = plan.evidence.to_synthesis_context()
             if len(_ev_text) > 20000:
@@ -1348,6 +1451,58 @@ class QueenCoordinator(BaseModel):
                 "\n\n--- EVIDENCE LEDGER (authoritative, from tool results) ---\n"
                 + _ev_text
                 + "\n--- END EVIDENCE LEDGER ---\n"
+            )
+            # Fix 2: hard whitelist of evidence IDs — injected before evidence ledger
+            # so LLM sees the constraint before reading the entries
+            _ev_id_list = [e.id for e in plan.evidence.get_all()]
+            _allowed_ev_ids_block = (
+                "\n\nALLOWED_EVIDENCE_IDS (EXACT — no others permitted):\n"
+                + ", ".join(_ev_id_list)
+                + "\nAny evidence_id not in this list is FORBIDDEN. Do NOT add characters, truncate, or guess IDs.\n"
+            )
+
+        # Fix 7: extract valid equipment IDs from snapshot for synthesis whitelist
+        _valid_equip_ids_block = ""
+        _valid_equipment_ids: list = []
+        _snap_for_equip = (context or {}).get("LIVE_BMS_SNAPSHOT")
+        if isinstance(_snap_for_equip, dict):
+            _valid_equipment_ids = [
+                b.get("id") for b in _snap_for_equip.get("equipment_status", []) if b.get("id")
+            ]
+        if _valid_equipment_ids:
+            _valid_equip_ids_block = (
+                "\n\nVALID_EQUIPMENT_IDS (sim inventory — no others exist):\n"
+                + ", ".join(_valid_equipment_ids)
+                + "\nAny equipment ID not in this list is FABRICATED. Do not reference it.\n"
+            )
+
+        # Extract available points per equipment for point capability awareness
+        _available_points_block = ""
+        _equip_points_map = {}
+        if isinstance(_snap_for_equip, dict):
+            for b in _snap_for_equip.get("equipment_status", []) or []:
+                eq_id = b.get("id")
+                if eq_id:
+                    pts = list((b.get("points") or {}).keys())
+                    if pts:
+                        _equip_points_map[eq_id] = pts
+        if _equip_points_map:
+            lines = [f"  - {eq_id}: {', '.join(pts)}" for eq_id, pts in _equip_points_map.items()]
+            _available_points_block = (
+                "\n\nAVAILABLE_TELEMETRY_POINTS (per active equipment):\n"
+                + "\n".join(lines)
+                + "\nYou are strictly forbidden from referencing, assuming, or diagnosing based on telemetry points that are not explicitly listed for a given equipment item. Do NOT perform 'ontology completion' by assuming missing sensors (e.g. OA_DMPR_POS or valve positions) exist.\n"
+            )
+
+        # Fix 1: extract query target equipment for pivot check and synthesis header
+        _EQUIP_RE_PRECHECK = re.compile(r'\b(?:CH|AHU|VAV|FCU|MTR|CHILLER)\b[-_\s]?\d+', re.IGNORECASE)
+        _query_target_equip_raw = set(_EQUIP_RE_PRECHECK.findall(original_query))
+        _query_target_block = ""
+        if _query_target_equip_raw:
+            _query_target_block = (
+                "\n\nQUERY TARGET EQUIPMENT: "
+                + ", ".join(sorted(_query_target_equip_raw))
+                + "\nAll primary advisories MUST address this equipment. Recommending actions on other equipment requires a non-empty pivot_reason.\n"
             )
 
         system_prompt = (
@@ -1436,7 +1591,12 @@ class QueenCoordinator(BaseModel):
             "   If the user asks for an aggregate that cannot be computed from evidence, "
             "say so explicitly and offer to fetch the missing data.\n"
             "17. STRICT CITATION COUNT ENFORCEMENT: For any stated count of instances N in the narrative of a message or analysis (e.g., '14 instances'), you MUST cite at least N unique evidence IDs inline or in the evidence_ids list. If you do not have at least N distinct evidence IDs in the ledger, you are strictly forbidden from asserting that specific count; instead, state only the count of instances that are directly backed by valid evidence IDs. Stated counts exceeding available citations will be deterministically capped or neutralized post-synthesis.\n"
-            "18. CONFIDENCE CALIBRATION: Never assert free-form percentage values or speculative confidence metrics (e.g. '80% confident' or '95% certainty') in the narrative 'message' or 'analysis' fields unless explicitly backed by a source tool result in the EVIDENCE LEDGER. Instead, represent confidence strictly using the JSON 'confidence' field and characterize narrative confidence qualitatively (e.g. 'High Confidence' if corroborated by multiple independent tool lines, 'Medium Confidence' if backed by single-source historical patterns, or 'Low Confidence' if relying on uncorroborated real-time alarms).\n"
+            "18. CONFIDENCE CALIBRATION & EPISTEMIC CERTAINTY TIERS: Never assert free-form percentage values or speculative confidence metrics (e.g. '80% confident' or '95% certainty') in narrative fields unless explicitly backed by a source tool result in the EVIDENCE LEDGER. Instead, represent confidence strictly using the JSON 'confidence' field. You MUST characterize causal/diagnostic certainty using these four explicit tiers:\n"
+            "   - [Observed] Direct sensor/telemetry evidence is explicitly present in the ledger.\n"
+            "   - [Inferred] Conclusion derived thermodynamically/logically from telemetry, but direct physical confirmation is absent. For example, if you suspect damper slippage from high MAT and SAT, state: 'Telemetry strongly suggests probable OA damper mechanical slippage, but direct physical confirmation is unavailable.' Do NOT call it a confirmed physical fact.\n"
+            "   - [Hypothesized] Plausible explanation but weakly evidenced (e.g., historical precedent, alarms with no matching point telemetry).\n"
+            "   - [Confirmed] Failure physically verified by a technician/inspection (MUST be explicitly documented in the ledger; never infer this tier).\n"
+            "   Always prefix narrative causal statements with these tiers or use qualitative uncertainty phrases. Write '[INFERRED] Telemetry suggests probable OA damper slippage.' instead of 'CONFIRMED mechanical slippage'.\n"
             "14. PRIOR TURN FINDINGS ARE AUTHORITATIVE: If grounding context contains "
             "'PRIOR_TURN_FINDINGS', these are conclusions ARVIS reached in earlier "
             "turns of the SAME conversation. You MUST:\n"
@@ -1510,6 +1670,8 @@ class QueenCoordinator(BaseModel):
             "   ### 📋 Recommendations\n"
             "   Under each heading, provide a concise, factual bulleted list of findings from the evidence ledger. If there are no items for a section, write 'None'.\n\n"
             "16. PIVOT DETECTION (STRICT): If the query mentions specific equipment (e.g., CH-02), all recommended actions and advisories must address that equipment. Recommending actions on unrelated equipment (e.g., AHU-05 or VAV-12) is considered a PIVOT. You MUST include a non-empty 'pivot_reason' field in the advisory object explaining the cascade or system interaction that justifies this pivot. If you recommend unrelated equipment without a valid 'pivot_reason', that recommendation will be rejected.\n\n"
+            "19. TELEMETRY POINT AWARENESS (STRICT): You must only refer to or base diagnoses on telemetry points that are explicitly listed in the AVAILABLE_TELEMETRY_POINTS block for each equipment. If a point is not listed (e.g., OA_DMPR_POS or valve positions), you are strictly forbidden from assuming it exists or referencing it as evidence. Never guess or complete the ontology.\n"
+            "20. NO INTERMEDIATE CALCULATION LEAKAGE (STRICT): You are strictly forbidden from leaking intermediate math calculations, algebraic formula traces, or step-by-step arithmetic (e.g., '(28.1 - 22.0) / (28.1 - 10.5) = 34.6%') into any narrative fields (such as 'message' or 'analysis'). All narrative statements must be qualitative and clear. Cite only final values and the evidence_id of the promoted 'derived_inference' Evidence items (e.g., 'expected MAT is 25.1°C [ev:derived_id]').\n\n"
             "--- FORMAT REQUIREMENT ---\n"
             "Return ONLY a valid JSON object. No narrative text.\n\n"
             "SCHEMA:\n"
@@ -1522,6 +1684,12 @@ class QueenCoordinator(BaseModel):
             "    \"message\": \"str: Narrative advisory for FM dashboard. Include operational markers here.\",\n"
             "    \"confidence\": float (0.0-1.0),\n"
             "    \"evidence_ids\": [\"str: exact IDs from EVIDENCE LEDGER above, e.g., 'd849acdc'\"],\n"
+            "    \"claims_epistemic\": [{\n"
+            "      \"claim\": \"str: specific assertion\",\n"
+            "      \"source_type\": \"str (observed | derived | inferred)\",\n"
+            "      \"evidence_strength\": \"str (direct | indirect)\",\n"
+            "      \"persistence_eligible\": bool\n"
+            "    }],\n"
             "    \"impact\": {\n"
             "        \"timeframe\": \"str\",\n"
             "        \"energy_kwh\": float,\n"
@@ -1635,6 +1803,10 @@ class QueenCoordinator(BaseModel):
             f"Grounding Context (FACTS): {context_str}\n\n"
             f"Agent Proposals:\n{proposals_text}"
             f"{cross_findings_text}"
+            f"{_query_target_block}"
+            f"{_allowed_ev_ids_block}"
+            f"{_valid_equip_ids_block}"
+            f"{_available_points_block}"
             f"{evidence_ledger_block}"
             f"{ml_interpretations_block}"
             f"{bft_conditions_block}"
@@ -1673,6 +1845,10 @@ class QueenCoordinator(BaseModel):
                     f"Grounding Context (FACTS): {context_str}\n\n"
                     f"Agent Proposals:\n{proposals_text}"
                     f"{cross_findings_text}"
+                    f"{_query_target_block}"
+                    f"{_allowed_ev_ids_block}"
+                    f"{_valid_equip_ids_block}"
+                    f"{_available_points_block}"
                     f"{_truncated_ledger}"
                     f"{ml_interpretations_block}"
                     f"{bft_conditions_block}"
@@ -1817,49 +1993,57 @@ class QueenCoordinator(BaseModel):
             # ── STRICT CITATION COUNT ENFORCEMENT ──────────────────────────────
             result_str = self._enforce_citation_counts(result_str, plan)
 
-            # ── P1 Task 5: Pivot detection in synthesis ─────────────────
+            # ── Pivot detection + equipment ID whitelist strip ───────────
             try:
                 _parsed = json.loads(result_str)
                 _EQUIP_ID_RE = re.compile(r'\b(?:CH|AHU|VAV|FCU|MTR|CHILLER)\b[-_\s]?\d+', re.IGNORECASE)
-                
+
                 def normalize_equip(name: str) -> str:
                     normalized = re.sub(r'[-_\s]', '', name).upper()
                     normalized = normalized.replace("CHILLER", "CH")
                     normalized = normalized.replace("METER", "MTR")
                     return normalized
 
-                query_equip = set(_EQUIP_ID_RE.findall(original_query))
-                evidence_equip = set()
-                if plan and len(plan.evidence) > 0:
-                    for _e in plan.evidence.get_all():
-                        evidence_equip.update(_EQUIP_ID_RE.findall(getattr(_e, "summary", "") or ""))
-                        evidence_equip.update(_EQUIP_ID_RE.findall(str(getattr(_e, "raw_payload", ""))))
-                
-                allowed_equip = {normalize_equip(x) for x in (query_equip | evidence_equip)}
-                
+                # Fix 1: pivot gate uses QUERY target only, not evidence equipment.
+                # Evidence equipment is informational context — not a free pass to pivot.
+                _query_target_norm = {normalize_equip(x) for x in _EQUIP_ID_RE.findall(original_query)}
+
+                # Fix 7: normalised valid inventory set for hallucinated-ID strip
+                _valid_inv_norm = {normalize_equip(x) for x in _valid_equipment_ids} if _valid_equipment_ids else set()
+
                 _filtered_advisories = []
                 for _adv in _parsed.get("advisories", []):
-                    # Gather text from advisory to scan for equipment
                     _adv_text = f"{_adv.get('message', '')} {json.dumps(_adv.get('recommended_action', ''))}"
-                    _adv_equip = set(_EQUIP_ID_RE.findall(_adv_text))
-                    _normalized_adv_equip = {normalize_equip(x) for x in _adv_equip}
-                    
-                    # If this advisory mentions equipment not in the query/evidence set
-                    _pivoted_equip = _normalized_adv_equip - allowed_equip
-                    if _pivoted_equip:
-                        _reason = _adv.get("pivot_reason", "")
-                        if not _reason or not str(_reason).strip():
+                    _adv_equip_norm = {normalize_equip(x) for x in _EQUIP_ID_RE.findall(_adv_text)}
+
+                    # Fix 1: pivot = advisory addresses equipment not in the query target
+                    if _query_target_norm:
+                        _pivoted = {e for e in _adv_equip_norm if not any(e in q or q in e for q in _query_target_norm)}
+                        if _pivoted:
+                            _reason = _adv.get("pivot_reason", "")
+                            if not _reason or not str(_reason).strip():
+                                logger.warning(
+                                    f"[Queen][PivotCheck] REJECTED advisory pivot to {_pivoted} "
+                                    f"(query target: {_query_target_norm}) — no pivot_reason."
+                                )
+                                continue
+
+                    # Fix 7: warn on equipment IDs outside sim inventory (don't reject — warn only)
+                    if _valid_inv_norm:
+                        _fabricated = {e for e in _adv_equip_norm if not any(e in v or v in e for v in _valid_inv_norm)}
+                        if _fabricated:
                             logger.warning(
-                                f"[Queen][PivotCheck] REJECTED advisory mentioning pivoted equipment {_pivoted_equip} "
-                                f"because it lacked a 'pivot_reason'."
+                                f"[Queen][EquipWhitelist] Advisory references fabricated equipment IDs "
+                                f"{_fabricated} — not in sim inventory. Stripping advisory."
                             )
                             continue
+
                     _filtered_advisories.append(_adv)
-                
+
                 _parsed["advisories"] = _filtered_advisories
                 result_str = json.dumps(_parsed)
             except Exception as _pivot_err:
-                logger.debug(f"[Queen] Pivot detection check failed (non-fatal): {_pivot_err}")
+                logger.debug(f"[Queen] Pivot/equipment-whitelist check failed (non-fatal): {_pivot_err}")
 
             return result_str
         except Exception as e:
@@ -2285,12 +2469,20 @@ class QueenCoordinator(BaseModel):
 
             # Attempt one regeneration with explicit correction instructions
             correction_prompt = (
-                "The following advisory was found to CONTRADICT live observations:\n\n"
-                f"CONTRADICTIONS:\n" + "\n".join(f"  - {c}" for c in contradictions) + "\n\n"
+                "The following advisory was found to CONTRADICT live observations or overcommit beyond evidence:\n\n"
+                f"CONTRADICTIONS/VIOLATIONS:\n" + "\n".join(f"  - {c}" for c in contradictions) + "\n\n"
                 f"ORIGINAL ADVISORY:\n{advice}\n\n"
                 f"EVIDENCE LEDGER:\n{evidence_summary}\n\n"
-                "Rewrite the advisory to be FAITHFUL to the evidence. "
-                "Remove or correct contradicted claims. Output ONLY the corrected JSON advisory."
+                "Rewrite the advisory to be 100% FAITHFUL to the evidence ledger.\n"
+                "Strict Constraints:\n"
+                "- Remove or correct all contradicted and unsupported claims entirely.\n"
+                "- Remove ANY claim that lacks direct evidence in the ledger.\n"
+                "- Do NOT infer beyond cited telemetry or upgrade inference into certainty language.\n"
+                "- Downgrade certainty where direct physical inspection/verification is absent. "
+                "For example, do NOT claim 'Physical OA damper slippage confirmed' unless the ledger explicitly "
+                "contains direct physical confirmation. Instead, state: 'Telemetry strongly suggests probable "
+                "OA damper mechanical slippage, but direct physical confirmation is unavailable.'\n"
+                "- Output ONLY the corrected JSON advisory."
             )
 
             logger.info("[Queen][H4] Calling 'faithfulness_correction' channel LLM")
@@ -2466,9 +2658,15 @@ class QueenCoordinator(BaseModel):
                         msg = adv.get("message", "")
                         for claim_text in unsupported_texts:
                             if len(claim_text) > 10 and claim_text[:30] in msg.lower():
+                                idx = msg.lower().index(claim_text[:30])
+                                # Proximity check: prevent prepending if already marked [unverified]
+                                prefix_chk = msg[max(0, idx - 20):idx]
+                                if "[unverified]" in prefix_chk:
+                                    continue
+                                target_text = msg[idx : idx + len(claim_text)]
                                 adv["message"] = msg.replace(
-                                    msg[msg.lower().index(claim_text[:30]):msg.lower().index(claim_text[:30]) + len(claim_text)],
-                                    f"[unverified] {msg[msg.lower().index(claim_text[:30]):msg.lower().index(claim_text[:30]) + len(claim_text)]}"
+                                    target_text,
+                                    f"[unverified] {target_text}"
                                 )
                     return json.dumps(adv_obj)
                 except Exception:

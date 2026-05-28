@@ -225,15 +225,33 @@ class BMSToolHandler(
         if not schema or not isinstance(result, dict) or result.get("error"):
             return result
         try:
-            missing_keys = [k for k in schema.get("properties", {}) if k not in result]
+            properties = schema.get("properties", {})
+            missing_keys = [k for k in properties if k not in result]
             if missing_keys:
                 result["_schema_violation"] = {
                     "missing_keys": missing_keys,
                     "tool": tool_name,
                 }
                 logger.warning(f"[ToolHandler] {tool_name} output missing keys: {missing_keys}")
-        except Exception:
-            pass
+                
+                # Backfill missing keys with type-safe schema-compliant defaults
+                for k in missing_keys:
+                    prop_def = properties[k]
+                    prop_type = prop_def.get("type")
+                    if prop_type == "array":
+                        result[k] = []
+                    elif prop_type == "object":
+                        result[k] = {}
+                    elif prop_type == "string":
+                        result[k] = ""
+                    elif prop_type in ("number", "integer"):
+                        result[k] = 0
+                    elif prop_type == "boolean":
+                        result[k] = False
+                    else:
+                        result[k] = None
+        except Exception as e:
+            logger.error(f"[ToolHandler] Output validation/backfilling failed: {e}")
         return result
 
     def _sanitize_args(self, tool_name: str, args: Any) -> Dict[str, Any]:

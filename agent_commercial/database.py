@@ -118,10 +118,11 @@ class BMSDatabase:
                 try:
                     # 10s timeout — Marina harness fires ~62k background point-persist
                     # tasks per phase via state-engine callback. Reduced to 10000ms per instructions.
-                    await self._async_conn.execute("PRAGMA busy_timeout=10000")
+                    await self._async_conn.execute("PRAGMA busy_timeout=60000")
                     await self._async_conn.execute("PRAGMA journal_mode=WAL")
                     await self._async_conn.execute("PRAGMA synchronous=NORMAL")
-                    await self._async_conn.execute("PRAGMA cache_size=-64000") # 64MB cache
+                    await self._async_conn.execute("PRAGMA cache_size=-64000")  # 64MB cache
+                    await self._async_conn.execute("PRAGMA wal_autocheckpoint=1000")
                     
                     # Ensure schema exists (Automatic Initialization)
                     await self._init_schema(self._async_conn)
@@ -853,37 +854,39 @@ class BMSDatabase:
     
     async def save_equipment(self, equipment: Dict[str, Any]) -> None:
         """Save or update equipment (Async)"""
-        conn = await self._get_async_connection()
-        
-        await conn.execute("""
-            INSERT OR REPLACE INTO equipment 
-            (equipment_id, name, equipment_type, status, location, runtime_hours, 
-             efficiency, last_maintenance, parent_equipment_id, metadata, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            equipment.get("equipment_id"),
-            equipment.get("name"),
-            equipment.get("equipment_type"),
-            equipment.get("status", "unknown"),
-            equipment.get("location"),
-            equipment.get("runtime_hours", 0),
-            equipment.get("efficiency"),
-            equipment.get("last_maintenance"),
-            equipment.get("parent_equipment_id"),
-            json.dumps(equipment.get("metadata", {})),
-            datetime.now().isoformat(),
-        ))
-        
-        await conn.commit()
+        async with self._write_lock:
+            conn = await self._get_async_connection()
+
+            await conn.execute("""
+                INSERT OR REPLACE INTO equipment
+                (equipment_id, name, equipment_type, status, location, runtime_hours,
+                 efficiency, last_maintenance, parent_equipment_id, metadata, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                equipment.get("equipment_id"),
+                equipment.get("name"),
+                equipment.get("equipment_type"),
+                equipment.get("status", "unknown"),
+                equipment.get("location"),
+                equipment.get("runtime_hours", 0),
+                equipment.get("efficiency"),
+                equipment.get("last_maintenance"),
+                equipment.get("parent_equipment_id"),
+                json.dumps(equipment.get("metadata", {})),
+                datetime.now().isoformat(),
+            ))
+
+            await conn.commit()
     
     async def update_equipment_runtime(self, equipment_id: str, hours_delta: float) -> None:
         """Increment runtime_hours for equipment by hours_delta."""
-        conn = await self._get_async_connection()
-        await conn.execute(
-            "UPDATE equipment SET runtime_hours = runtime_hours + ?, updated_at = ? WHERE equipment_id = ?",
-            (hours_delta, datetime.now().isoformat(), equipment_id),
-        )
-        await conn.commit()
+        async with self._write_lock:
+            conn = await self._get_async_connection()
+            await conn.execute(
+                "UPDATE equipment SET runtime_hours = runtime_hours + ?, updated_at = ? WHERE equipment_id = ?",
+                (hours_delta, datetime.now().isoformat(), equipment_id),
+            )
+            await conn.commit()
 
     async def get_equipment(self, equipment_id: str) -> Optional[Dict]:
         """Get equipment by ID (Async)"""
@@ -910,29 +913,25 @@ class BMSDatabase:
         hours_delta: float = 0.0,
         cycles_delta: int = 0,
     ) -> bool:
-        """Increment runtime_hours / start_stop_cycles on equipment (B10).
-
-        Called by state engine when a STATUS point flips or as a periodic
-        accumulator. Idempotent for hours_delta=0, cycles_delta=0.
-        Returns True if a row was updated.
-        """
+        """Increment runtime_hours / start_stop_cycles on equipment (B10)."""
         if not equipment_id:
             return False
         if hours_delta == 0 and cycles_delta == 0:
             return False
         try:
-            conn = await self._get_async_connection()
-            cursor = await conn.execute(
-                """
-                UPDATE equipment
-                SET runtime_hours = COALESCE(runtime_hours, 0) + ?,
-                    start_stop_cycles = COALESCE(start_stop_cycles, 0) + ?
-                WHERE equipment_id = ?
-                """,
-                (float(hours_delta), int(cycles_delta), equipment_id),
-            )
-            await conn.commit()
-            return (cursor.rowcount or 0) > 0
+            async with self._write_lock:
+                conn = await self._get_async_connection()
+                cursor = await conn.execute(
+                    """
+                    UPDATE equipment
+                    SET runtime_hours = COALESCE(runtime_hours, 0) + ?,
+                        start_stop_cycles = COALESCE(start_stop_cycles, 0) + ?
+                    WHERE equipment_id = ?
+                    """,
+                    (float(hours_delta), int(cycles_delta), equipment_id),
+                )
+                await conn.commit()
+                return (cursor.rowcount or 0) > 0
         except Exception as e:
             logger.debug(f"[DB] update_equipment_runtime failed for {equipment_id}: {e}")
             return False
@@ -1082,11 +1081,12 @@ class BMSDatabase:
     async def create_chat_session(self, session_id: str, title: str = "New Conversation") -> Optional[str]:
         """Create a new chat session."""
         now = datetime.now().isoformat()
-        conn = await self._get_async_connection()
         query = "INSERT INTO chat_sessions (session_id, title, created_at, updated_at) VALUES (?, ?, ?, ?)"
         try:
-            await conn.execute(query, (session_id, title, now, now))
-            await conn.commit()
+            async with self._write_lock:
+                conn = await self._get_async_connection()
+                await conn.execute(query, (session_id, title, now, now))
+                await conn.commit()
             return session_id
         except Exception as e:
             logger.error(f"Failed to create chat session: {e}")
@@ -1095,21 +1095,23 @@ class BMSDatabase:
     async def update_chat_session_timestamp(self, session_id: str) -> None:
         """Update the last activity timestamp for a chat session."""
         now = datetime.now().isoformat()
-        conn = await self._get_async_connection()
         try:
-            await conn.execute("UPDATE chat_sessions SET updated_at = ? WHERE session_id = ?", (now, session_id))
-            await conn.commit()
+            async with self._write_lock:
+                conn = await self._get_async_connection()
+                await conn.execute("UPDATE chat_sessions SET updated_at = ? WHERE session_id = ?", (now, session_id))
+                await conn.commit()
         except Exception as e:
             logger.error(f"Failed to update chat session timestamp: {e}")
 
     async def add_chat_message(self, session_id: str, message_id: str, role: str, content: str) -> bool:
         """Add a message to a specific chat session."""
         now = datetime.now().isoformat()
-        conn = await self._get_async_connection()
         query = "INSERT INTO chat_messages (message_id, session_id, role, content, timestamp) VALUES (?, ?, ?, ?, ?)"
         try:
-            await conn.execute(query, (message_id, session_id, role, content, now))
-            await conn.commit()
+            async with self._write_lock:
+                conn = await self._get_async_connection()
+                await conn.execute(query, (message_id, session_id, role, content, now))
+                await conn.commit()
             await self.update_chat_session_timestamp(session_id)
             return True
         except Exception as e:
@@ -1138,29 +1140,30 @@ class BMSDatabase:
     
     async def save_alarm(self, alarm: Dict[str, Any]) -> None:
         """Save or update an alarm (Async)"""
-        conn = await self._get_async_connection()
-        
-        await conn.execute("""
-            INSERT OR REPLACE INTO alarms 
-            (alarm_id, equipment_id, source_point_id, message, severity, state,
-             triggered_at, acknowledged_at, acknowledged_by, resolved_at, cluster_id, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            alarm.get("alarm_id"),
-            alarm.get("equipment_id"),
-            alarm.get("source_point_id"),
-            alarm.get("message"),
-            alarm.get("severity"),
-            alarm.get("state", "active"),
-            alarm.get("triggered_at", datetime.now().isoformat()),
-            alarm.get("acknowledged_at"),
-            alarm.get("acknowledged_by"),
-            alarm.get("resolved_at"),
-            alarm.get("cluster_id"),
-            json.dumps(alarm.get("metadata", {})),
-        ))
-        
-        await conn.commit()
+        async with self._write_lock:
+            conn = await self._get_async_connection()
+
+            await conn.execute("""
+                INSERT OR REPLACE INTO alarms
+                (alarm_id, equipment_id, source_point_id, message, severity, state,
+                 triggered_at, acknowledged_at, acknowledged_by, resolved_at, cluster_id, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                alarm.get("alarm_id"),
+                alarm.get("equipment_id"),
+                alarm.get("source_point_id"),
+                alarm.get("message"),
+                alarm.get("severity"),
+                alarm.get("state", "active"),
+                alarm.get("triggered_at", datetime.now().isoformat()),
+                alarm.get("acknowledged_at"),
+                alarm.get("acknowledged_by"),
+                alarm.get("resolved_at"),
+                alarm.get("cluster_id"),
+                json.dumps(alarm.get("metadata", {})),
+            ))
+
+            await conn.commit()
     
     async def get_active_alarms(self) -> List[Dict]:
         """Get all active alarms (Async)"""
@@ -1209,16 +1212,14 @@ class BMSDatabase:
         timestamp: datetime = None
     ) -> None:
         """Save energy meter reading (Async)"""
-        conn = await self._get_async_connection()
-        
-        ts = timestamp if isinstance(timestamp, str) else (timestamp or datetime.now()).isoformat()
-        
-        await conn.execute("""
-            INSERT INTO energy_readings (meter_id, value, unit, outdoor_temp, occupancy, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (meter_id, value, unit, outdoor_temp, occupancy, ts))
-        
-        await conn.commit()
+        async with self._write_lock:
+            conn = await self._get_async_connection()
+            ts = timestamp if isinstance(timestamp, str) else (timestamp or datetime.now()).isoformat()
+            await conn.execute("""
+                INSERT INTO energy_readings (meter_id, value, unit, outdoor_temp, occupancy, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (meter_id, value, unit, outdoor_temp, occupancy, ts))
+            await conn.commit()
     
     async def get_energy_today(self, meter_id: str = None) -> float:
         """Get total energy consumption for today (kWh) (Async)"""
@@ -1290,28 +1291,27 @@ class BMSDatabase:
     
     async def save_zone(self, zone: Dict[str, Any]) -> None:
         """Save or update zone configuration (Async)"""
-        conn = await self._get_async_connection()
-        
-        await conn.execute("""
-            INSERT OR REPLACE INTO zones 
-            (zone_id, name, floor, building, co2_point_id, vav_point_id, 
-             lighting_point_id, return_air_point_id, schedule_id, load_kw, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            zone.get("zone_id"),
-            zone.get("name"),
-            zone.get("floor"),
-            zone.get("building"),
-            zone.get("co2_point_id"),
-            zone.get("vav_point_id"),
-            zone.get("lighting_point_id"),
-            zone.get("return_air_point_id"),
-            zone.get("schedule_id"),
-            zone.get("load_kw", 2.0),
-            json.dumps(zone.get("metadata", {})),
-        ))
-        
-        await conn.commit()
+        async with self._write_lock:
+            conn = await self._get_async_connection()
+            await conn.execute("""
+                INSERT OR REPLACE INTO zones
+                (zone_id, name, floor, building, co2_point_id, vav_point_id,
+                 lighting_point_id, return_air_point_id, schedule_id, load_kw, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                zone.get("zone_id"),
+                zone.get("name"),
+                zone.get("floor"),
+                zone.get("building"),
+                zone.get("co2_point_id"),
+                zone.get("vav_point_id"),
+                zone.get("lighting_point_id"),
+                zone.get("return_air_point_id"),
+                zone.get("schedule_id"),
+                zone.get("load_kw", 2.0),
+                json.dumps(zone.get("metadata", {})),
+            ))
+            await conn.commit()
     
     async def get_all_zones(self) -> List[Dict]:
         """Get all zone configurations (Async)"""
@@ -1425,20 +1425,19 @@ class BMSDatabase:
         category_scores: Dict[str, float]
     ) -> None:
         """Save GSAS assessment score (Async)"""
-        conn = await self._get_async_connection()
-        
-        await conn.execute("""
-            INSERT INTO gsas_scores (building_id, overall_score, certification_level, category_scores, timestamp)
-            VALUES (?, ?, ?, ?, ?)
-        """, (
-            building_id,
-            overall_score,
-            certification_level,
-            json.dumps(category_scores),
-            datetime.now().isoformat(),
-        ))
-        
-        await conn.commit()
+        async with self._write_lock:
+            conn = await self._get_async_connection()
+            await conn.execute("""
+                INSERT INTO gsas_scores (building_id, overall_score, certification_level, category_scores, timestamp)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                building_id,
+                overall_score,
+                certification_level,
+                json.dumps(category_scores),
+                datetime.now().isoformat(),
+            ))
+            await conn.commit()
     
     async def get_latest_gsas_score(self, building_id: str = None) -> Optional[Dict]:
         """Get the most recent GSAS score (Async)"""
@@ -1501,19 +1500,16 @@ class BMSDatabase:
     
     async def cleanup_old_data(self, days: int = 30) -> int:
         """Remove data older than specified days (Async)"""
-        conn = await self._get_async_connection()
-        
         cutoff = (datetime.now() - timedelta(days=days)).isoformat()
-        
-        await conn.execute("DELETE FROM data_points WHERE timestamp < ?", (cutoff,))
-        await conn.execute("DELETE FROM energy_readings WHERE timestamp < ?", (cutoff,))
-        await conn.execute("DELETE FROM alarms WHERE resolved_at < ? AND state = 'resolved'", (cutoff,))
-        
-        await conn.commit()
-        
+        async with self._write_lock:
+            conn = await self._get_async_connection()
+            await conn.execute("DELETE FROM data_points WHERE timestamp < ?", (cutoff,))
+            await conn.execute("DELETE FROM energy_readings WHERE timestamp < ?", (cutoff,))
+            await conn.execute("DELETE FROM alarms WHERE resolved_at < ? AND state = 'resolved'", (cutoff,))
+            await conn.commit()
         # Note: rowcount might not be readily available on the connection after commit in aiosqlite,
         # but we usually don't depend on it for logic.
-        return 0 
+        return 0
     
     async def save_audit_log(
         self,
@@ -1525,15 +1521,14 @@ class BMSDatabase:
         latency_ms: float = 0.0
     ) -> None:
         """Save a security audit record (Async)"""
-        conn = await self._get_async_connection()
         ts = time.time()
-        
-        await conn.execute("""
-            INSERT INTO audit_logs (timestamp, method, path, status, user, ip, latency_ms)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (ts, method, path, status, user, ip, latency_ms))
-        
-        await conn.commit()
+        async with self._write_lock:
+            conn = await self._get_async_connection()
+            await conn.execute("""
+                INSERT INTO audit_logs (timestamp, method, path, status, user, ip, latency_ms)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (ts, method, path, status, user, ip, latency_ms))
+            await conn.commit()
     
     async def close(self):
         """Close database connections (Async)"""
@@ -1586,25 +1581,25 @@ class BMSDatabase:
 
     async def save_operator_feedback(self, feedback: Dict[str, Any]) -> None:
         """Save operator feedback on a recommendation (Async)"""
-        conn = await self._get_async_connection()
-        
-        await conn.execute("""
-            INSERT OR REPLACE INTO operator_feedback 
-            (feedback_id, session_id, equipment_id, recommendation_id, feedback_type, 
-             rating, comment, timestamp, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            feedback.get("feedback_id"),
-            feedback.get("session_id"),
-            feedback.get("equipment_id"),
-            feedback.get("recommendation_id"),
-            feedback.get("feedback_type"),
-            feedback.get("rating"),
-            feedback.get("comment"),
-            datetime.now().isoformat(),
-            json.dumps(feedback.get("metadata", {})),
-        ))
-        await conn.commit()
+        async with self._write_lock:
+            conn = await self._get_async_connection()
+            await conn.execute("""
+                INSERT OR REPLACE INTO operator_feedback
+                (feedback_id, session_id, equipment_id, recommendation_id, feedback_type,
+                 rating, comment, timestamp, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                feedback.get("feedback_id"),
+                feedback.get("session_id"),
+                feedback.get("equipment_id"),
+                feedback.get("recommendation_id"),
+                feedback.get("feedback_type"),
+                feedback.get("rating"),
+                feedback.get("comment"),
+                datetime.now().isoformat(),
+                json.dumps(feedback.get("metadata", {})),
+            ))
+            await conn.commit()
 
     async def get_operator_feedback(
         self,
@@ -1635,28 +1630,28 @@ class BMSDatabase:
 
     async def save_trust_metrics(self, metrics: Dict[str, Any]) -> None:
         """Save or update trust metrics for an operator (Async)"""
-        conn = await self._get_async_connection()
-        
-        await conn.execute("""
-            INSERT OR REPLACE INTO trust_metrics 
-            (metric_id, operator_id, building_id, follow_through_rate, avg_response_time_seconds,
-             total_recommendations, accepted_recommendations, rejected_recommendations, 
-             silence_rate, last_updated, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            metrics.get("metric_id"),
-            metrics.get("operator_id"),
-            metrics.get("building_id"),
-            metrics.get("follow_through_rate", 0.0),
-            metrics.get("avg_response_time_seconds"),
-            metrics.get("total_recommendations", 0),
-            metrics.get("accepted_recommendations", 0),
-            metrics.get("rejected_recommendations", 0),
-            metrics.get("silence_rate", 0.0),
-            datetime.now().isoformat(),
-            json.dumps(metrics.get("metadata", {})),
-        ))
-        await conn.commit()
+        async with self._write_lock:
+            conn = await self._get_async_connection()
+            await conn.execute("""
+                INSERT OR REPLACE INTO trust_metrics
+                (metric_id, operator_id, building_id, follow_through_rate, avg_response_time_seconds,
+                 total_recommendations, accepted_recommendations, rejected_recommendations,
+                 silence_rate, last_updated, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                metrics.get("metric_id"),
+                metrics.get("operator_id"),
+                metrics.get("building_id"),
+                metrics.get("follow_through_rate", 0.0),
+                metrics.get("avg_response_time_seconds"),
+                metrics.get("total_recommendations", 0),
+                metrics.get("accepted_recommendations", 0),
+                metrics.get("rejected_recommendations", 0),
+                metrics.get("silence_rate", 0.0),
+                datetime.now().isoformat(),
+                json.dumps(metrics.get("metadata", {})),
+            ))
+            await conn.commit()
 
     async def get_trust_metrics(
         self,
@@ -1733,33 +1728,34 @@ class BMSDatabase:
 
     async def save_recommendation(self, rec: Dict[str, Any]) -> None:
         """Save an AI recommendation (Async)"""
-        conn = await self._get_async_connection()
-        
-        await conn.execute("""
-            INSERT OR REPLACE INTO recommendations 
-            (recommendation_id, equipment_id, domain, recommendation_type, priority,
-             title, description, confidence, evidence, action, created_at, 
-             accepted_at, rejected_at, operator_id, status, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            rec.get("recommendation_id"),
-            rec.get("equipment_id"),
-            rec.get("domain"),
-            rec.get("recommendation_type"),
-            rec.get("priority", "medium"),
-            rec.get("title"),
-            rec.get("description"),
-            rec.get("confidence", 0.5),
-            json.dumps(rec.get("evidence", [])),
-            rec.get("action"),
-            datetime.now().isoformat(),
-            rec.get("accepted_at"),
-            rec.get("rejected_at"),
-            rec.get("operator_id"),
-            rec.get("status", "pending"),
-            json.dumps(rec.get("metadata", {})),
-        ))
-        await conn.commit()
+        async with self._write_lock:
+            conn = await self._get_async_connection()
+
+            await conn.execute("""
+                INSERT OR REPLACE INTO recommendations
+                (recommendation_id, equipment_id, domain, recommendation_type, priority,
+                 title, description, confidence, evidence, action, created_at,
+                 accepted_at, rejected_at, operator_id, status, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                rec.get("recommendation_id"),
+                rec.get("equipment_id"),
+                rec.get("domain"),
+                rec.get("recommendation_type"),
+                rec.get("priority", "medium"),
+                rec.get("title"),
+                rec.get("description"),
+                rec.get("confidence", 0.5),
+                json.dumps(rec.get("evidence", [])),
+                rec.get("action"),
+                datetime.now().isoformat(),
+                rec.get("accepted_at"),
+                rec.get("rejected_at"),
+                rec.get("operator_id"),
+                rec.get("status", "pending"),
+                json.dumps(rec.get("metadata", {})),
+            ))
+            await conn.commit()
 
     async def get_recommendation(self, recommendation_id: str) -> Optional[Dict]:
         """Get a recommendation by ID (Async)"""
@@ -1851,31 +1847,31 @@ class BMSDatabase:
 
     async def save_briefing(self, briefing: Dict[str, Any]) -> None:
         """Save a generated briefing (Async)"""
-        conn = await self._get_async_connection()
-        
-        await conn.execute("""
-            INSERT OR REPLACE INTO briefings 
-            (briefing_id, period, building_id, title, critical_items, attention_items,
-             info_items, wins_items, generated_at, operator_id, operator_response,
-             responded_at, status, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            briefing.get("briefing_id"),
-            briefing.get("period"),
-            briefing.get("building_id"),
-            briefing.get("title"),
-            json.dumps(briefing.get("critical_items", [])),
-            json.dumps(briefing.get("attention_items", [])),
-            json.dumps(briefing.get("info_items", [])),
-            json.dumps(briefing.get("wins_items", [])),
-            datetime.now().isoformat(),
-            briefing.get("operator_id"),
-            briefing.get("operator_response"),
-            briefing.get("responded_at"),
-            briefing.get("status", "pending"),
-            json.dumps(briefing.get("metadata", {})),
-        ))
-        await conn.commit()
+        async with self._write_lock:
+            conn = await self._get_async_connection()
+            await conn.execute("""
+                INSERT OR REPLACE INTO briefings
+                (briefing_id, period, building_id, title, critical_items, attention_items,
+                 info_items, wins_items, generated_at, operator_id, operator_response,
+                 responded_at, status, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                briefing.get("briefing_id"),
+                briefing.get("period"),
+                briefing.get("building_id"),
+                briefing.get("title"),
+                json.dumps(briefing.get("critical_items", [])),
+                json.dumps(briefing.get("attention_items", [])),
+                json.dumps(briefing.get("info_items", [])),
+                json.dumps(briefing.get("wins_items", [])),
+                datetime.now().isoformat(),
+                briefing.get("operator_id"),
+                briefing.get("operator_response"),
+                briefing.get("responded_at"),
+                briefing.get("status", "pending"),
+                json.dumps(briefing.get("metadata", {})),
+            ))
+            await conn.commit()
 
     async def get_briefing(self, briefing_id: str) -> Optional[Dict]:
         """Get a briefing by ID (Async)"""
@@ -1952,32 +1948,33 @@ class BMSDatabase:
 
     async def save_recommendation_outcome(self, outcome: Dict[str, Any]) -> None:
         """Persist a recommendation outcome record."""
-        conn = await self._get_async_connection()
-        await conn.execute("""
-            INSERT OR REPLACE INTO recommendation_outcomes
-            (outcome_id, recommendation_id, session_id, action_type,
-             baseline_kwh, predicted_kwh_delta, actual_kwh_delta,
-             predicted_score, actual_score, confidence,
-             outcome_status, accuracy, measured_at, created_at, notes)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (
-            outcome.get("outcome_id"),
-            outcome.get("recommendation_id"),
-            outcome.get("session_id"),
-            outcome.get("action_type"),
-            outcome.get("baseline_kwh"),
-            outcome.get("predicted_kwh_delta"),
-            outcome.get("actual_kwh_delta"),
-            outcome.get("predicted_score"),
-            outcome.get("actual_score"),
-            outcome.get("confidence", 0.7),
-            outcome.get("outcome_status", "pending"),
-            outcome.get("accuracy"),
-            outcome.get("measured_at"),
-            outcome.get("created_at"),
-            outcome.get("notes"),
-        ))
-        await conn.commit()
+        async with self._write_lock:
+            conn = await self._get_async_connection()
+            await conn.execute("""
+                INSERT OR REPLACE INTO recommendation_outcomes
+                (outcome_id, recommendation_id, session_id, action_type,
+                 baseline_kwh, predicted_kwh_delta, actual_kwh_delta,
+                 predicted_score, actual_score, confidence,
+                 outcome_status, accuracy, measured_at, created_at, notes)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                outcome.get("outcome_id"),
+                outcome.get("recommendation_id"),
+                outcome.get("session_id"),
+                outcome.get("action_type"),
+                outcome.get("baseline_kwh"),
+                outcome.get("predicted_kwh_delta"),
+                outcome.get("actual_kwh_delta"),
+                outcome.get("predicted_score"),
+                outcome.get("actual_score"),
+                outcome.get("confidence", 0.7),
+                outcome.get("outcome_status", "pending"),
+                outcome.get("accuracy"),
+                outcome.get("measured_at"),
+                outcome.get("created_at"),
+                outcome.get("notes"),
+            ))
+            await conn.commit()
 
     async def get_pending_outcomes(self) -> List[Dict[str, Any]]:
         """Fetch outcomes that are pending measurement (older than 20h)."""
@@ -2007,26 +2004,27 @@ class BMSDatabase:
 
     async def save_distilled_rule(self, rule: Dict[str, Any]) -> None:
         """Persist a distilled rule with TTL and source tracking."""
-        conn = await self._get_async_connection()
-        await conn.execute("""
-            INSERT OR REPLACE INTO distilled_rules
-            (rule_id, agent_name, rule_text, confidence, veto_count, active,
-             created_at, updated_at, source_evidence_id, expires_at, hit_count)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
-        """, (
-            rule.get("rule_id"),
-            rule.get("agent_name"),
-            rule.get("rule_text"),
-            rule.get("confidence", 0.0),
-            rule.get("veto_count", 0),
-            rule.get("active", 1),
-            rule.get("created_at"),
-            rule.get("updated_at"),
-            rule.get("source_evidence_id"),
-            rule.get("expires_at"),
-            rule.get("hit_count", 0),
-        ))
-        await conn.commit()
+        async with self._write_lock:
+            conn = await self._get_async_connection()
+            await conn.execute("""
+                INSERT OR REPLACE INTO distilled_rules
+                (rule_id, agent_name, rule_text, confidence, veto_count, active,
+                 created_at, updated_at, source_evidence_id, expires_at, hit_count)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            """, (
+                rule.get("rule_id"),
+                rule.get("agent_name"),
+                rule.get("rule_text"),
+                rule.get("confidence", 0.0),
+                rule.get("veto_count", 0),
+                rule.get("active", 1),
+                rule.get("created_at"),
+                rule.get("updated_at"),
+                rule.get("source_evidence_id"),
+                rule.get("expires_at"),
+                rule.get("hit_count", 0),
+            ))
+            await conn.commit()
 
     async def get_distilled_rules(self, agent_name: str) -> List[Dict[str, Any]]:
         """Fetch active, non-expired distilled rules for a specific agent."""
@@ -2211,20 +2209,21 @@ class BMSDatabase:
         """Persist a single BFT vote result."""
         import uuid as _uuid
         from datetime import datetime as _dt, timezone as _tz
-        conn = await self._get_async_connection()
-        await conn.execute("""
-            INSERT OR IGNORE INTO bft_votes
-            (vote_id, round_id, plan_id, agent_name, vote, confidence,
-             conditions, reasoning, proposal, proposer_name, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            str(_uuid.uuid4())[:12], round_id, plan_id or "",
-            agent_name, vote, confidence,
-            json.dumps(conditions), reasoning,
-            proposal, proposer_name,
-            _dt.now(_tz.utc).isoformat(),
-        ))
-        await conn.commit()
+        async with self._write_lock:
+            conn = await self._get_async_connection()
+            await conn.execute("""
+                INSERT OR IGNORE INTO bft_votes
+                (vote_id, round_id, plan_id, agent_name, vote, confidence,
+                 conditions, reasoning, proposal, proposer_name, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                str(_uuid.uuid4())[:12], round_id, plan_id or "",
+                agent_name, vote, confidence,
+                json.dumps(conditions), reasoning,
+                proposal, proposer_name,
+                _dt.now(_tz.utc).isoformat(),
+            ))
+            await conn.commit()
 
     async def save_bft_abstention(
         self,
@@ -2236,17 +2235,18 @@ class BMSDatabase:
         """Persist a BFT abstention (node failed to vote)."""
         import uuid as _uuid
         from datetime import datetime as _dt, timezone as _tz
-        conn = await self._get_async_connection()
-        await conn.execute("""
-            INSERT OR IGNORE INTO bft_abstentions
-            (abstention_id, round_id, plan_id, agent_name, reason, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            str(_uuid.uuid4())[:12], round_id, plan_id or "",
-            agent_name, reason,
-            _dt.now(_tz.utc).isoformat(),
-        ))
-        await conn.commit()
+        async with self._write_lock:
+            conn = await self._get_async_connection()
+            await conn.execute("""
+                INSERT OR IGNORE INTO bft_abstentions
+                (abstention_id, round_id, plan_id, agent_name, reason, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                str(_uuid.uuid4())[:12], round_id, plan_id or "",
+                agent_name, reason,
+                _dt.now(_tz.utc).isoformat(),
+            ))
+            await conn.commit()
 
     async def save_violation(
         self,
@@ -2262,19 +2262,20 @@ class BMSDatabase:
         """Persist a physics violation from the simulator."""
         import uuid as _uuid
         from datetime import datetime as _dt, timezone as _tz
-        conn = await self._get_async_connection()
-        await conn.execute("""
-            INSERT OR IGNORE INTO violation_ledger
-            (violation_id, plan_id, advisory_text, code, severity,
-             description, expected_value, cited_value, component, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            str(_uuid.uuid4())[:12], plan_id or "",
-            advisory_text, code, severity, description,
-            expected_value, cited_value, component,
-            _dt.now(_tz.utc).isoformat(),
-        ))
-        await conn.commit()
+        async with self._write_lock:
+            conn = await self._get_async_connection()
+            await conn.execute("""
+                INSERT OR IGNORE INTO violation_ledger
+                (violation_id, plan_id, advisory_text, code, severity,
+                 description, expected_value, cited_value, component, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                str(_uuid.uuid4())[:12], plan_id or "",
+                advisory_text, code, severity, description,
+                expected_value, cited_value, component,
+                _dt.now(_tz.utc).isoformat(),
+            ))
+            await conn.commit()
 
     async def save_judgment(
         self,
@@ -2292,21 +2293,22 @@ class BMSDatabase:
         """Persist a single judge dimension score with evidence chain."""
         import uuid as _uuid
         from datetime import datetime as _dt, timezone as _tz
-        conn = await self._get_async_connection()
-        await conn.execute("""
-            INSERT OR IGNORE INTO judgment_ledger
-            (judgment_id, run_id, phase, scenario, dimension_id, score,
-             reasoning, evidence_chain, tool_calls_used, judge_model_id,
-             wall_time_ms, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            str(_uuid.uuid4())[:12], run_id, phase, scenario,
-            dimension_id, score, reasoning,
-            json.dumps(evidence_chain), tool_calls_used,
-            judge_model_id, wall_time_ms,
-            _dt.now(_tz.utc).isoformat(),
-        ))
-        await conn.commit()
+        async with self._write_lock:
+            conn = await self._get_async_connection()
+            await conn.execute("""
+                INSERT OR IGNORE INTO judgment_ledger
+                (judgment_id, run_id, phase, scenario, dimension_id, score,
+                 reasoning, evidence_chain, tool_calls_used, judge_model_id,
+                 wall_time_ms, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                str(_uuid.uuid4())[:12], run_id, phase, scenario,
+                dimension_id, score, reasoning,
+                json.dumps(evidence_chain), tool_calls_used,
+                judge_model_id, wall_time_ms,
+                _dt.now(_tz.utc).isoformat(),
+            ))
+            await conn.commit()
 
     # ── T1 Working Memory: Conversation turns ────────────────────────────────
 
@@ -2321,15 +2323,16 @@ class BMSDatabase:
     ) -> None:
         """Persist one conversation turn."""
         from datetime import datetime as _dt, timezone as _tz
-        conn = await self._get_async_connection()
-        await conn.execute("""
-            INSERT INTO conversation_turns
-            (turn_id, operator_id, building_id, role, content, is_summary, summary_range, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (str(__import__("uuid").uuid4())[:12], operator_id, building_id,
-              role, content, 1 if is_summary else 0, summary_range,
-              _dt.now(_tz.utc).isoformat()))
-        await conn.commit()
+        async with self._write_lock:
+            conn = await self._get_async_connection()
+            await conn.execute("""
+                INSERT INTO conversation_turns
+                (turn_id, operator_id, building_id, role, content, is_summary, summary_range, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (str(__import__("uuid").uuid4())[:12], operator_id, building_id,
+                  role, content, 1 if is_summary else 0, summary_range,
+                  _dt.now(_tz.utc).isoformat()))
+            await conn.commit()
 
     async def load_conversation_turns(
         self,
@@ -2349,15 +2352,16 @@ class BMSDatabase:
 
     async def save_suggested_action(self, action_text: str, source: str = "system", confidence: float = 1.0) -> None:
         """Persist a suggested action for injection into LLM context."""
-        async with await self._get_async_connection() as conn:
-            await conn.execute(
-                """INSERT OR IGNORE INTO suggested_actions
-                   (action_id, action_text, source, confidence, created_at, status)
-                   VALUES (?, ?, ?, ?, ?, 'pending')""",
-                (str(__import__('uuid').uuid4()), action_text, source, confidence,
-                 __import__('datetime').datetime.now().isoformat())
-            )
-            await conn.commit()
+        async with self._write_lock:
+            async with await self._get_async_connection() as conn:
+                await conn.execute(
+                    """INSERT OR IGNORE INTO suggested_actions
+                       (action_id, action_text, source, confidence, created_at, status)
+                       VALUES (?, ?, ?, ?, ?, 'pending')""",
+                    (str(__import__('uuid').uuid4()), action_text, source, confidence,
+                     __import__('datetime').datetime.now().isoformat())
+                )
+                await conn.commit()
 
     async def get_pending_suggestions(self, limit: int = 10) -> list:
         """Fetch pending suggested actions for LLM context injection."""
@@ -2378,10 +2382,28 @@ _db_instance: Optional[BMSDatabase] = None
 
 
 def get_database(db_path: str = None) -> BMSDatabase:
-    """Get or create the singleton database instance"""
+    """Get or create the singleton database instance.
+
+    If db_path differs from the cached instance's path, rebuild the singleton
+    so isolated-run paths (e.g. runs/<id>/arvis_bms.db) are honored instead of
+    silently falling back to the first-call path.
+    """
     global _db_instance
-    
+
     if _db_instance is None:
         _db_instance = BMSDatabase(db_path)
-    
+    elif db_path is not None and str(_db_instance.db_path) != str(db_path):
+        # Path changed (isolated test run, etc.) — rebuild singleton
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Best-effort close; caller responsible for awaiting in async ctx
+                asyncio.ensure_future(_db_instance.close())
+            else:
+                loop.run_until_complete(_db_instance.close())
+        except Exception:
+            pass
+        _db_instance = BMSDatabase(db_path)
+
     return _db_instance
