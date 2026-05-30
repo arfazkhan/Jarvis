@@ -351,6 +351,10 @@ async def main():
             bool(IR.get("anomaly")), note=str(IR.get("anomaly", {}).get("severity")))
     C.check("S4", "data_coverage metric", _m.get("data_coverage") is not None,
             note=f"{_m.get('data_coverage')}")
+    _cost = IR.get("cost_impact") or {}
+    C.check("S4", "cost impact (grounded QAR/month savings)",
+            bool(_cost.get("monthly_savings_qar")),
+            note=f"QAR{_cost.get('monthly_savings_qar')}/mo from {_cost.get('excess_cooling_kw')}kW excess")
 
     # ════════════════════════════════════════════════════════════════════════
     _hdr(4, "Investigation Artifacts")

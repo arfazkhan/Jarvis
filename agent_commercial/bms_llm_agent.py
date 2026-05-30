@@ -2645,6 +2645,34 @@ class BMSLLMAgent:
             except Exception as _ke_err:
                 logger.debug(f"key_evidence fallback skipped: {_ke_err}")
 
+        # Derived cost/savings — pull the grounded CostDeriver evidence straight
+        # from the ledger so the dashboard can SHOW the QAR/month case (the
+        # synthesis LLM's own cost numbers get stripped by NumericAudit sampling).
+        cost_impact = None
+        try:
+            if plan is not None:
+                for _ev in plan.evidence.get_all():
+                    if str(getattr(_ev, "source_tool", "")) != "derived:cost":
+                        continue
+                    _pl = getattr(_ev, "raw_payload", {}) or {}
+                    _res = _pl.get("result", {}) or {}
+                    _save = _res.get("est_monthly_savings_qar")
+                    if _save is None:
+                        continue
+                    cost_impact = {
+                        "monthly_savings_qar": _save,
+                        "excess_cooling_kw": _res.get("excess_cooling_kw"),
+                        "excess_daily_kwh": _res.get("excess_daily_kwh"),
+                        "tariff_qar_kwh": (_pl.get("inputs", {}) or {}).get("tariff_qar_kwh"),
+                        "confidence": _pl.get("confidence"),
+                        "why": _pl.get("why"),
+                        "if_ignored": _pl.get("if_ignored"),
+                        "assumption": "airflow estimated (nominal AHU)" if (_pl.get("inputs", {}) or {}).get("airflow_assumed") else "airflow measured",
+                    }
+                    break
+        except Exception as _cost_ev_err:
+            logger.debug(f"cost_impact extraction skipped: {_cost_ev_err}")
+
         # Recommended actions — parse numbered list from advice
         actions = []
         for _am in re.finditer(r"(?:^|\n|<br>)\s*(?:\*\*)?\d+\.\s*(?:\*\*)?([^\n<*]{6,120})", text):
@@ -2747,6 +2775,7 @@ class BMSLLMAgent:
             "agents": agents,
             "tool_activity": tool_activity,
             "key_evidence": key_evidence,
+            "cost_impact": cost_impact,   # grounded QAR/month savings (None if not derivable)
             "recommended_actions": actions,
             "investigation_flow": ["Detect", "Investigate", "Reason", "Synthesize", "Advise"],
         }

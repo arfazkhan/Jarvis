@@ -527,7 +527,13 @@ class QueenCoordinator(BaseModel):
                         oat = _find("oat", "outdoor air") or _get_val(_weather.get("oat"))
                         rat = _find("rat", "return air")
                         oa_dmpr_cmd = _find("damper command", "oa_dmpr_cmd", "dmpr_cmd") or _find("oa_dmpr", "damper position")
-                        
+
+                        if (mat is not None or oat is not None or rat is not None):
+                            logger.debug(
+                                f"[Queen][Deriver] {_eq_id} point keys={list(_points.keys())[:12]} "
+                                f"mat={mat} oat={oat} rat={rat} cmd={oa_dmpr_cmd}"
+                            )
+
                         if mat is not None and oat is not None and rat is not None:
                             divisor = oat - rat
                             if abs(divisor) > 1.0:
@@ -647,8 +653,13 @@ class QueenCoordinator(BaseModel):
                                                     equipment_id=_eq_id,
                                                     equipment_type=_eq_block.get("kind", ""),
                                                 ))
+                                                logger.info(
+                                                    f"[Queen][CostDeriver] {_eq_id} excess={_excess_kw}kW "
+                                                    f"daily_kwh={_daily_kwh} savings=QAR{_monthly_qar:.0f}/mo "
+                                                    f"(airflow_assumed={_af_assumed})"
+                                                )
                                         except Exception as _cost_err:
-                                            logger.debug(f"[Queen] Derived cost evidence skipped: {_cost_err}")
+                                            logger.warning(f"[Queen] Derived cost evidence skipped: {_cost_err}")
                 except Exception as _deriv_err:
                     logger.debug(f"[Queen] Derived thermodynamic evidence promotion failed: {_deriv_err}")
 
