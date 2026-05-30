@@ -52,6 +52,7 @@ class SkillType(Enum):
     PATTERN = "pattern"
     OPTIMIZATION = "optimization"
     FAILURE = "failure"
+    FAULT_PATTERN = "fault_pattern"
     CONTRACTOR_NOTE = "contractor_note"
     SCHEDULE = "schedule"
     THRESHOLD = "threshold"

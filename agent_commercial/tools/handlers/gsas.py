@@ -230,17 +230,82 @@ class GSASHandlerMixin:
         return report
 
     async def _handle_get_zone_occupancy(self, args: Dict) -> Dict:
-        """Get contextual occupancy data for a zone"""
+        """Get contextual occupancy data for a zone.
+
+        Canonical response schema (always present):
+          zone_id              : str
+          is_occupied          : bool
+          occupancy_probability: float (0-1)
+          occupancy_pattern    : dict
+          signals_used         : list
+          confidence           : float (0-1)
+        """
         zone_id = args.get("zone_id")
         if not zone_id:
-            return {"error": "zone_id is required."}
+            return {
+                "error": "zone_id is required.",
+                # Schema keys still populated so callers never see KeyError
+                "zone_id": None,
+                "is_occupied": False,
+                "occupancy_probability": 0.0,
+                "occupancy_pattern": {},
+                "signals_used": [],
+                "confidence": 0.0,
+            }
+
         if not OccupancyContextProvider:
-            return {"error": "OccupancyContextProvider not available."}
-        provider = OccupancyContextProvider(self.bms_state)
-        context = provider.get_zone_occupancy(zone_id)
+            # Provider unavailable — return schema-compliant degraded response
+            return {
+                "zone_id": zone_id,
+                "is_occupied": False,
+                "occupancy_probability": 0.0,
+                "occupancy_pattern": {},
+                "signals_used": [],
+                "confidence": 0.0,
+                "warning": "OccupancyContextProvider not available; occupancy estimate is degraded.",
+            }
+
+        try:
+            provider = OccupancyContextProvider(self.bms_state)
+            context = provider.get_zone_occupancy(zone_id)
+        except Exception as e:
+            logger.error(f"[GSAS] get_zone_occupancy failed for {zone_id}: {e}")
+            return {
+                "zone_id": zone_id,
+                "is_occupied": False,
+                "occupancy_probability": 0.0,
+                "occupancy_pattern": {},
+                "signals_used": [],
+                "confidence": 0.0,
+                "error": f"OccupancyContextProvider raised: {e}",
+            }
+
+        # Normalise: provider may return a flat dict or a nested 'occupancy_context' wrapper
+        if isinstance(context, dict):
+            # Unwrap legacy wrapper if present
+            if "occupancy_context" in context and isinstance(context["occupancy_context"], dict):
+                context = context["occupancy_context"]
+            return {
+                "zone_id": zone_id,
+                "is_occupied": bool(context.get("is_occupied", False)),
+                "occupancy_probability": float(context.get("occupancy_probability",
+                                               context.get("probability", 0.0))),
+                "occupancy_pattern": context.get("occupancy_pattern",
+                                                 context.get("pattern", {})),
+                "signals_used": context.get("signals_used",
+                                            context.get("signals", [])),
+                "confidence": float(context.get("confidence", 0.0)),
+            }
+
+        # Unexpected non-dict return from provider — safe fallback
         return {
             "zone_id": zone_id,
-            "occupancy_context": context,
+            "is_occupied": False,
+            "occupancy_probability": 0.0,
+            "occupancy_pattern": {},
+            "signals_used": [],
+            "confidence": 0.0,
+            "warning": "OccupancyContextProvider returned unexpected type; occupancy estimate is degraded.",
         }
 
     async def _handle_predict_comfort_impact(self, args: Dict) -> Dict:
@@ -253,10 +318,16 @@ class GSASHandlerMixin:
             return {"error": "ComfortPredictor not available."}
         predictor = ComfortPredictor(self.bms_state)
         prediction = predictor.predict_impact(action, zone_id)
+        p = prediction if isinstance(prediction, dict) else {}
+        # Schema keys: predicted_pmv, comfort_risk, adjacent_zones_affected, recommendation
         return {
             "action": action,
             "zone_id": zone_id,
             "prediction": prediction,
+            "predicted_pmv": p.get("predicted_pmv") if p.get("predicted_pmv") is not None else p.get("pmv"),
+            "comfort_risk": p.get("comfort_risk") or p.get("risk") or "unknown",
+            "adjacent_zones_affected": p.get("adjacent_zones_affected") or p.get("adjacent_zones") or [],
+            "recommendation": p.get("recommendation") or "",
         }
 
     async def _handle_get_financial_projection(self, args: Dict) -> Dict:
@@ -269,9 +340,19 @@ class GSASHandlerMixin:
             return {"error": "FinancialImpactCalculator not available."}
         calculator = FinancialImpactCalculator()
         projection = calculator.calculate_savings(action, energy_delta, water_delta)
+        pr = projection if isinstance(projection, dict) else {}
+        # Schema keys: monthly_savings_qar, annual_savings_qar, energy_savings_kwh_month,
+        # water_savings_m3_month, payback_months, co2_reduction_kg_month
+        monthly = pr.get("monthly_savings_qar") or pr.get("monthly_qar") or 0.0
         return {
             "action": action,
             "projection": projection,
+            "monthly_savings_qar": monthly,
+            "annual_savings_qar": pr.get("annual_savings_qar") or (monthly * 12 if monthly else 0.0),
+            "energy_savings_kwh_month": pr.get("energy_savings_kwh_month") or pr.get("energy_kwh_month") or 0.0,
+            "water_savings_m3_month": pr.get("water_savings_m3_month") or pr.get("water_m3_month") or 0.0,
+            "payback_months": pr.get("payback_months"),
+            "co2_reduction_kg_month": pr.get("co2_reduction_kg_month") or pr.get("co2_kg_month") or 0.0,
         }
 
     async def _handle_get_gsas_contextual_recommendations(self, args: Dict) -> Dict:
@@ -333,20 +414,42 @@ class GSASHandlerMixin:
         # Get DB connection if available
         db = get_database() if get_database else None
         tracker = GSASOutcomeTracker(db)
-        
-        return tracker.record_action_outcome(action, decision, notes)
+
+        result = tracker.record_action_outcome(action, decision, notes)
+        if isinstance(result, dict):
+            from datetime import datetime as _dt
+            # Schema keys: recorded, outcome_id, decision, action_type, timestamp
+            result.setdefault("recorded", "error" not in result)
+            result.setdefault("outcome_id", result.get("id") or result.get("outcome_id"))
+            result.setdefault("decision", decision)
+            result.setdefault(
+                "action_type",
+                (action.get("action_type") or action.get("type")) if isinstance(action, dict) else None,
+            )
+            result.setdefault("timestamp", _dt.now().isoformat())
+        return result
 
     async def _handle_get_gsas_success_rates(self, args: Dict) -> Dict:
         """Get the historical approval rate for GSAS actions."""
         action_type = args.get("action_type")
         
+        default_response = {
+            "overall_approval_rate": 0.0,
+            "by_action_type": {},
+            "total_recorded": 0,
+            "most_rejected_type": None
+        }
+
         if not GSASOutcomeTracker:
-            return {"error": "GSASOutcomeTracker not available."}
+            return {**default_response, "error": "GSASOutcomeTracker not available."}
             
         db = get_database() if get_database else None
         tracker = GSASOutcomeTracker(db)
         
-        return tracker.get_success_rates(action_type)
+        data = tracker.get_success_rates(action_type)
+        
+        # Ensure schema compliance by merging with default
+        return {**default_response, **data}
 
     async def _handle_check_gsas_audit_readiness(self, args: Dict) -> Dict:
         """Evaluates whether the building could pass a GSAS audit right now."""

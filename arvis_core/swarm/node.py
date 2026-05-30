@@ -166,6 +166,17 @@ class SwarmNode(BaseModel):
             from arvis_core.plan import Span, TaskStatus
 
         seen_call_sigs: Set[str] = set()  # spin detection: (tool:args_hash)
+        called_once_only: Set[str] = set()  # fire-once side-effect tools already run
+        # Side-effect / write-once tools that should never be re-called in a loop.
+        # Re-calling them (with varied args) was how Memory_Agent spun submit_feedback
+        # 4 extra turns past planned depth, burning latency + Bedrock calls.
+        ONCE_ONLY_TOOLS = {
+            "submit_feedback",
+            "record_gsas_action_outcome",
+            "add_to_skillbook",
+            "record_gsas_action",
+            "create_work_order",
+        }
         consecutive_errors: int = 0
         consecutive_empty: int = 0        # early exit when retrieval tools return no data
         nudged: bool = False              # soft-nudge sent at most once
@@ -260,6 +271,23 @@ class SwarmNode(BaseModel):
                     args_str = tool_call.function.arguments
                     logger.info(f"[Node: {self.name}] Turn {turn}/{planned_turns}: calling {tool_name}")
 
+                    # Live demo stream: emit per-agent tool-call event (screen 3).
+                    # Fire-and-forget, errors swallowed — never block investigation.
+                    try:
+                        from agent_commercial.api.sse_broadcaster import SSEBroadcaster
+                        import asyncio as _aio_sse
+                        _aio_sse.ensure_future(SSEBroadcaster().broadcast(
+                            "agent_tool_call",
+                            {
+                                "agent": self.name,
+                                "tool": tool_name,
+                                "turn": turn,
+                            },
+                            channel="monitor",
+                        ))
+                    except Exception:
+                        pass
+
                     try:
                         args = json.loads(args_str) if isinstance(args_str, str) else (args_str or {})
                     except Exception:
@@ -270,6 +298,29 @@ class SwarmNode(BaseModel):
                         json.dumps(args, sort_keys=True, default=str).encode()
                     ).hexdigest()[:8]
                     call_sig = f"{tool_name}:{args_hash}"
+
+                    # Fire-once guard: side-effect tools may run at most once per
+                    # node. Block repeats regardless of args (they evade arg-hash
+                    # spin detection) and nudge toward synthesis.
+                    if tool_name in ONCE_ONLY_TOOLS:
+                        if tool_name in called_once_only:
+                            logger.warning(
+                                f"[Node: {self.name}] Fire-once tool '{tool_name}' "
+                                f"re-called — blocking, nudging to synthesize."
+                            )
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call.id,
+                                "name": tool_name,
+                                "content": (
+                                    f"ALREADY DONE: '{tool_name}' was already executed this turn and "
+                                    "is a one-time action. Do not call it again. Synthesize your final "
+                                    "proposal from what you have now."
+                                ),
+                            })
+                            consecutive_errors += 1
+                            continue
+                        called_once_only.add(tool_name)
 
                     # Cross-node dedup: another node already ran this exact call
                     if plan is not None and plan.is_duplicate_call(call_sig) and call_sig not in seen_call_sigs:

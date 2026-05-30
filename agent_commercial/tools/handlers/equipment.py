@@ -130,7 +130,9 @@ class EquipmentHandlerMixin:
         
         return {
             "count": len(equipment),
-            "equipment": [e.to_dict() for e in equipment]
+            "equipment": [e.to_dict() for e in equipment],
+            # No pagination in this handler — single page. Schema requires key.
+            "total_pages": 1,
         }
     
     async def _handle_get_equipment_health(self, args: Dict) -> Dict:
@@ -141,18 +143,29 @@ class EquipmentHandlerMixin:
         if predictive and hasattr(predictive, "predict_maintenance"):
             prediction = await predictive.predict_maintenance(equipment_id)
             health_score = prediction.get("health_score") or 85
+            risk_factors = prediction.get("risk_factors") or []
+            rec = prediction.get("recommended_actions") or prediction.get("recommendation")
+            if isinstance(rec, str) and rec:
+                rec = [rec]
+            elif not isinstance(rec, list):
+                rec = []
             return {
                 "equipment_id": equipment_id,
                 "overall_health": "good" if health_score > 70 else "poor",
                 "health_score": health_score,
-                "trending": "stable",
-                "risk_factors": []
+                # Schema key is 'trend' (improving/stable/degrading)
+                "trend": prediction.get("trend") or "stable",
+                "trending": "stable",  # legacy alias retained
+                "risk_factors": risk_factors,
+                "recommended_actions": rec,
             }
-        
+
         return {
             "error": "no_data",
             "reason": "Predictive engine not configured or no baseline data available for health scoring.",
             "equipment_id": equipment_id,
+            "trend": "unknown",
+            "recommended_actions": [],
         }
     
     async def _handle_get_point_history(self, args: Dict) -> Dict:
@@ -216,12 +229,28 @@ class EquipmentHandlerMixin:
         elif kb and hasattr(kb, "query_specs"):
             results = await kb.query_specs(query, equipment_id)
         
+        findings = [r["content"] for r in results] if results else []
+        sources = [r["metadata"].get("source") for r in results if r.get("metadata")] if results else []
+        # Schema requires: manufacturer, model, specs, matched_sections, source_document.
+        # KB returns free-text findings — surface them under schema keys instead of
+        # leaving nulls the LLM hallucinates over.
+        specs = {}
+        for r in (results or []):
+            md = r.get("metadata") or {}
+            for sk in ("manufacturer", "model"):
+                if md.get(sk) and sk not in specs:
+                    specs[sk] = md[sk]
         return {
             "query": query,
             "equipment_id": equipment_id,
             "navigation_depth": depth,
-            "findings": [r["content"] for r in results] if results else [],
-            "sources": [r["metadata"].get("source") for r in results] if results else []
+            "findings": findings,
+            "sources": sources,
+            "manufacturer": specs.get("manufacturer", ""),
+            "model": specs.get("model", ""),
+            "specs": specs,
+            "matched_sections": findings,
+            "source_document": sources[0] if sources else "",
         }
 
     async def _handle_hybrid_search_knowledge(self, args: Dict) -> Dict:
@@ -286,6 +315,45 @@ class EquipmentHandlerMixin:
         
         if hasattr(state, "get_snapshot"):
             snapshot = await state.get_snapshot()
+            if not isinstance(snapshot, dict):
+                snapshot = {}
+            # Normalize to dashboard response_schema. Snapshot may use varied key
+            # names; map them and guarantee every schema key so the validator
+            # does not backfill nulls the LLM then invents values for.
+            eq_summary = (
+                snapshot.get("equipment_summary")
+                or snapshot.get("equipment_counts")
+                or {}
+            )
+            if not eq_summary:
+                eq_list = snapshot.get("equipment") or []
+                if isinstance(eq_list, list) and eq_list:
+                    counts: Dict[str, int] = {}
+                    for e in eq_list:
+                        st = (e.get("status") if isinstance(e, dict) else None) or "unknown"
+                        counts[st] = counts.get(st, 0) + 1
+                    eq_summary = counts
+
+            alarms = snapshot.get("alarms") or snapshot.get("active_alarms") or []
+            active_ct = snapshot.get("active_alarm_count")
+            if active_ct is None:
+                active_ct = len(alarms) if isinstance(alarms, list) else 0
+            crit_ct = snapshot.get("critical_alarm_count")
+            if crit_ct is None:
+                crit_ct = sum(
+                    1 for a in (alarms if isinstance(alarms, list) else [])
+                    if isinstance(a, dict) and str(a.get("severity", "")).lower() == "critical"
+                )
+
+            snapshot.setdefault("equipment_summary", eq_summary or {})
+            snapshot.setdefault("active_alarm_count", active_ct)
+            snapshot.setdefault("critical_alarm_count", crit_ct)
+            snapshot.setdefault("energy_today_kwh", snapshot.get("energy_kwh") or 0.0)
+            snapshot.setdefault("energy_cost_today_qar", snapshot.get("energy_cost_qar") or 0.0)
+            snapshot.setdefault("gsas_score", snapshot.get("gsas") or 0.0)
+            snapshot.setdefault("pending_insights", snapshot.get("insights") or [])
+            from datetime import datetime as _dt
+            snapshot.setdefault("timestamp", _dt.now().isoformat())
             return snapshot
 
         return {"error": "Dashboard overview not supported by current state engine"}

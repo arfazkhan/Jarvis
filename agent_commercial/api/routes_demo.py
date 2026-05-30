@@ -8,10 +8,13 @@ curated scenario injection, and real-time telemetry from the digital twin.
 """
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Dict, Any, List, Optional
 import asyncio
+import json
 import logging
+import uuid
 from datetime import datetime
 
 from agent_commercial.api.sse_broadcaster import SSEBroadcaster
@@ -32,6 +35,17 @@ class TriggerReasoningRequest(BaseModel):
 
 class InjectScenarioRequest(BaseModel):
     scenario_id: str = Field(..., example="chiller_vibration")
+
+class WorkOrderRequest(BaseModel):
+    equipment_id: str = Field(..., example="AHU-07")
+    title: str = Field(..., example="Inspect OA damper actuator")
+    actions: List[str] = Field(default_factory=list)
+    priority: str = Field(default="medium", example="high")
+    source_investigation: Optional[str] = Field(default=None)
+    notes: Optional[str] = Field(default=None)
+
+# In-memory work-order store (demo). Swap for DB-backed store in production.
+_WORK_ORDERS: List[Dict[str, Any]] = []
 
 # Helper to get/init DemoOrchestrator
 def get_demo_orchestrator(request: Request) -> DemoOrchestrator:
@@ -335,6 +349,8 @@ async def trigger_swarm_reasoning(payload: TriggerReasoningRequest, request: Req
         "response": advice_text,
         "confidence": confidence,
         "advisories_generated": advisories,
+        # Structured payload for demo screens 3 & 4 (real run data).
+        "investigation_result": getattr(response, "investigation_result", None),
         "metadata": {
             "truth_score": getattr(response, 'truth_score', 0.9),
             "answer_confidence": getattr(response, 'answer_confidence', 0.9),
@@ -464,3 +480,82 @@ async def get_intelligence_summary(request: Request):
             ]
         }
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# LIVE INVESTIGATION STREAM (Screen 3) — SSE
+# ═══════════════════════════════════════════════════════════════════════════
+
+@router.get("/stream/investigation")
+async def stream_investigation(request: Request):
+    """Server-Sent Events stream of live investigation activity.
+
+    Emits the swarm lifecycle events the live screen renders:
+      investigation_started, agents_dispatched, agent_tool_call,
+      investigation_complete — each with a `stage` for the flow tracker.
+    Subscribe before POST /reasoning/trigger to capture the full run.
+    """
+    async def event_gen():
+        async for evt in broadcaster.subscribe(channel="monitor"):
+            if await request.is_disconnected():
+                break
+            _type = evt.get("event", "message")
+            _data = evt.get("data", "{}")
+            if not isinstance(_data, str):
+                _data = json.dumps(_data)
+            yield f"event: {_type}\ndata: {_data}\n\n"
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# WORK ORDERS (Screen 5) — create / list
+# ═══════════════════════════════════════════════════════════════════════════
+
+@router.post("/workorder/create")
+async def create_work_order(payload: WorkOrderRequest):
+    """Create a follow-up work order from an investigation (demo store)."""
+    wo = {
+        "id": f"WO-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}",
+        "equipment_id": payload.equipment_id,
+        "title": payload.title,
+        "actions": payload.actions,
+        "priority": payload.priority,
+        "status": "open",
+        "source_investigation": payload.source_investigation,
+        "notes": payload.notes,
+        "created_at": datetime.now().isoformat(),
+    }
+    _WORK_ORDERS.append(wo)
+    logger.info(f"[Demo] Work order created: {wo['id']} for {wo['equipment_id']}")
+    return {"created": True, "work_order": wo}
+
+
+@router.get("/workorder/list")
+async def list_work_orders(equipment_id: Optional[str] = None, status: Optional[str] = None):
+    """List work orders, optionally filtered by equipment or status."""
+    items = _WORK_ORDERS
+    if equipment_id:
+        items = [w for w in items if w["equipment_id"].upper() == equipment_id.upper()]
+    if status:
+        items = [w for w in items if w["status"] == status]
+    return {"count": len(items), "work_orders": items}
+
+
+@router.post("/workorder/{work_order_id}/status")
+async def update_work_order_status(work_order_id: str, new_status: str):
+    """Update a work order's status (open/in_progress/closed)."""
+    for w in _WORK_ORDERS:
+        if w["id"] == work_order_id:
+            w["status"] = new_status
+            w["updated_at"] = datetime.now().isoformat()
+            return {"updated": True, "work_order": w}
+    raise HTTPException(404, f"Work order {work_order_id} not found")

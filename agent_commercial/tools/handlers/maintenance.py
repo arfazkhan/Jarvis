@@ -33,12 +33,24 @@ class MaintenanceHandlerMixin:
             equipment_id = args.get("equipment_id", "all")
             if hasattr(predictive_engine, "predict_maintenance"):
                 prediction = await predictive_engine.predict_maintenance(equipment_id)
-                return {"predictions": [prediction] if isinstance(prediction, dict) else prediction}
-                
+                preds = [prediction] if isinstance(prediction, dict) else (prediction or [])
+                # Schema requires 'insights' — derive from predictions, never null
+                insights = []
+                for p in preds:
+                    if isinstance(p, dict):
+                        ins = p.get("insights") or p.get("insight") or p.get("recommendation")
+                        if isinstance(ins, list):
+                            insights.extend(ins)
+                        elif ins:
+                            insights.append(ins)
+                return {"predictions": preds, "insights": insights}
+
             return {
                 "error": "no_data",
                 "reason": "Predictive engine has no baseline data for this equipment yet. Minimum 2 weeks of sensor history required.",
                 "equipment_id": equipment_id,
+                "predictions": [],
+                "insights": [],
             }
         except Exception as e:
             logger.error(f"Maintenance prediction failed: {e}")
@@ -55,12 +67,26 @@ class MaintenanceHandlerMixin:
             
             predictive_engine = getattr(self, "predictive_engine", None)
             if predictive_engine and hasattr(predictive_engine, "predict_rul"):
-                return await predictive_engine.predict_rul(equipment_id, forecast_days)
-            
+                rul = await predictive_engine.predict_rul(equipment_id, forecast_days)
+                # Schema requires integer 'days_to_failure'. Engine may emit
+                # rul_days / remaining_useful_life_days / predicted_failure_in_days.
+                if isinstance(rul, dict) and rul.get("days_to_failure") is None:
+                    src = (
+                        rul.get("rul_days")
+                        or rul.get("remaining_useful_life_days")
+                        or rul.get("predicted_failure_in_days")
+                    )
+                    try:
+                        rul["days_to_failure"] = int(src) if src is not None else None
+                    except (TypeError, ValueError):
+                        rul["days_to_failure"] = None
+                return rul
+
             return {
                 "error": "no_data",
                 "reason": "No RUL model available for this equipment. Ensure predictive engine is configured and sensor history exists.",
                 "equipment_id": equipment_id,
+                "days_to_failure": None,
             }
         except Exception as e:
             logger.error(f"RUL prediction failed: {e}")

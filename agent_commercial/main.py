@@ -400,6 +400,13 @@ class OpsCopilot:
                 # Register autonomous alarm investigation
                 self.state_engine.on_alarm(self._on_alarm_auto_investigate)
 
+                # Expose watchdog to the LLM agent so investigations can surface
+                # the real z-score for the equipment under analysis (demo screen 2/4).
+                try:
+                    self.llm_agent._watchdog = self._watchdog
+                except Exception:
+                    pass
+
                 logger.info(
                     "[ARVIS] B9 Autonomous Monitor active: AnomalyWatchdog "
                     "+ InvestigationDispatcher wired, queue=2 max, 5min/equipment cooldown"
@@ -1477,33 +1484,111 @@ class OpsCopilot:
 
     async def train_fdd_autoencoders(self) -> None:
         """
-        Train unsupervised FDD autoencoders using historical telemetry.
+        Bootstrap the predictive engine's per-type VAE analyzers on a synthetic
+        normal-operation baseline derived from current equipment metadata.
+
+        IMPORTANT: detect_faults() consumes `predictive_engine.vae_analyzers`
+        (EquipmentFeatures-shaped, columns == predictive_engine.feature_names),
+        NOT the standalone fdd_autoencoder singletons. We must train *those*
+        analyzers or detect_faults keeps reporting "VAE model not loaded".
+
+        The VAE only needs a healthy baseline distribution to flag novelty, so
+        we synthesize jittered normal samples per equipment from runtime/
+        efficiency/maintenance metadata that P1 already seeded.
         """
-        logger.info("[ML-FDD] Bootstrapping unsupervised FDD VAE autoencoders...")
-        from agent_commercial.ml.fdd_autoencoder import get_fdd_engine
-        
-        equipment_types = ["chiller", "ahu", "vav", "cooling_tower"]
-        for eq_type in equipment_types:
+        import numpy as np
+        import pandas as pd
+        from agent_commercial.predictive_maintenance import EquipmentFeatures
+
+        engine = self.predictive_engine
+        if engine is None or not getattr(engine, "vae_analyzers", None):
+            logger.warning("[ML-FDD] No predictive_engine.vae_analyzers; skipping VAE bootstrap.")
+            return
+
+        logger.info("[ML-FDD] Bootstrapping predictive VAE analyzers from equipment baseline...")
+        feature_names = engine.feature_names
+
+        # Map BMS equipment_type.value -> vae_analyzers key
+        type_key = {
+            "air_handling_unit": "ahu",
+            "ahu": "ahu",
+            "chiller": "chiller",
+            "vav": "vav",
+            "vav_box": "vav",
+        }
+
+        try:
+            all_equipment = await self.state_engine.get_all_equipment()
+        except Exception as e:
+            logger.error(f"[ML-FDD] Cannot list equipment: {e}")
+            return
+
+        # Bucket equipment by analyzer key
+        buckets: Dict[str, list] = {}
+        for eq in all_equipment:
+            ev = getattr(getattr(eq, "equipment_type", None), "value", None)
+            key = type_key.get((ev or "").lower())
+            if key and key in engine.vae_analyzers:
+                buckets.setdefault(key, []).append(eq)
+
+        def _base_features(eq) -> EquipmentFeatures:
+            last_maint = getattr(eq, "last_maintenance", None)
+            days_since = (datetime.now() - last_maint).days if last_maint else 45
+            return EquipmentFeatures(
+                equipment_id=getattr(eq, "equipment_id", "EQ"),
+                runtime_hours=float(getattr(eq, "runtime_hours", 3000.0) or 3000.0),
+                start_stop_cycles=int(getattr(eq, "start_stop_cycles", 180) or 180),
+                days_since_maintenance=int(days_since),
+                efficiency=float(getattr(eq, "efficiency", 0.85) or 0.85),
+            )
+
+        for key, vae in engine.vae_analyzers.items():
+            eqs = buckets.get(key, [])
+            if not eqs:
+                logger.warning(f"[ML-FDD] No equipment for analyzer '{key}'; skipping.")
+                continue
             try:
-                df = await self.state_engine.get_historical_telemetry(eq_type, days=28)
-                if df.empty:
-                    logger.warning(f"[ML-FDD] No historical telemetry for {eq_type}; skipping training.")
+                # Synthesize jittered normal samples: each equipment contributes
+                # several near-baseline rows so the VAE learns the healthy manifold.
+                rows = []
+                samples_per_eq = max(8, vae.sequence_length * 3)
+                for eq in eqs:
+                    base = _base_features(eq).to_array().astype(float)
+                    for _ in range(samples_per_eq):
+                        jitter = 1.0 + np.random.uniform(-0.05, 0.05, size=base.shape)
+                        rows.append(base * jitter)
+                if len(rows) < max(10, vae.sequence_length * 2):
+                    logger.warning(f"[ML-FDD] '{key}': only {len(rows)} samples; skipping.")
                     continue
-                
-                fdd = get_fdd_engine(eq_type)
-                min_rows = fdd.sequence_length * 2
-                if len(df) < min_rows:
-                    logger.warning(f"[ML-FDD] {eq_type}: only {len(df)} rows (need {min_rows}); skipping.")
-                    continue
-                logger.info(f"[ML-FDD] Training FDD VAE for {eq_type} with {len(df)} rows of data...")
-                result = fdd.train(df)
-                if result.get("status") == "trained":
-                    version = fdd.save_model(result)
-                    logger.info(f"🎉 [ML-FDD] Successfully trained and saved VAE for {eq_type} (version: {version})")
+                df = pd.DataFrame(rows, columns=feature_names)
+                logger.info(f"[ML-FDD] Training VAE '{key}' on {len(df)} synthetic normal rows...")
+                result = vae.train(df)
+                if isinstance(result, dict) and result.get("status") == "trained":
+                    logger.info(f"[ML-FDD] VAE '{key}' trained (is_trained={vae.is_trained}).")
+                    try:
+                        vae.save_model(result)
+                    except Exception as _se:
+                        logger.debug(f"[ML-FDD] VAE '{key}' save skipped: {_se}")
                 else:
-                    logger.warning(f"[ML-FDD] VAE training for {eq_type} did not complete: {result}")
+                    logger.warning(f"[ML-FDD] VAE '{key}' training did not complete: {result}")
             except Exception as e:
-                logger.error(f"❌ [ML-FDD] Error training VAE for {eq_type}: {e}", exc_info=True)
+                logger.error(f"[ML-FDD] Error training VAE '{key}': {e}", exc_info=True)
+
+        # Seed equipment_history so detect_faults has sequence context immediately
+        try:
+            for key, eqs in buckets.items():
+                vae = engine.vae_analyzers.get(key)
+                seqlen = getattr(vae, "sequence_length", 6)
+                for eq in eqs:
+                    eid = getattr(eq, "equipment_id", None)
+                    if not eid:
+                        continue
+                    base = _base_features(eq)
+                    engine.equipment_history.setdefault(eid, [])
+                    while len(engine.equipment_history[eid]) < seqlen:
+                        engine.equipment_history[eid].append(base)
+        except Exception as e:
+            logger.debug(f"[ML-FDD] equipment_history seeding skipped: {e}")
 
 
 

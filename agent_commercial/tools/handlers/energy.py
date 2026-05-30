@@ -63,7 +63,29 @@ class EnergyHandlerMixin:
             return {"error": "Energy analyzer not configured"}
         
         try:
-            return self.energy_analyzer.get_summary()
+            summary = self.energy_analyzer.get_summary()
+            if isinstance(summary, dict):
+                # Normalize to schema keys: total_kwh, cost_qar, anomalies
+                if summary.get("total_kwh") is None:
+                    summary["total_kwh"] = (
+                        summary.get("total_energy_kwh")
+                        or summary.get("energy_kwh")
+                        or summary.get("kwh")
+                        or 0.0
+                    )
+                if summary.get("cost_qar") is None:
+                    summary["cost_qar"] = (
+                        summary.get("total_cost_qar")
+                        or summary.get("cost")
+                        or 0.0
+                    )
+                if summary.get("anomalies") is None:
+                    summary["anomalies"] = (
+                        summary.get("waste_patterns")
+                        or summary.get("patterns")
+                        or []
+                    )
+            return summary
         except Exception as e:
             logger.error(f"Error in analyze_energy: {e}")
             return {"error": f"Analysis error: {str(e)}"}
@@ -74,9 +96,22 @@ class EnergyHandlerMixin:
         
         try:
             patterns = self.energy_analyzer.identify_waste_patterns()
+            pdicts = [(p.to_dict() if hasattr(p, "to_dict") else p) for p in patterns]
+            # Aggregate for schema: total_waste_kwh, potential_savings_qar
+            total_waste = 0.0
+            total_savings = 0.0
+            for p in pdicts:
+                if isinstance(p, dict):
+                    total_waste += float(p.get("waste_kwh") or p.get("wasted_kwh") or 0) or 0.0
+                    total_savings += float(p.get("savings_qar") or p.get("potential_savings_qar") or 0) or 0.0
             return {
-                "count": len(patterns),
-                "patterns": [ (p.to_dict() if hasattr(p, "to_dict") else p) for p in patterns ]
+                "count": len(pdicts),
+                "patterns": pdicts,
+                # Schema keys
+                "anomalies": pdicts,
+                "anomaly_count": len(pdicts),
+                "total_waste_kwh": round(total_waste, 2),
+                "potential_savings_qar": round(total_savings, 2),
             }
         except Exception as e:
             logger.error(f"Error in get_energy_anomalies: {e}")
@@ -143,7 +178,12 @@ class EnergyHandlerMixin:
                 return {
                     "ghost_operations": [],
                     "waste_estimate_qar_day": 0,
-                    "note": "No zones configured. Add zones via the database."
+                    "note": "No zones configured. Add zones via the database.",
+                    # Schema keys
+                    "ghost_spaces": [],
+                    "total_ghost_count": 0,
+                    "total_waste_kwh_day": 0.0,
+                    "potential_savings_qar_month": 0.0,
                 }
             
             sensor = VirtualOccupancySensor()
@@ -207,10 +247,23 @@ class EnergyHandlerMixin:
                 "zones_checked": len(zones),
                 "waste_estimate_qar_day": round(total_waste, 2),
                 "potential_monthly_savings": round(total_waste * 30, 2),
+                # Schema keys: ghost_spaces, total_ghost_count, total_waste_kwh_day,
+                # potential_savings_qar_month
+                "ghost_spaces": ghost_operations,
+                "total_ghost_count": len(ghost_operations),
+                "total_waste_kwh_day": round(total_waste, 2),
+                "potential_savings_qar_month": round(total_waste * 30, 2),
             }
         except Exception as e:
             logger.error(f"Error in find_ghost_spaces: {e}")
-            return {"error": f"Ghost space detection error: {str(e)}", "ghost_operations": []}
+            return {
+                "error": f"Ghost space detection error: {str(e)}",
+                "ghost_operations": [],
+                "ghost_spaces": [],
+                "total_ghost_count": 0,
+                "total_waste_kwh_day": 0.0,
+                "potential_savings_qar_month": 0.0,
+            }
     
     async def _handle_estimate_zone_occupancy(self, args: Dict) -> Dict:
         """Estimate zone occupancy from BMS data"""
@@ -222,12 +275,29 @@ class EnergyHandlerMixin:
             return {"error": "Virtual sensors module not available"}
             
         try:
-            return estimate_zone_occupancy(
+            res = estimate_zone_occupancy(
                 zone_id=zone_id,
                 co2_ppm=args.get("co2_ppm", 420),
                 vav_damper_pct=args.get("vav_damper_pct", 50),
                 light_status=args.get("light_status", True),
             )
+            if isinstance(res, dict):
+                # Schema keys: occupancy_probability, occupancy_level,
+                # estimated_occupants, method_used
+                prob = res.get("occupancy_probability")
+                if prob is None:
+                    prob = res.get("probability") or res.get("occupancy_estimate") or 0.0
+                    res["occupancy_probability"] = prob
+                if res.get("occupancy_level") is None:
+                    res["occupancy_level"] = (
+                        res.get("level")
+                        or ("occupied" if (prob or 0) >= 0.5 else "vacant")
+                    )
+                if res.get("estimated_occupants") is None:
+                    res["estimated_occupants"] = res.get("occupants") or res.get("count") or 0
+                if res.get("method_used") is None:
+                    res["method_used"] = res.get("method") or "co2_vav_light_fusion"
+            return res
         except Exception as e:
             logger.error(f"Error in estimate_zone_occupancy: {e}")
             return {"error": f"Occupancy estimation error: {str(e)}"}

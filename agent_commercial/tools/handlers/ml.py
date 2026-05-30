@@ -12,12 +12,26 @@ logger = logging.getLogger("arvis.bms.tools.ml")
 
 
 def _inject_lineage(result: Dict, model_name: str, algorithm: str = None) -> Dict:
-    """Inject _ml_lineage into a successful ML result dict."""
+    """Inject _ml_lineage into an ML result dict.
+
+    Guarantees the `_ml_lineage` key is always present (schema requires it on
+    every ML tool). On builder failure, falls back to a minimal lineage stub so
+    output-schema validation never reports a missing key.
+    """
+    if not isinstance(result, dict):
+        return result
     try:
         from agent_commercial.ml.lineage_helpers import build_ml_lineage
         result["_ml_lineage"] = build_ml_lineage(model_name, result, algorithm)
     except Exception as e:
         logger.debug(f"Lineage injection failed for {model_name}: {e}")
+    # Guarantee key presence even if builder raised or returned falsy
+    if not result.get("_ml_lineage"):
+        result["_ml_lineage"] = {
+            "model_id": model_name,
+            "algorithm": algorithm,
+            "available": result.get("ml_status") != "unavailable",
+        }
     return result
 
 
@@ -74,13 +88,27 @@ class MLHandlerMixin:
         }
     
     async def _handle_detect_equipment_faults(self, args: Dict) -> Dict:
-        """Use ML to detect equipment faults"""
+        """Use ML to detect equipment faults.
+
+        Canonical response schema (always present):
+          faults       : list  — detected fault dicts
+          health_score : float — 0-100 normalised equipment health
+          confidence   : float | None
+          equipment_id : str
+        """
         equipment_id = args.get("equipment_id")
         fault_type = args.get("fault_type")
-        
+
         if not equipment_id:
-            return {"error": "equipment_id is required"}
-        
+            return {
+                "error": "equipment_id is required",
+                # Schema keys still present so callers never see KeyError
+                "faults": [],
+                "health_score": 0.0,
+                "confidence": None,
+                "equipment_id": None,
+            }
+
         predictive_engine = getattr(self, "predictive_engine", None)
         if predictive_engine and hasattr(predictive_engine, "detect_faults"):
             try:
@@ -88,21 +116,33 @@ class MLHandlerMixin:
                     equipment_id=equipment_id,
                     fault_type=fault_type
                 )
+                # Normalise: engine may use legacy key names
+                if isinstance(raw, dict):
+                    # Alias legacy 'faults_detected' -> 'faults'
+                    if "faults" not in raw and "faults_detected" in raw:
+                        raw["faults"] = raw.pop("faults_detected")
+                    # Ensure both mandatory schema keys exist
+                    raw.setdefault("faults", [])
+                    raw.setdefault("health_score", 0.0)
+                    raw.setdefault("confidence", None)
+                    raw.setdefault("equipment_id", equipment_id)
                 return _inject_lineage(raw, "fdd_autoencoder", "vae+isolation_forest")
             except Exception as e:
                 logger.error(f"Error detecting faults for {equipment_id}: {e}")
-        
-        return {
+
+        # Guaranteed-schema fallback — no repair needed downstream
+        return _inject_lineage({
+            "faults": [],
+            "health_score": 0.0,
+            "confidence": None,
+            "equipment_id": equipment_id,
             "ml_status": "unavailable",
             "fallback": True,
             "model_id": None,
-            "equipment_id": equipment_id,
-            "faults_detected": [],
             "status": "unknown",
-            "confidence": None,
             "reason": "VAE fault detection model not loaded. Cannot confirm equipment normality.",
             "required_for_ml": ["predictive_engine", "fdd_autoencoder"],
-        }
+        }, "fdd_autoencoder", "vae+isolation_forest")
     
     async def _handle_analyze_root_cause(self, args: Dict) -> Dict:
         """Use Bayesian Network for root cause analysis"""
@@ -110,8 +150,15 @@ class MLHandlerMixin:
         system_depth = args.get("system_depth", 3)
         
         if not alarm_ids:
-            return {"error": "alarm_ids is required"}
-        
+            return {
+                "error": "alarm_ids is required",
+                "root_causes": [],
+                "top_root_cause": None,
+                "confidence": None,
+                "cascade_prediction": [],
+                "_ml_lineage": {"model_id": "bayesian_network", "available": False},
+            }
+
         world_model = getattr(self, "world_model", None)
         if world_model and hasattr(world_model, "analyze_root_cause"):
             try:
@@ -119,21 +166,33 @@ class MLHandlerMixin:
                     alarm_ids=alarm_ids,
                     depth=system_depth
                 )
+                if isinstance(raw, dict):
+                    # Derive top_root_cause from root_causes list if engine omitted it
+                    if not raw.get("top_root_cause"):
+                        rcs = raw.get("root_causes") or []
+                        if rcs and isinstance(rcs[0], dict):
+                            raw["top_root_cause"] = rcs[0].get("equipment_id")
+                        else:
+                            raw["top_root_cause"] = None
+                    raw.setdefault("root_causes", [])
+                    raw.setdefault("cascade_prediction", [])
+                    raw.setdefault("confidence", None)
                 return _inject_lineage(raw, "bayesian_network", "pgmpy+dbn")
             except Exception as e:
                 logger.error(f"Error in root cause analysis: {e}")
-        
-        return {
+
+        return _inject_lineage({
             "ml_status": "unavailable",
             "fallback": True,
             "model_id": None,
             "alarm_ids": alarm_ids,
             "root_causes": [],
-            "cascade_prediction": None,
+            "top_root_cause": None,
+            "cascade_prediction": [],
             "confidence": None,
             "reason": "Bayesian Network (pgmpy) not available. Cannot infer causal relationships.",
             "required_for_ml": ["world_model", "pgmpy"],
-        }
+        }, "bayesian_network", "pgmpy+dbn")
     
     async def _handle_simulate_with_uncertainty(self, args: Dict) -> Dict:
         """Advanced simulation with uncertainty bounds"""

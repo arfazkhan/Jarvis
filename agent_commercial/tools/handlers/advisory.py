@@ -145,30 +145,43 @@ class AdvisoryHandlerMixin:
         content = args.get("content")
         rating = args.get("rating")
         
+        from datetime import datetime as _dt
+        import uuid as _uuid
+
+        def _normalize(res: dict, model_updated: bool) -> dict:
+            # Schema keys: accepted, feedback_id, model_updated, timestamp
+            res.setdefault("accepted", "error" not in res)
+            res.setdefault("feedback_id", res.get("id") or str(_uuid.uuid4()))
+            res.setdefault("model_updated", model_updated)
+            res.setdefault("timestamp", _dt.now().isoformat())
+            return res
+
         feedback_loop = getattr(self, "feedback_loop", None)
         if feedback_loop and hasattr(feedback_loop, "submit_feedback"):
             try:
-                return await feedback_loop.submit_feedback(
+                res = await feedback_loop.submit_feedback(
                     feedback_type=feedback_type,
                     target=target,
                     content=content,
                     rating=rating
                 )
+                if isinstance(res, dict):
+                    return _normalize(res, model_updated=True)
             except Exception as e:
                 logger.error(f"Error submitting feedback to loop: {e}")
-        
+
         tracker = getattr(self, "tracker", None)
         if tracker and hasattr(tracker, "record_feedback"):
             try:
                 tracker.record_feedback(target, feedback_type, content)
             except Exception as e:
                 logger.error(f"Error recording feedback in tracker: {e}")
-        
-        return {
+
+        return _normalize({
             "status": "recorded",
             "feedback_type": feedback_type,
-            "target": target
-        }
+            "target": target,
+        }, model_updated=False)
     
     async def _handle_get_trust_metrics(self, args: Dict) -> Dict:
         """Get trust and drift metrics for the advisor"""
@@ -191,8 +204,19 @@ class AdvisoryHandlerMixin:
             except Exception as e:
                 logger.error(f"Error getting performance summary: {e}")
             
+        from datetime import datetime as _dt
+        td = trust_data if isinstance(trust_data, dict) else {}
+        dd = drift_data if isinstance(drift_data, dict) else {}
+        drift_detected = dd.get("drift_ratio", 1) >= 1.3 or bool(dd.get("drift_detected"))
         return {
-            "trust_metrics": trust_data,
-            "performance_drift": drift_data,
-            "system_status": "Healthy" if drift_data.get("drift_ratio", 1) < 1.3 else "Performance Degraded"
+            "trust_metrics": td,
+            "performance_drift": dd,
+            "system_status": "Healthy" if not drift_detected else "Performance Degraded",
+            # Schema keys — surface nested values, never null
+            "overall_trust_score": td.get("overall_trust_score") or td.get("trust_score") or 0.0,
+            "recommendation_adoption_rate": td.get("recommendation_adoption_rate") or td.get("adoption_rate") or 0.0,
+            "prediction_accuracy": td.get("prediction_accuracy") or dd.get("accuracy") or 0.0,
+            "model_drift_detected": drift_detected,
+            "feedback_count": td.get("feedback_count") or td.get("sample_count") or 0,
+            "last_updated": td.get("last_updated") or _dt.now().isoformat(),
         }

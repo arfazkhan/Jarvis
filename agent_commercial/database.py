@@ -844,6 +844,57 @@ class BMSDatabase:
             )
             """)
 
+        # Terminal advisories — created HERE on the main boot connection so the
+        # TerminalAdvisoryStore (which opens its own connection later) never has
+        # to CREATE under write-lock contention (previously failed with
+        # "database is locked" → "no such table: terminal_advisories").
+        if 'terminal_advisories' not in existing_tables:
+            logger.info("Creating table: terminal_advisories")
+            await conn.execute("""
+            CREATE TABLE terminal_advisories (
+                advisory_id          TEXT PRIMARY KEY,
+                building_id          TEXT NOT NULL DEFAULT 'default',
+                equipment_id         TEXT,
+                advisory_type        TEXT NOT NULL,
+                severity             TEXT NOT NULL,
+                title                TEXT NOT NULL,
+                message              TEXT NOT NULL,
+                evidence_ids         TEXT NOT NULL DEFAULT '[]',
+                confidence           REAL NOT NULL DEFAULT 0.5,
+                fired_at             TEXT NOT NULL,
+                sim_day              INTEGER,
+                last_surfaced_at     TEXT NOT NULL,
+                surface_count        INTEGER NOT NULL DEFAULT 1,
+                state                TEXT NOT NULL DEFAULT 'active',
+                acknowledged_at      TEXT,
+                acknowledged_by      TEXT,
+                ack_signal           TEXT,
+                resolved_at          TEXT,
+                resolution_action    TEXT,
+                escalated_at         TEXT,
+                escalation_target    TEXT,
+                source_plan_id       TEXT,
+                source_query         TEXT
+            )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_terminal_state ON terminal_advisories(building_id, state, fired_at)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_terminal_eq ON terminal_advisories(equipment_id, state)")
+
+        if 'terminal_advisory_events' not in existing_tables:
+            logger.info("Creating table: terminal_advisory_events")
+            await conn.execute("""
+            CREATE TABLE terminal_advisory_events (
+                event_id         TEXT PRIMARY KEY,
+                advisory_id      TEXT NOT NULL,
+                event_type       TEXT NOT NULL,
+                event_at         TEXT NOT NULL,
+                actor            TEXT,
+                details          TEXT,
+                FOREIGN KEY (advisory_id) REFERENCES terminal_advisories(advisory_id)
+            )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_terminal_events ON terminal_advisory_events(advisory_id, event_at)")
+
         await conn.commit()
         logger.info("✅ Database schema verification complete.")
 

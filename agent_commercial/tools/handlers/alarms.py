@@ -143,7 +143,38 @@ class AlarmHandlerMixin:
             )
             result["high_fidelity_explanation"] = explanation["text"]
             result["causal_chain"] = explanation["causal_chain"]
-            
+
+        # Normalize to response_schema keys: explanation, root_cause,
+        # recommended_actions, severity. Engine emits native field names
+        # (probable_cause, recommendation, root_cause_id) — map them so the
+        # output validator does not backfill nulls the LLM then hallucinates over.
+        if isinstance(result, dict) and "error" not in result:
+            if not result.get("explanation"):
+                result["explanation"] = (
+                    result.get("high_fidelity_explanation")
+                    or result.get("probable_cause")
+                    or result.get("analysis")
+                    or result.get("description")
+                    or ""
+                )
+            if not result.get("root_cause"):
+                result["root_cause"] = (
+                    result.get("probable_cause")
+                    or result.get("root_cause_equipment")
+                    or result.get("root_cause_id")
+                    or ""
+                )
+            if not result.get("recommended_actions"):
+                rec = result.get("recommendation") or result.get("recommended_action")
+                if isinstance(rec, str) and rec:
+                    result["recommended_actions"] = [rec]
+                elif isinstance(rec, list):
+                    result["recommended_actions"] = rec
+                else:
+                    result["recommended_actions"] = []
+            if not result.get("severity"):
+                result["severity"] = result.get("alarm_severity") or "unknown"
+
         return result
     async def _handle_acknowledge_alarm(self, args: Dict) -> Dict:
         alarm_id = args.get("alarm_id")

@@ -87,12 +87,80 @@ class AllowedNumberSet:
 
 
 @dataclass
+class QuantifiedClaim:
+    claim_id: str
+    value: float
+    unit: str
+    confidence: float
+    is_directly_measured: bool
+    derivation_method: str
+    evidence_ids: List[str]
+    uncertainty_reason: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "claim_id": self.claim_id,
+            "value": self.value,
+            "unit": self.unit,
+            "confidence": self.confidence,
+            "is_directly_measured": self.is_directly_measured,
+            "derivation_method": self.derivation_method,
+            "evidence_ids": self.evidence_ids,
+            "uncertainty_reason": self.uncertainty_reason
+        }
+
+
+@dataclass
 class NumericMatch:
     output_value: float
     matched_to: Optional[AllowedNumber]
     surface_form: str          # original token as it appeared in the advisory
     span: Tuple[int, int]      # (start, end) in scanned text
     context_field: str         # "message" | "analysis" | "impact"
+    claim_id: Optional[str] = None
+
+
+def _is_derived_allowed_number(a: AllowedNumber) -> bool:
+    """Check if an AllowedNumber is derived rather than direct telemetry."""
+    src = a.source_id.lower()
+    lbl = a.label.lower()
+    if src.startswith("derived:") or "pct" in lbl or "fraction" in lbl or "complement" in lbl or "leak" in lbl or "delta" in lbl:
+        return True
+    return False
+
+
+def get_confidence_and_provenance(allowed_num: AllowedNumber) -> Tuple[float, bool, str, List[str], str]:
+    """
+    Returns (confidence, is_directly_measured, derivation_method, evidence_ids, uncertainty_reason)
+    based on the allowed number's derivation basis.
+    """
+    src = allowed_num.source_id.lower()
+    lbl = allowed_num.label.lower()
+    
+    # Extract evidence IDs from source_id packed using pipe format
+    evidence_ids = []
+    if "|" in allowed_num.source_id:
+        _, ev_str = allowed_num.source_id.split("|", 1)
+        evidence_ids = [eid.strip() for eid in ev_str.split(",") if eid.strip()]
+    else:
+        if allowed_num.source_id and allowed_num.source_id != "snapshot" and not allowed_num.source_id.startswith("derived:"):
+            evidence_ids = [allowed_num.source_id]
+            
+    # Remove any potential duplicate "derived" prefixes or other subfields from raw evidence IDs
+    evidence_ids = [eid for eid in evidence_ids if not eid.startswith("derived:")]
+
+    if "oa_frac" in lbl or "oa_pct" in lbl or "oa_leak" in lbl or "derived:oa_" in src:
+        return (0.65, False, "physics_mixing_equation", evidence_ids, "Inferred from Mixed-Air/Outdoor-Air/Return-Air temperature mixing equation")
+    elif "temp_delta" in src or "delta(" in lbl:
+        return (0.80, False, "temperature_delta", evidence_ids, "Calculated difference between two measured temperature points")
+    elif "complement" in lbl or "pct_leak" in lbl:
+        return (0.85, False, "complement_calculation", evidence_ids, "Calculated complement (100 - x) of a measured or derived value")
+    elif "fraction" in lbl or "pct" in lbl:
+        return (0.90, False, "unit_conversion", evidence_ids, "Converted between fraction and percentage representation")
+    elif src.startswith("derived:"):
+        return (0.50, False, "multi_step_inference", evidence_ids, "Derived through multi-step building logic inference")
+    else:
+        return (0.95, True, "direct_telemetry", evidence_ids, "Directly measured by BMS sensor")
 
 
 @dataclass
@@ -100,6 +168,7 @@ class AuditReport:
     total_numbers: int = 0
     matched: List[NumericMatch] = field(default_factory=list)
     orphans: List[NumericMatch] = field(default_factory=list)
+    derived_claims: List[QuantifiedClaim] = field(default_factory=list)
 
     @property
     def fully_clean(self) -> bool:
@@ -227,40 +296,46 @@ class NumericAuditor:
 
         # First-principles thermodynamic derivations
         try:
-            # 1. Identify all temperatures in `allowed`
-            temps = [a.value for a in allowed.items if 10.0 <= a.value <= 55.0]
-            if len(temps) >= 2:
+            # 1. Identify all temperature items in `allowed`
+            temp_items = [a for a in allowed.items if 10.0 <= a.value <= 55.0]
+            if len(temp_items) >= 2:
                 # Add differences (temperature deltas)
-                for i in range(len(temps)):
-                    for j in range(i + 1, len(temps)):
-                        t1, t2 = temps[i], temps[j]
+                for i in range(len(temp_items)):
+                    for j in range(i + 1, len(temp_items)):
+                        t1_item, t2_item = temp_items[i], temp_items[j]
+                        t1, t2 = t1_item.value, t2_item.value
                         delta = abs(t1 - t2)
-                        allowed.add(delta, "derived:temp_delta", f"delta({t1:.1f}-{t2:.1f})")
+                        ev_ids = sorted(list(set([t1_item.source_id, t2_item.source_id])))
+                        ev_str = ",".join(ev_ids)
+                        allowed.add(delta, f"derived:temp_delta|{ev_str}", f"delta({t1:.1f}-{t2:.1f})")
                         
             # 2. Mixed-air OA fraction / damper percentage calculation
             # Form: (T_mat - T_rat) / (T_oat - T_rat)
-            oat_vals = [a.value for a in allowed.items if "oat" in a.label.lower() or "outdoor" in a.label.lower()]
-            rat_vals = [a.value for a in allowed.items if "rat" in a.label.lower() or "return" in a.label.lower()]
-            mat_vals = [a.value for a in allowed.items if "mat" in a.label.lower() or "mixed" in a.label.lower()]
+            oat_items = [a for a in allowed.items if "oat" in a.label.lower() or "outdoor" in a.label.lower()]
+            rat_items = [a for a in allowed.items if "rat" in a.label.lower() or "return" in a.label.lower()]
+            mat_items = [a for a in allowed.items if "mat" in a.label.lower() or "mixed" in a.label.lower()]
             
-            # If explicit keys are absent, fallback to any plausible T_oat, T_rat, T_mat values
-            if not oat_vals:
-                oat_vals = [t for t in temps if t >= 30.0]  # outdoor air in Qatar is hot
-            if not rat_vals:
-                rat_vals = [t for t in temps if 21.0 <= t <= 25.0]  # return air is room temperature
-            if not mat_vals:
-                mat_vals = [t for t in temps if 24.0 <= t <= 32.0]  # mixed air is in between
+            # If explicit keys are absent, fallback to any plausible T_oat, T_rat, T_mat items
+            if not oat_items:
+                oat_items = [a for a in temp_items if a.value >= 30.0]  # outdoor air in Qatar is hot
+            if not rat_items:
+                rat_items = [a for a in temp_items if 21.0 <= a.value <= 25.0]  # return air is room temperature
+            if not mat_items:
+                mat_items = [a for a in temp_items if 24.0 <= a.value <= 32.0]  # mixed air is in between
                 
-            for oat in oat_vals:
-                for rat in rat_vals:
-                    for mat in mat_vals:
+            for oat_item in oat_items:
+                for rat_item in rat_items:
+                    for mat_item in mat_items:
+                        oat, rat, mat = oat_item.value, rat_item.value, mat_item.value
                         if abs(oat - rat) > 1.0:
                             oa_frac = (mat - rat) / (oat - rat)
                             if 0.0 <= oa_frac <= 1.0:
-                                allowed.add(oa_frac, "derived:oa_fraction", f"oa_frac({mat}/{oat}/{rat})")
-                                allowed.add(oa_frac * 100.0, "derived:oa_pct", f"oa_pct({mat}/{oat}/{rat})")
+                                ev_ids = sorted(list(set([oat_item.source_id, rat_item.source_id, mat_item.source_id])))
+                                ev_str = ",".join(ev_ids)
+                                allowed.add(oa_frac, f"derived:oa_fraction|{ev_str}", f"oa_frac({mat}/{oat}/{rat})")
+                                allowed.add(oa_frac * 100.0, f"derived:oa_pct|{ev_str}", f"oa_pct({mat}/{oat}/{rat})")
                                 # Counterfactual (e.g. bypass, leakage)
-                                allowed.add(100.0 - (oa_frac * 100.0), "derived:oa_leak_pct", f"oa_leak_pct({mat}/{oat}/{rat})")
+                                allowed.add(100.0 - (oa_frac * 100.0), f"derived:oa_leak_pct|{ev_str}", f"oa_leak_pct({mat}/{oat}/{rat})")
 
             # 3. Add general scale/conversions (fractions to percentages and vice-versa)
             extra_vals = []
@@ -268,12 +343,12 @@ class NumericAuditor:
                 v = a.value
                 # If it's a fraction 0-1, add percentage
                 if 0.0 < v <= 1.0:
-                    extra_vals.append((v * 100.0, a.source_id, f"{a.label}:pct"))
-                    extra_vals.append((100.0 - (v * 100.0), a.source_id, f"{a.label}:pct_leak"))
+                    extra_vals.append((v * 100.0, f"{a.source_id}", f"{a.label}:pct"))
+                    extra_vals.append((100.0 - (v * 100.0), f"{a.source_id}", f"{a.label}:pct_leak"))
                 # If it's a percentage 0-100, add fraction
                 elif 1.0 < v <= 100.0:
-                    extra_vals.append((v / 100.0, a.source_id, f"{a.label}:fraction"))
-                    extra_vals.append((100.0 - v, a.source_id, f"{a.label}:complement"))
+                    extra_vals.append((v / 100.0, f"{a.source_id}", f"{a.label}:fraction"))
+                    extra_vals.append((100.0 - v, f"{a.source_id}", f"{a.label}:complement"))
                     
             for val, src, lbl in extra_vals:
                 allowed.add(val, src, lbl)
@@ -392,12 +467,37 @@ class NumericAuditor:
                         matched = next((a for a in allowed.items if a.value == aval), None)
                         break
 
+                claim_id = None
+                if matched is not None and _is_derived_allowed_number(matched):
+                    confidence, is_directly_measured, derivation_method, evidence_ids, uncertainty_reason = get_confidence_and_provenance(matched)
+                    claim_id = f"claim_est_{len(report.derived_claims) + 1}"
+                    # Infer unit
+                    unit = "percent"
+                    lbl_lower = matched.label.lower()
+                    if "celsius" in lbl_lower or "delta" in lbl_lower or "temp" in lbl_lower or " C" in matched.label or "°C" in matched.label:
+                        unit = "celsius"
+                    elif "fraction" in lbl_lower:
+                        unit = "fraction"
+                    
+                    claim = QuantifiedClaim(
+                        claim_id=claim_id,
+                        value=matched.value,
+                        unit=unit,
+                        confidence=confidence,
+                        is_directly_measured=is_directly_measured,
+                        derivation_method=derivation_method,
+                        evidence_ids=evidence_ids,
+                        uncertainty_reason=uncertainty_reason
+                    )
+                    report.derived_claims.append(claim)
+
                 nmatch = NumericMatch(
                     output_value=val,
                     matched_to=matched,
                     surface_form=token,
                     span=(m.start(), m.end()),
                     context_field=field_name,
+                    claim_id=claim_id,
                 )
                 if matched is not None:
                     report.matched.append(nmatch)
@@ -411,58 +511,94 @@ class NumericAuditor:
     def strip_orphans(self, advisory_text: str, report: AuditReport) -> str:
         """
         Replace orphan numeric tokens in advisory message fields with
-        `[unverified]` placeholder. Returns sanitized JSON string.
+        `[unverified]` placeholder, and replace derived claims with their
+        respective `{claim_id}` placeholders. Returns sanitized JSON string.
 
         If parsing fails, applies replacement to the raw string as best-effort.
         """
-        if not report.orphans:
+        if not report.orphans and not report.derived_claims:
             return advisory_text
 
-        orphan_tokens = {m.surface_form for m in report.orphans}
+        # Only strip true orphans. Derived/matched claims already correspond to an
+        # allowed (grounded) value, so leaving the real number inline is correct.
+        # Replacing them with {claim_est_N} placeholders requires a downstream
+        # substitution renderer that does not run before final output — doing so
+        # leaks literal "{claim_est_13}" tokens into the advisory prose. Keep the
+        # computed_claims provenance block, but never mutate the inline numbers.
+        all_matches: List[NumericMatch] = []
+        for m in report.orphans:
+            all_matches.append(m)
 
-        def _strip_text(s: str) -> str:
-            out = s
-            for token in orphan_tokens:
-                # Replace each orphan token with [unverified]. Use \b-style
-                # boundary to avoid matching mid-equipment-ID.
-                # Protect citation tags like [ev: ...] from being partially modified.
-                # If we match the first group (\[\s*ev\s*:[^\]]*\]), return it unchanged.
-                # Otherwise, return '[unverified]'.
-                pattern = rf"(\[\s*ev\s*:[^\]]*\])|(?<![A-Za-z_]){re.escape(token)}(?![A-Za-z_])"
-                
-                def repl(match):
-                    if match.group(1) is not None:
-                        return match.group(1)
-                    return "[unverified]"
-                
-                out = re.sub(pattern, repl, out)
-            return out
+        from collections import defaultdict
+        matches_by_field = defaultdict(list)
+        for m in all_matches:
+            matches_by_field[m.context_field].append(m)
+
+        def _replace_spans(text: str, matches: List[NumericMatch]) -> str:
+            # Sort matches in descending order of span start index so replacements don't shift earlier indices
+            sorted_matches = sorted(matches, key=lambda x: x.span[0], reverse=True)
+            chars = list(text)
+            for m in sorted_matches:
+                start, end = m.span
+                # Ensure the span is valid and matches the token
+                if start >= 0 and end <= len(chars) and "".join(chars[start:end]) == m.surface_form:
+                    replacement = f"{{{m.claim_id}}}" if m.claim_id else "[unverified]"
+                    chars[start:end] = list(replacement)
+            return "".join(chars)
 
         try:
             data = json.loads(advisory_text)
             if isinstance(data, dict):
+                # Inject computed_claims top-level block
+                if report.derived_claims:
+                    data["computed_claims"] = [c.to_dict() for c in report.derived_claims]
+
+                # Perform field-by-field replacements
                 if "analysis" in data and isinstance(data["analysis"], str):
-                    data["analysis"] = _strip_text(data["analysis"])
-                for adv in data.get("advisories", []) or []:
+                    field_matches = matches_by_field.get("analysis", [])
+                    if field_matches:
+                        data["analysis"] = _replace_spans(data["analysis"], field_matches)
+
+                for i, adv in enumerate(data.get("advisories", []) or []):
                     if not isinstance(adv, dict):
                         continue
-                    if isinstance(adv.get("message"), str):
-                        adv["message"] = _strip_text(adv["message"])
+
+                    msg_field = f"advisory[{i}].message"
+                    if msg_field in matches_by_field and isinstance(adv.get("message"), str):
+                        adv["message"] = _replace_spans(adv["message"], matches_by_field[msg_field])
+
                     ra = adv.get("recommended_action")
                     if isinstance(ra, dict):
-                        for k, v in list(ra.items()):
-                            if isinstance(v, str):
-                                ra[k] = _strip_text(v)
-                    # Strip orphan numerics from impact too (replace with 0 + flag)
+                        ra_field = f"advisory[{i}].recommended_action"
+                        if ra_field in matches_by_field:
+                            ra_str = json.dumps(ra)
+                            ra_str_replaced = _replace_spans(ra_str, matches_by_field[ra_field])
+                            try:
+                                adv["recommended_action"] = json.loads(ra_str_replaced)
+                            except Exception:
+                                pass
+
                     imp = adv.get("impact")
                     if isinstance(imp, dict):
                         for k, v in list(imp.items()):
-                            if isinstance(v, (int, float)) and str(v) in orphan_tokens:
-                                imp[k] = 0.0
-                                imp[f"{k}_unverified"] = True
+                            imp_field = f"advisory[{i}].impact.{k}"
+                            if imp_field in matches_by_field:
+                                m = matches_by_field[imp_field][0]
+                                if m.claim_id:
+                                    imp[k] = m.output_value
+                                    imp[f"{k}_claim_id"] = m.claim_id
+                                else:
+                                    imp[k] = 0.0
+                                    imp[f"{k}_unverified"] = True
                 return json.dumps(data)
         except json.JSONDecodeError:
             pass
+
+        # Fallback to raw string replacement
+        body_matches = matches_by_field.get("body", [])
+        if body_matches:
+            return _replace_spans(advisory_text, body_matches)
+        return advisory_text
 
     def prune_for_synthesis(
         self,

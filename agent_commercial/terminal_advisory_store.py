@@ -152,16 +152,64 @@ class TerminalAdvisoryStore:
         self._conn.row_factory = aiosqlite.Row
         await self._conn.execute("PRAGMA busy_timeout=60000")
         await self._conn.execute("PRAGMA journal_mode=WAL")
-        # Ensure schema exists (idempotent CREATE TABLE IF NOT EXISTS)
+        # Ensure schema exists (idempotent). Try the full calibration schema
+        # first, but DON'T depend on it — executescript aborts the remaining
+        # statements if an earlier block errors, which previously left
+        # terminal_advisories uncreated ("no such table"). So always apply the
+        # terminal tables explicitly afterward, independent of the big script.
         try:
             schema_path = Path(__file__).parent / "sql" / "calibration_schema.sql"
             if schema_path.exists():
-                sql_text = schema_path.read_text(encoding="utf-8")
-                # Apply only the terminal_advisories blocks — safe because IF NOT EXISTS
-                await self._conn.executescript(sql_text)
+                await self._conn.executescript(schema_path.read_text(encoding="utf-8"))
                 await self._conn.commit()
         except Exception as e:
-            logger.debug(f"[TerminalAdvisory] schema bootstrap skipped: {e}")
+            logger.debug(f"[TerminalAdvisory] full-schema bootstrap skipped: {e}")
+
+        try:
+            await self._conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS terminal_advisories (
+                    advisory_id          TEXT PRIMARY KEY,
+                    building_id          TEXT NOT NULL DEFAULT 'default',
+                    equipment_id         TEXT,
+                    advisory_type        TEXT NOT NULL,
+                    severity             TEXT NOT NULL,
+                    title                TEXT NOT NULL,
+                    message              TEXT NOT NULL,
+                    evidence_ids         TEXT NOT NULL DEFAULT '[]',
+                    confidence           REAL NOT NULL DEFAULT 0.5,
+                    fired_at             TEXT NOT NULL,
+                    sim_day              INTEGER,
+                    last_surfaced_at     TEXT NOT NULL,
+                    surface_count        INTEGER NOT NULL DEFAULT 1,
+                    state                TEXT NOT NULL DEFAULT 'active',
+                    acknowledged_at      TEXT,
+                    acknowledged_by      TEXT,
+                    ack_signal           TEXT,
+                    resolved_at          TEXT,
+                    resolution_action    TEXT,
+                    escalated_at         TEXT,
+                    escalation_target    TEXT,
+                    source_plan_id       TEXT,
+                    source_query         TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_terminal_state ON terminal_advisories(building_id, state, fired_at);
+                CREATE INDEX IF NOT EXISTS idx_terminal_eq    ON terminal_advisories(equipment_id, state);
+                CREATE TABLE IF NOT EXISTS terminal_advisory_events (
+                    event_id         TEXT PRIMARY KEY,
+                    advisory_id      TEXT NOT NULL,
+                    event_type       TEXT NOT NULL,
+                    event_at         TEXT NOT NULL,
+                    actor            TEXT,
+                    details          TEXT,
+                    FOREIGN KEY (advisory_id) REFERENCES terminal_advisories(advisory_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_terminal_events ON terminal_advisory_events(advisory_id, event_at);
+                """
+            )
+            await self._conn.commit()
+        except Exception as e:
+            logger.error(f"[TerminalAdvisory] table create failed: {e}")
         return self._conn
 
     # ── fire ───────────────────────────────────────────────────────────
