@@ -200,21 +200,39 @@ async def main():
         await inject_point(_zid, "VAV_DMPR", "VAV Damper", 0.85, "fraction")
         await inject_point(_zid, "LIGHT_STATUS", "Lights", 1.0, "bool")
 
-    # Cascade alarms (3 zones)
+    # Cascade alarms.
+    # source_point_id is set per-alarm to the actual causal point so that
+    # analyze_cascade / get_alarm_clusters correctly attribute root cause.
+    # ALM-AHU07-002 (damper slip) is CRITICAL so it sorts first in priority
+    # queues and the cascade-analysis fallback picks it as root_cause_alarm_id.
     _sev_map = {"HIGH": AlarmSeverity.HIGH, "MEDIUM": AlarmSeverity.MEDIUM,
                 "CRITICAL": AlarmSeverity.CRITICAL}
     injected_alarms = 0
     try:
-        for aid, eq_sfx, msg, sev in [
-            ("ALM-AHU07-001", EQ, "AHU-07: Mixed air temp 30.8C, 6.8C above setpoint", "HIGH"),
-            ("ALM-AHU07-002", EQ, "AHU-07: OA damper at 85% open vs commanded 15% — actuator slip", "HIGH"),
-            ("ALM-AHU07-003", "ZONE-28A", "Zone 28A overtemp 25.8C vs 23.0C setpoint", "MEDIUM"),
-            ("ALM-AHU07-004", "ZONE-28B", "Zone 28B overtemp 26.1C vs 23.0C setpoint", "MEDIUM"),
-            ("ALM-AHU07-005", "ZONE-28C", "Zone 28C overtemp 25.5C vs 23.0C setpoint", "MEDIUM"),
+        for aid, eq_sfx, src_pid, msg, sev in [
+            # Root-cause alarm — CRITICAL so cascade fallback picks it first
+            ("ALM-AHU07-002", EQ, f"{EQ}/OA_DMPR",
+             "AHU-07: OA damper at 85% open vs commanded 15% — actuator slip confirmed",
+             "CRITICAL"),
+            # Downstream thermal symptom driven by the damper slip
+            ("ALM-AHU07-001", EQ, f"{EQ}/MAT",
+             "AHU-07: Mixed air temp 30.8°C, 6.8°C above setpoint — caused by damper ingress",
+             "HIGH"),
+            # CHW valve driven to saturation trying to compensate
+            ("ALM-AHU07-003", EQ, f"{EQ}/CHW_VALVE",
+             "AHU-07: CHW valve at 99% open — cooling capacity exhausted, SAT 16.5°C",
+             "HIGH"),
+            # Zone over-temps (downstream impact evidence)
+            ("ALM-AHU07-004", "ZONE-28A", "ZONE-28A/ZN_TEMP",
+             "Zone 28A overtemp 25.8°C vs 23.0°C setpoint", "MEDIUM"),
+            ("ALM-AHU07-005", "ZONE-28B", "ZONE-28B/ZN_TEMP",
+             "Zone 28B overtemp 26.1°C vs 23.0°C setpoint", "MEDIUM"),
+            ("ALM-AHU07-006", "ZONE-28C", "ZONE-28C/ZN_TEMP",
+             "Zone 28C overtemp 25.5°C vs 23.0°C setpoint", "MEDIUM"),
         ]:
             await bms_state.add_alarm(Alarm(
                 alarm_id=aid,
-                source_point_id=f"{eq_sfx}/MAT",
+                source_point_id=src_pid,
                 equipment_id=eq_sfx,
                 message=msg,
                 severity=_sev_map.get(sev, AlarmSeverity.MEDIUM),
@@ -296,8 +314,15 @@ async def main():
     rc = IR.get("root_cause", {}) if isinstance(IR, dict) else {}
     C.check("S4", "root cause statement", bool(rc.get("statement")),
             note=str(rc.get("statement"))[:50] if rc.get("statement") else "")
-    C.check("S4", "root cause label matches verdict", bool(rc.get("label")),
-            note=f"{rc.get('label')} | abstained={IR.get('abstained')} confirmed={rc.get('confirmed')}")
+    # Label honesty: "confirmed" must imply fully grounded (no abstention, no
+    # unverified markers). Catches the "confirmed headline over ungrounded
+    # evidence" mismatch a sharp reviewer would flag.
+    _confirmed = rc.get("confirmed")
+    _grounded = IR.get("fully_grounded")
+    _label_honest = bool(rc.get("label")) and (not _confirmed or _grounded)
+    C.check("S4", "label honesty (confirmed ⇒ grounded)", _label_honest,
+            note=f"{rc.get('label')} | confirmed={_confirmed} grounded={_grounded} "
+                 f"unverified={IR.get('has_unverified_claims')}")
     C.check("S4", "diagnostic confidence (band-derived)", _m.get("confidence") is not None,
             note=f"conf={_m.get('confidence')} band={rc.get('confidence_band')}")
     C.check("S4", "truth_score separate from confidence",
@@ -319,6 +344,66 @@ async def main():
             bool(IR.get("anomaly")), note=str(IR.get("anomaly", {}).get("severity")))
     C.check("S4", "data_coverage metric", _m.get("data_coverage") is not None,
             note=f"{_m.get('data_coverage')}")
+
+    # ════════════════════════════════════════════════════════════════════════
+    _hdr(4, "Investigation Artifacts")
+    _art_set = None
+    try:
+        from agent_commercial.api.artifacts import InvestigationArtifactGenerator
+        _gen = InvestigationArtifactGenerator()
+        _active_alarms = await bms_state.get_active_alarms()
+        _alarm_dicts = [
+            (a.to_dict() if hasattr(a, "to_dict") else a) for a in _active_alarms
+        ]
+        _art_set = await _gen.generate(
+            ir=IR,
+            bms_state=bms_state,
+            active_alarms=_alarm_dicts,
+            investigation_id="demo_flow_test",
+        )
+    except Exception as e:
+        print(f"    artifact generation failed: {e}")
+
+    _arts = (_art_set or {}).get("artifacts", [])
+    _art_types = [a["type"] for a in _arts]
+    print(f"    artifacts generated: {_art_types}")
+
+    C.check("S4", "artifacts: minimum 3 produced", len(_arts) >= 3,
+            note=f"{len(_arts)} artifacts: {_art_types}")
+    C.check("S4", "artifacts: summary_report present",
+            "summary_report" in _art_types)
+    C.check("S4", "artifacts: reasoning_roadmap present",
+            "reasoning_roadmap" in _art_types)
+    C.check("S4", "artifacts: trend_chart present",
+            "trend_chart" in _art_types)
+
+    # Roadmap must have ≥4 steps and reference the equipment
+    _roadmap = next((a for a in _arts if a["type"] == "reasoning_roadmap"), None)
+    _roadmap_ok = False
+    if _roadmap and isinstance(_roadmap.get("content"), dict):
+        _steps = _roadmap["content"].get("steps", [])
+        _eq_ok = _roadmap["content"].get("equipment_id") == EQ
+        _roadmap_ok = len(_steps) >= 4 and _eq_ok
+    C.check("S4", "artifacts: roadmap has ≥4 steps + correct equipment",
+            _roadmap_ok,
+            note=f"{len((_roadmap or {}).get('content', {}).get('steps', []))} steps")
+
+    # Summary report must be non-trivial HTML
+    _summary = next((a for a in _arts if a["type"] == "summary_report"), None)
+    _summary_ok = (
+        _summary is not None
+        and len(_summary.get("content", "")) > 500
+        and EQ in (_summary.get("content", ""))
+    )
+    C.check("S4", "artifacts: summary report non-trivial HTML",
+            _summary_ok,
+            note=f"{len((_summary or {}).get('content',''))} chars")
+
+    # feedback_vs_command presence depends on CMD points being injected
+    # (OA_DMPR_CMD and OA_DMPR are both injected — expect this to appear)
+    C.check("S4", "artifacts: feedback_vs_command present (damper CMD injected)",
+            "feedback_vs_command" in _art_types,
+            note="requires OA_DMPR_CMD + OA_DMPR both live")
 
     # ════════════════════════════════════════════════════════════════════════
     _hdr(5, "Ask ARVIS (context chat) + Workorder")

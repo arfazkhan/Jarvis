@@ -559,3 +559,124 @@ async def update_work_order_status(work_order_id: str, new_status: str):
             w["updated_at"] = datetime.now().isoformat()
             return {"updated": True, "work_order": w}
     raise HTTPException(404, f"Work order {work_order_id} not found")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# INVESTIGATION ARTIFACTS (post-investigation documents & charts)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class ArtifactGenerateRequest(BaseModel):
+    investigation_result: Dict[str, Any] = Field(..., description="IR dict from reasoning/trigger")
+    investigation_id: Optional[str] = Field(default=None)
+
+
+@router.post("/artifacts/generate")
+async def generate_investigation_artifacts(
+    payload: ArtifactGenerateRequest,
+    request: Request,
+):
+    """
+    Generate post-investigation artifacts from a completed InvestigationResult.
+
+    Always produces:
+      • summary_report    — full HTML investigation report (printable PDF)
+      • reasoning_roadmap — causal chain showing how ARVIS reached its conclusion
+      • trend_chart       — key sensor trend chart (PNG or sparkline)
+
+    Equipment-conditional:
+      • feedback_vs_command — CMD vs actual for actuators (AHU, FCU, VAV...)
+      • evidence_manifest   — full evidence ledger with source attribution
+
+    Returns the artifact set with all content inline. Use /artifacts/{id}/download
+    to retrieve individual artifacts by type after the fact.
+    """
+    from agent_commercial.api.artifacts import InvestigationArtifactGenerator
+
+    bms_state = getattr(request.app.state, "bms_state", None)
+    ir = payload.investigation_result
+
+    # Fetch active alarms to enrich the summary report
+    active_alarms: List[Dict[str, Any]] = []
+    if bms_state:
+        try:
+            alarms = await bms_state.get_active_alarms()
+            eq_id = ir.get("equipment_id", "")
+            active_alarms = [
+                (a.to_dict() if hasattr(a, "to_dict") else a)
+                for a in alarms
+                if not eq_id or getattr(a, "equipment_id", None) == eq_id
+                or (isinstance(a, dict) and a.get("equipment_id") == eq_id)
+            ]
+        except Exception as e:
+            logger.debug(f"[Demo] artifact alarm fetch failed: {e}")
+
+    gen = InvestigationArtifactGenerator()
+    artifact_set = await gen.generate(
+        ir=ir,
+        bms_state=bms_state,
+        active_alarms=active_alarms,
+        investigation_id=payload.investigation_id,
+    )
+
+    return artifact_set
+
+
+@router.get("/artifacts/{artifact_set_id}")
+async def get_artifact_set(artifact_set_id: str):
+    """Retrieve a previously generated artifact set by ID (content included)."""
+    from agent_commercial.api.artifacts import get_artifact_set as _get
+    aset = _get(artifact_set_id)
+    if not aset:
+        raise HTTPException(404, f"Artifact set {artifact_set_id} not found")
+    return aset
+
+
+@router.get("/artifacts/{artifact_set_id}/download/{artifact_type}")
+async def download_artifact(artifact_set_id: str, artifact_type: str):
+    """
+    Download a single artifact from a set by type.
+
+    artifact_type: summary_report | reasoning_roadmap | trend_chart |
+                   feedback_vs_command | evidence_manifest
+    """
+    import json as _json
+    from fastapi.responses import HTMLResponse, JSONResponse, Response
+    from agent_commercial.api.artifacts import get_artifact_set as _get
+
+    aset = _get(artifact_set_id)
+    if not aset:
+        raise HTTPException(404, f"Artifact set {artifact_set_id} not found")
+
+    artifact = next(
+        (a for a in aset.get("artifacts", []) if a["type"] == artifact_type), None
+    )
+    if not artifact:
+        raise HTTPException(
+            404,
+            f"Artifact type '{artifact_type}' not in set {artifact_set_id}. "
+            f"Available: {[a['type'] for a in aset.get('artifacts', [])]}",
+        )
+
+    content = artifact.get("content")
+    mime = artifact.get("mime", "application/octet-stream")
+    label = artifact.get("label", artifact_type).replace(" ", "_").replace("—", "-")
+
+    if mime == "text/html":
+        return HTMLResponse(content=content)
+
+    if artifact_type == "trend_chart" and isinstance(content, dict):
+        fmt = content.get("format", "")
+        if fmt == "png_base64":
+            import base64 as _b64
+            raw = _b64.b64decode(content["data"])
+            return Response(
+                content=raw,
+                media_type="image/png",
+                headers={"Content-Disposition": f'attachment; filename="{label}.png"'},
+            )
+
+    # Default: JSON
+    return JSONResponse(
+        content=content if isinstance(content, (dict, list)) else {"data": content},
+        headers={"Content-Disposition": f'attachment; filename="{label}.json"'},
+    )

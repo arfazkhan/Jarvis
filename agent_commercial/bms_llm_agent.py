@@ -1384,7 +1384,7 @@ class BMSLLMAgent:
                                     interesting = any(k in pid_lower for k in (
                                         "kw", "power", "load", "cop", "status",
                                         "sat", "mat", "chwst", "chwrt", "ecwt", "lcwt",
-                                        "valve", "damper", "fan", "rh", "humid",
+                                        "valve", "damper", "dmpr", "cmd", "fan", "rh", "humid",
                                         "vib", "rpm", "oil", "pressure", "flow",
                                         "temp", "setpoint", "sp",
                                     ))
@@ -1410,7 +1410,7 @@ class BMSLLMAgent:
                                 interesting = any(k in pid_lower for k in (
                                     "kw", "power", "load", "cop", "status",
                                     "sat", "mat", "chwst", "chwrt", "ecwt", "lcwt",
-                                    "valve", "damper", "fan", "rh", "humid",
+                                    "valve", "damper", "dmpr", "cmd", "fan", "rh", "humid",
                                     "vib", "rpm", "oil", "pressure", "flow",
                                     "temp", "setpoint", "sp",
                                 ))
@@ -1423,6 +1423,50 @@ class BMSLLMAgent:
                             snapshot["equipment_status"].append(eq_block)
                         except Exception:
                             snapshot["equipment_status"].append(eq_block)
+
+                    # ── Promote UNREGISTERED equipment that still has live points ──
+                    # Zones (ZONE-28A) and ad-hoc points injected via update_point
+                    # carry an equipment_id but may never be registered as an
+                    # Equipment object. Without this, their telemetry (zone temps,
+                    # setpoints) never enters the evidence ledger, so the verifier
+                    # correctly nukes any advisory that cites them. Promote them so
+                    # the conclusion can actually be grounded.
+                    try:
+                        _registered_ids = {getattr(e, "equipment_id", "") for e in equipment}
+                        _seen_ids = {b.get("id") for b in snapshot["equipment_status"]}
+                        _pts_map = getattr(self.bms_state, "_points", {}) or {}
+                        _unreg_ids = set()
+                        for _pid, _p in _pts_map.items():
+                            _eid = getattr(_p, "equipment_id", None)
+                            if _eid and _eid not in _registered_ids and _eid not in _seen_ids:
+                                _unreg_ids.add(_eid)
+                        for _eid in sorted(_unreg_ids)[:40]:
+                            _ep = await self.bms_state.get_points_by_equipment(_eid)
+                            _pblock = {}
+                            for p in (_ep or []):
+                                if p.value is None:
+                                    continue
+                                _pl = (p.point_id or "").lower()
+                                if any(k in _pl for k in (
+                                    "temp", "setpoint", "sp", "co2", "occ", "damper", "dmpr", "cmd",
+                                    "valve", "kw", "rh", "humid", "flow", "status",
+                                )):
+                                    _pblock[p.name or p.point_id] = {
+                                        "value": p.value, "unit": p.unit or "",
+                                    }
+                            if not _pblock:
+                                continue
+                            _kind = "zone" if "zone" in _eid.lower() else "equipment"
+                            snapshot["equipment_status"].append({
+                                "id": _eid,
+                                "kind": _kind,
+                                "status": "active",
+                                "operational": True,
+                                "points": _pblock,
+                                "data_point_count": len(_pblock),
+                            })
+                    except Exception as _unreg_err:
+                        logger.debug(f"unregistered-equipment promotion skipped: {_unreg_err}")
 
                     # Weather / OAT — typically WEATHER equipment
                     weather_eq = next((eq for eq in equipment if "weather" in eq.equipment_id.lower()), None)
@@ -2432,6 +2476,13 @@ class BMSLLMAgent:
         _tl = text.lower()
         abstained = any(m in _tl for m in _abst_markers)
 
+        # Grounding check: any [unverified] inline marker means the verifier
+        # could NOT trace some claim to promoted evidence. A diagnosis carrying
+        # unverified markers is NOT "confirmed" even if the pipeline didn't fully
+        # abstain — the headline must match what the evidence actually supports.
+        has_unverified = "[unverified]" in _tl or "could not be traced" in _tl
+        fully_grounded = (not abstained) and (not has_unverified)
+
         # Diagnostic confidence (0-1) derived from the BAND — distinct from the
         # truth/groundedness score. Putting the truth score (e.g. 0.96) under a
         # "Confidence" label next to a "Low" band told three different stories.
@@ -2439,6 +2490,9 @@ class BMSLLMAgent:
         diagnostic_confidence = _band_to_conf.get(confidence_band)
         if abstained:
             diagnostic_confidence = min(diagnostic_confidence or 0.3, 0.3)
+        elif has_unverified:
+            # Ungrounded but not abstaining → cap at probable, not confirmed
+            diagnostic_confidence = min(diagnostic_confidence or 0.4, 0.45)
 
         # Root cause statement. The markdown dashboard formats it as:
         #   ## ROOT CAUSE IDENTIFIED
@@ -2466,11 +2520,15 @@ class BMSLLMAgent:
             _rc2 = re.search(r"(damper[^\n\.]{5,120}|root cause[^\n\.]{5,120})", text, re.IGNORECASE)
             root_cause = _rc2.group(0).strip() if _rc2 else None
 
-        # Headline must match the verdict. When abstained or low-confidence,
-        # present the cause as a probable-unconfirmed hypothesis, not a fact.
-        root_cause_label = "Root cause identified"
-        if root_cause and (abstained or confidence_band == "Low"):
+        # Headline must match the verdict. Only call it "identified" when the
+        # advisory is fully grounded (no abstention, no unverified markers) AND
+        # the band is at least Medium. Otherwise it is a probable hypothesis.
+        if root_cause and fully_grounded and confidence_band in ("Medium", "High"):
+            root_cause_label = "Root cause identified"
+        elif root_cause:
             root_cause_label = "Most probable cause — unconfirmed, physical inspection required"
+        else:
+            root_cause_label = "Cause under investigation"
 
         # Agents from plan tasks (real participation + outcome)
         _action_by_node = {
@@ -2559,12 +2617,25 @@ class BMSLLMAgent:
                         continue
                     for _pk, _pv in (_eq.get("points", {}) or {}).items():
                         _suffix = _pk.split("/")[-1].upper()
-                        if _suffix not in _label_map:
+                        
+                        _found_key = None
+                        if _suffix in _label_map:
+                            _found_key = _suffix
+                        else:
+                            # Try to match friendly name or abbreviation in _label_map
+                            _pk_clean = _pk.lower().replace("_", " ").strip()
+                            for _k, (_friendly, _unit) in _label_map.items():
+                                if _pk_clean == _friendly.lower().replace("_", " ").strip() or _k.lower() == _suffix.lower():
+                                    _found_key = _k
+                                    break
+                                    
+                        if not _found_key:
                             continue
+                            
                         _val = _pv.get("value") if isinstance(_pv, dict) else _pv
                         if not isinstance(_val, (int, float)):
                             continue
-                        _lbl, _unit = _label_map[_suffix]
+                        _lbl, _unit = _label_map[_found_key]
                         if _unit == "%" and _val <= 1.0:
                             _val = round(_val * 100, 1)
                         key_evidence.append({"label": _lbl, "value": round(_val, 2) if isinstance(_val, float) else _val, "unit": _unit, "confidence": None})
@@ -2644,6 +2715,8 @@ class BMSLLMAgent:
             "equipment_id": equipment_id,
             "status": "abstained" if abstained else "complete",
             "abstained": abstained,
+            "fully_grounded": fully_grounded,
+            "has_unverified_claims": has_unverified,
             "anomaly": {
                 "type": "Mixed Air Temperature Drift" if equipment_id and equipment_id.startswith("AHU") else None,
                 "z_score": z_score,                  # real, from watchdog or inline history
@@ -2654,7 +2727,7 @@ class BMSLLMAgent:
                 "label": root_cause_label,           # "identified" vs "probable—unconfirmed"
                 "statement": root_cause,
                 "confidence_band": confidence_band,  # Low/Medium/High — diagnostic
-                "confirmed": (not abstained) and confidence_band in ("Medium", "High"),
+                "confirmed": fully_grounded and confidence_band in ("Medium", "High"),
             },
             "metrics": {
                 "elapsed_seconds": round(elapsed_s, 1),

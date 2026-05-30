@@ -199,6 +199,19 @@ class QueenCoordinator(BaseModel):
             for name in ["Sensor_Fusion_Agent", "Maintenance_Agent"]:
                 if name in self.nodes:
                     selected.add(name)
+        # Operational overrides to engage specialized domain agents for equipment anomalies
+        if any(kw in query_lower for kw in ["damper", "valve", "actuator", "linkage", "slip", "slippage", "stuck"]):
+            for name in ["Maintenance_Agent"]:
+                if name in self.nodes:
+                    selected.add(name)
+        if any(kw in query_lower for kw in ["impact", "downstream", "consequence", "rca", "root cause"]):
+            for name in ["Strategic_Agent", "Alarm_Agent"]:
+                if name in self.nodes:
+                    selected.add(name)
+        if any(kw in query_lower for kw in ["tenant", "complaint", "complaining", "comfort", "hot", "cold"]):
+            for name in ["Comfort_Agent"]:
+                if name in self.nodes:
+                    selected.add(name)
 
         # Always include Memory_Agent for institutional context
         if selected and "Memory_Agent" in self.nodes:
@@ -2129,18 +2142,86 @@ class QueenCoordinator(BaseModel):
                     _valid_ids = {e.id for e in plan.evidence.get_all()}
                     _total_cited = 0
                     _invalid_cited = 0
-                    for _adv in _parsed.get("advisories", []):
+
+                    # ── Deterministic evidence-id rebind ────────────────────
+                    # The synthesis LLM picks which evidence_id to attach to each
+                    # numeric claim — non-deterministically. It frequently cites an
+                    # alarm id for a telemetry value (e.g. MAT=30.8) whose real
+                    # backing is the promoted LIVE_BMS_SNAPSHOT evidence block. H4
+                    # then flags a contradiction ("cited evidence has no temp"),
+                    # and on a re-run a different (correct) id gets cited — the
+                    # "sometimes evidence, sometimes zero" flake. Fix: bind every
+                    # matched number to the evidence id that ACTUALLY contains it,
+                    # from the numeric audit, and union those ids into the advisory.
+                    _num_ev_by_adv: Dict[int, set] = {}
+                    try:
+                        from arvis_core.swarm.numeric_audit import (
+                            get_confidence_and_provenance as _gcp,
+                            _numbers_match as _nmatch,
+                        )
+                        _adv_idx_re = re.compile(r"advisor(?:y|ies)\[(\d+)\]")
+                        _ar = getattr(self, "_last_numeric_audit", None)
+                        # Live-telemetry evidence ids — preferred citation target so
+                        # a numeric value present in BOTH a snapshot block and an
+                        # action/derived record always cites the snapshot (which
+                        # actually carries the reading H4 looks for).
+                        _telemetry_eids = {
+                            e.id for e in plan.evidence.get_all()
+                            if "live_snapshot" in str(getattr(e, "source_tool", ""))
+                        }
+                        _allowed_items = list(getattr(_allowed_numbers, "items", []) or [])
+
+                        def _eids_for(_an) -> list:
+                            try:
+                                return [x for x in _gcp(_an)[3] if x in _valid_ids]
+                            except Exception:
+                                return []
+
+                        for _nm in (getattr(_ar, "matched", None) or []):
+                            _m_idx = _adv_idx_re.search(_nm.context_field or "")
+                            if not _m_idx:
+                                continue
+                            _aidx = int(_m_idx.group(1))
+                            _val = getattr(_nm, "output_value", None)
+                            # Collect every allowed source holding this value, then
+                            # prefer live-telemetry ones; fall back to matched_to.
+                            _tele, _other = set(), set()
+                            if _val is not None:
+                                for _an in _allowed_items:
+                                    if not _nmatch(_val, _an.value):
+                                        continue
+                                    for _eid in _eids_for(_an):
+                                        (_tele if _eid in _telemetry_eids else _other).add(_eid)
+                            _bind = _tele if _tele else _other
+                            if not _bind:
+                                _mt = getattr(_nm, "matched_to", None)
+                                if _mt is not None:
+                                    _bind = set(_eids_for(_mt))
+                            if _bind:
+                                _num_ev_by_adv.setdefault(_aidx, set()).update(_bind)
+                    except Exception as _rebind_err:
+                        logger.debug(f"[Queen] evidence-id rebind skipped: {_rebind_err}")
+
+                    for _aidx, _adv in enumerate(_parsed.get("advisories", [])):
                         _cited = _adv.get("evidence_ids", [])
                         if not isinstance(_cited, list):
                             _adv["evidence_ids"] = []
-                            continue
+                            _cited = []
                         _total_cited += len(_cited)
                         _valid = [eid for eid in _cited if eid in _valid_ids]
                         _invalid = [eid for eid in _cited if eid not in _valid_ids]
                         _invalid_cited += len(_invalid)
                         if _invalid:
                             logger.warning(f"[Queen] Stripped hallucinated evidence_ids: {_invalid}")
-                        _adv["evidence_ids"] = _valid
+                        # Union deterministically-bound telemetry evidence
+                        _bound = _num_ev_by_adv.get(_aidx, set())
+                        _new = [eid for eid in _bound if eid not in _valid]
+                        if _new:
+                            logger.info(
+                                f"[Queen] Rebound {len(_new)} telemetry evidence_id(s) "
+                                f"to advisory[{_aidx}]: {_new}"
+                            )
+                        _adv["evidence_ids"] = _valid + _new
                     result_str = json.dumps(_parsed)
                     if _total_cited > 0 and _invalid_cited / _total_cited > 0.5:
                         logger.warning(
