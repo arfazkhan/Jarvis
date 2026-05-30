@@ -52,11 +52,16 @@ class CostEstimate:
     gsas_impact_points: float
     recommendation: str
     proceed_warning: bool = False
-    
+    delta_kwh_per_day: float = 0.0
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "current_burn_rate_qar_hour": round(self.current_burn_rate_qar_hour, 2),
             "new_burn_rate_qar_hour": round(self.new_burn_rate_qar_hour, 2),
+            # Schema-named keys (response_schema for check_cost_impact)
+            "current_burn_rate_qar_hr": round(self.current_burn_rate_qar_hour, 2),
+            "new_burn_rate_qar_hr": round(self.new_burn_rate_qar_hour, 2),
+            "delta_kwh_per_day": round(self.delta_kwh_per_day, 2),
             "change_percent": round(self.change_percent, 1),
             "daily_impact_qar": round(self.daily_impact_qar, 2),
             "monthly_impact_qar": round(self.monthly_impact_qar, 2),
@@ -119,6 +124,10 @@ class CostEngine:
     # Operating hours
     DEFAULT_OPERATING_HOURS = 12  # 8am-8pm typical
     DAYS_PER_MONTH = 30
+
+    # Nominal building design demand (kW) used as the burn-rate baseline.
+    # vs_baseline_pct expresses current demand as deviation from this reference.
+    DEFAULT_BASELINE_KW = 450.0
     
     def __init__(
         self,
@@ -208,6 +217,9 @@ class CostEngine:
         change_pct = ((new_burn - current_burn) / current_burn * 100) if current_burn > 0 else 0
         daily_impact = (new_burn - current_burn) * self.operating_hours
         monthly_impact = daily_impact * self.DAYS_PER_MONTH
+
+        # Real energy delta in kWh/day = extra load (kW) * operating hours
+        delta_kwh_per_day = extra_load_kw * self.operating_hours
         
         # GSAS impact estimation
         # Energy category is 24% of score, roughly 1 point per 5% energy change
@@ -236,9 +248,14 @@ class CostEngine:
             gsas_impact_points=gsas_impact,
             recommendation=recommendation,
             proceed_warning=proceed_warning,
+            delta_kwh_per_day=delta_kwh_per_day,
         )
     
-    def get_building_burn_rate(self, total_kw: float) -> Dict[str, Any]:
+    def get_building_burn_rate(
+        self,
+        total_kw: float,
+        baseline_kw: Optional[float] = None,
+    ) -> Dict[str, Any]:
         """
         Get current building-wide burn rate summary.
         
@@ -262,9 +279,17 @@ class CostEngine:
         else:
             trend = "insufficient_data"
         
+        # Deviation from nominal building baseline demand
+        base_kw = baseline_kw if baseline_kw and baseline_kw > 0 else self.DEFAULT_BASELINE_KW
+        vs_baseline_pct = (total_kw - base_kw) / base_kw * 100
+
         return {
             "current_load_kw": round(total_kw, 1),
             "burn_rate_qar_hour": round(hourly, 2),
+            # Schema-named keys (response_schema for get_burn_rate)
+            "burn_rate_qar_hr": round(hourly, 2),
+            "burn_rate_kw": round(total_kw, 1),
+            "vs_baseline_pct": round(vs_baseline_pct, 1),
             "projected_daily_qar": round(daily, 2),
             "projected_monthly_qar": round(monthly, 0),
             "trend": trend,
@@ -352,7 +377,10 @@ def check_cost_impact(
     return result
 
 
-def get_current_burn_rate(total_kw: float) -> Dict[str, Any]:
+def get_current_burn_rate(
+    total_kw: float,
+    baseline_kw: Optional[float] = None,
+) -> Dict[str, Any]:
     """Get current building burn rate - for dashboard display"""
     engine = CostEngine()
-    return engine.get_building_burn_rate(total_kw)
+    return engine.get_building_burn_rate(total_kw, baseline_kw=baseline_kw)
