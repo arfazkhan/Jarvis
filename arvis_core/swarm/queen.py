@@ -509,11 +509,24 @@ class QueenCoordinator(BaseModel):
                             if isinstance(p, (int, float)):
                                 return p
                             return None
-                            
-                        mat = _get_val(_points.get("MAT")) or _get_val(_points.get("mat"))
-                        oat = _get_val(_points.get("OAT")) or _get_val(_points.get("oat")) or _get_val(_weather.get("oat"))
-                        rat = _get_val(_points.get("RAT")) or _get_val(_points.get("rat"))
-                        oa_dmpr_cmd = _get_val(_points.get("OA_DMPR_CMD")) or _get_val(_points.get("oa_dmpr_cmd")) or _get_val(_points.get("OA_DMPR"))
+
+                        # Snapshot keys points by display name ("Mixed Air Temp"),
+                        # NOT point code ("MAT") — so look up by alias substrings
+                        # against lowercased keys, else the deriver silently never
+                        # fires (the thermo+cost chain stays dormant).
+                        def _find(*aliases):
+                            for _k, _v in (_points or {}).items():
+                                _kl = str(_k).lower()
+                                if any(_a in _kl for _a in aliases):
+                                    _val = _get_val(_v)
+                                    if _val is not None:
+                                        return _val
+                            return None
+
+                        mat = _find("mat", "mixed air")
+                        oat = _find("oat", "outdoor air") or _get_val(_weather.get("oat"))
+                        rat = _find("rat", "return air")
+                        oa_dmpr_cmd = _find("damper command", "oa_dmpr_cmd", "dmpr_cmd") or _find("oa_dmpr", "damper position")
                         
                         if mat is not None and oat is not None and rat is not None:
                             divisor = oat - rat
@@ -556,6 +569,86 @@ class QueenCoordinator(BaseModel):
                                         equipment_id=_eq_id,
                                         equipment_type=_eq_block.get("kind", ""),
                                     ))
+
+                                    # ── Derived Cost Evidence ──────────────
+                                    # WHY: a stuck-open OA damper drags hot
+                                    # outdoor air past the commanded mix, so the
+                                    # cooling coil must remove the extra heat —
+                                    # real money on the chiller every hour. The
+                                    # synthesis LLM otherwise INVENTS a QAR/kWh
+                                    # figure that NumericAudit strips to
+                                    # [unverified]; promoting a transparent,
+                                    # telemetry-derived number makes the savings
+                                    # citable and shown to the operator.
+                                    # IF IGNORED: the cost claim stays ungrounded
+                                    # → stripped → dashboard cannot show savings,
+                                    # and the operator loses the $$ case that
+                                    # justifies the repair work order.
+                                    if expected_mat is not None:
+                                        try:
+                                            _excess_dt = max(0.0, mat - expected_mat)  # °C the coil must remove due to leak
+                                            # Supply airflow: measured if present, else nominal AHU design (ASSUMPTION).
+                                            _af = (
+                                                _get_val(_points.get("SA_FLOW")) or _get_val(_points.get("SUPPLY_FLOW"))
+                                                or _get_val(_points.get("SAF")) or _get_val(_points.get("AIRFLOW"))
+                                            )
+                                            _af_assumed = _af is None
+                                            _airflow_m3s = float(_af) if _af else 2.0  # nominal mid-size AHU ~2.0 m³/s
+                                            _RHO, _CP, _RATE, _HRS = 1.2, 1.006, 0.14, 12  # kg/m³, kJ/kg·K, Kahramaa Tier-3 QAR/kWh, op-hrs/day
+                                            _excess_kw = round(_airflow_m3s * _RHO * _CP * _excess_dt, 2)
+                                            _daily_kwh = round(_excess_kw * _HRS, 1)
+                                            _monthly_qar = round(_daily_kwh * 30.0 * _RATE, 0)
+                                            if _excess_kw > 0:
+                                                plan.evidence.add(Evidence(
+                                                    source_tool="derived:cost",
+                                                    raw_payload={
+                                                        "type": "derived_inference",
+                                                        "formula": "excess_oa_cooling_cost",
+                                                        "equipment_id": _eq_id,
+                                                        "inputs": {
+                                                            "MAT": round(mat, 2),
+                                                            "expected_mat_at_commanded_oa": round(expected_mat, 2),
+                                                            "excess_delta_t_c": round(_excess_dt, 2),
+                                                            "supply_airflow_m3s": round(_airflow_m3s, 2),
+                                                            "airflow_assumed": _af_assumed,
+                                                            "air_density_kg_m3": _RHO,
+                                                            "cp_kj_kgk": _CP,
+                                                            "tariff_qar_kwh": _RATE,
+                                                            "operating_hours_day": _HRS,
+                                                        },
+                                                        "result": {
+                                                            "excess_cooling_kw": _excess_kw,
+                                                            "excess_daily_kwh": _daily_kwh,
+                                                            "est_monthly_cost_qar": _monthly_qar,
+                                                            "est_monthly_savings_qar": _monthly_qar,  # recovered if damper repaired
+                                                        },
+                                                        "why": (
+                                                            "Stuck-open OA damper pulls hot outdoor air past the commanded "
+                                                            "mix; the cooling coil burns extra chiller energy to hold supply "
+                                                            "temperature, costing ~QAR "
+                                                            f"{_monthly_qar:.0f}/month at the Tier-3 rate."
+                                                        ),
+                                                        "if_ignored": (
+                                                            "Sustained energy waste continues every operating hour, the coil "
+                                                            "stays saturated (comfort drift in served zones), and chiller "
+                                                            "runtime/wear accumulates — the recoverable savings are lost until "
+                                                            "the damper actuator is repaired."
+                                                        ),
+                                                        "confidence": 0.6 if _af_assumed else 0.85,
+                                                        "traceable": True,
+                                                    },
+                                                    node_name="CostDeriver",
+                                                    freshness=FreshnessStatus.RECENT,
+                                                    summary=(
+                                                        f"{_eq_id} derived cost: excess load {_excess_kw} kW → "
+                                                        f"~QAR {_monthly_qar:.0f}/month recoverable savings"
+                                                        + (" (airflow assumed)" if _af_assumed else "")
+                                                    ),
+                                                    equipment_id=_eq_id,
+                                                    equipment_type=_eq_block.get("kind", ""),
+                                                ))
+                                        except Exception as _cost_err:
+                                            logger.debug(f"[Queen] Derived cost evidence skipped: {_cost_err}")
                 except Exception as _deriv_err:
                     logger.debug(f"[Queen] Derived thermodynamic evidence promotion failed: {_deriv_err}")
 

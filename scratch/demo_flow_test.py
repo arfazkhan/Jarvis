@@ -188,6 +188,13 @@ async def main():
     await inject_point(EQ, "OA_DMPR", "OA Damper Position", 0.85, "fraction")
     await inject_point(EQ, "OA_DMPR_CMD", "OA Damper Command", 0.15, "fraction")
     await inject_point(EQ, "CHW_VALVE", "CHW Valve", 0.99, "fraction")
+    # OAT + RAT so the thermodynamic + cost derivers can fire (mixed-air balance
+    # needs all three of MAT/OAT/RAT). Qatar hot outdoor air (42°C) mixed with
+    # return air (24°C): at the COMMANDED 15% damper, expected MAT ≈ 26.7°C, but
+    # actual MAT=30.8°C → effective OA ≈ 38% → leak grounded, and the coil's
+    # excess cooling load → derived QAR/month savings evidence.
+    await inject_point(EQ, "OAT", "Outdoor Air Temp", 42.0, "C")
+    await inject_point(EQ, "RAT", "Return Air Temp", 24.0, "C")
 
     # Real zone telemetry so the "Floor 28 too hot, tenants complaining" story
     # is EVIDENCE-BACKED: actual overtemp readings + non-zero occupancy. Without

@@ -1383,7 +1383,7 @@ class BMSLLMAgent:
                                     pid_lower = p.point_id.lower() if p.point_id else ""
                                     interesting = any(k in pid_lower for k in (
                                         "kw", "power", "load", "cop", "status",
-                                        "sat", "mat", "chwst", "chwrt", "ecwt", "lcwt",
+                                        "sat", "mat", "oat", "rat", "chwst", "chwrt", "ecwt", "lcwt",
                                         "valve", "damper", "dmpr", "cmd", "fan", "rh", "humid",
                                         "vib", "rpm", "oil", "pressure", "flow",
                                         "temp", "setpoint", "sp",
@@ -1409,7 +1409,7 @@ class BMSLLMAgent:
                                 pid_lower = p.point_id.lower()
                                 interesting = any(k in pid_lower for k in (
                                     "kw", "power", "load", "cop", "status",
-                                    "sat", "mat", "chwst", "chwrt", "ecwt", "lcwt",
+                                    "sat", "mat", "oat", "rat", "chwst", "chwrt", "ecwt", "lcwt",
                                     "valve", "damper", "dmpr", "cmd", "fan", "rh", "humid",
                                     "vib", "rpm", "oil", "pressure", "flow",
                                     "temp", "setpoint", "sp",
