@@ -363,6 +363,9 @@ async def main():
     C.check("S4", "each hypothesis has a discriminating test",
             all(h.get("discriminating_test") for h in _hyps) if _hyps else False,
             note=f"top: {(_hyps[0].get('label') if _hyps else None)}")
+    C.check("S4", "each hypothesis has evidence reliability",
+            all(h.get("evidence_reliability") in ("Low", "Medium", "High") for h in _hyps) if _hyps else False,
+            note=f"top: {(_hyps[0].get('evidence_reliability') if _hyps else None)} ({(_hyps[0].get('independent_sources') if _hyps else None)} indep)")
 
     # ════════════════════════════════════════════════════════════════════════
     _hdr(4, "Investigation Artifacts")

@@ -309,6 +309,7 @@ Built by `_build_investigation_result()` in `bms_llm_agent.py`. `null` where not
       "rationale": "Actual OA damper 85% vs 15% command; MAT 30.8 > expected 26.7 at commanded position.",
       "supporting_evidence_ids": ["a31f628a-9bd", "0c80f001-163"],
       "independent_sources": 2,              // # of DISTINCT evidence source_tools backing it
+      "evidence_reliability": "Medium",      // Low(1) / Medium(2) / High(3+) independent agreeing sources
       "discriminating_test": "Visual blade/linkage inspection at the mixing box vs the 15% command.",
       "probability": 0.34                    // normalized score (rank + corroboration)
     },
@@ -365,50 +366,76 @@ If none yet: `{ "advisory": null, "message": "No advisories generated yet" }`.
 # GROUP 5 — Explainability & Brain Dashboard
 
 ## 13. `GET /explain/advisory/{advisory_id}`
-Deep explainability for one advisory: causal chain, BFT votes, H4 status, financial impact.
+Deep explainability for one advisory. **Real-data path**: if the advisory carries an `investigation_result` (it does when created via `POST /reasoning/trigger`), this returns the **actual ranked differential**, evidence-grounded verification metrics, and cost case — not defaults.
 
 **Path param**: `advisory_id`.
 
-**Response 200**
+**Response 200 — real path** (advisory has `investigation_result`)
 ```json
 {
-  "advisory_id": "<id>",
-  "title": "Thermal Anomalous Load Over-compensation",
-  "recommendation": "Perform immediate diagnostic check on cooling components.",
-  "severity": "medium",
-  "confidence": 0.88,
+  "advisory_id": "ADV-20260531143805-A1B2",
+  "title": "Damper Actuator Blade Slip (physical opening exceeds command)",
+  "recommendation": "<advisory message>",
+  "severity": "critical",
+  "confidence": 0.55,
+  "grounded": true,
+  "confirmed": false,
   "explainability": {
-    "causal_chain": [
-      { "step": 1, "description": "Abnormal sensor deviation detected on target <eq>" },
-      { "step": 2, "description": "Secondary compressor chiller thermal overcompensation triggered" },
-      { "step": 3, "description": "Byzantine Quorum rules out single sensor false positive" },
-      { "step": 4, "description": "H4 Faithfulness verify confirms diagnosis matches BACnet state" }
+    "causal_chain": [ { "step": 1, "description": "Detect" }, "...investigation_flow stages..." ],
+    "differential_diagnosis": [
+      {
+        "rank": 1,
+        "label": "Damper Actuator Blade Slip",
+        "probability": 0.34,
+        "evidence_reliability": "Medium",          // Low(1)/Medium(2)/High(3+) independent sources
+        "independent_sources": 2,
+        "rationale": "Actual OA damper 85% vs 15% command; MAT 30.8 > expected 26.7.",
+        "discriminating_test": "Visual blade/linkage inspection vs the 15% command.",
+        "supporting_evidence_ids": ["a31f628a-9bd", "0c80f001-163"]
+      },
+      {
+        "rank": 2,
+        "label": "Cooling-coil capacity / CHW flow restriction",
+        "probability": 0.21,
+        "evidence_reliability": "Low",
+        "independent_sources": 1,
+        "rationale": "Valve 99% yet SAT above setpoint; low coil ΔT.",
+        "discriminating_test": "Clamp-on CHW flow + strainer ΔP at the AHU.",
+        "supporting_evidence_ids": ["..."]
+      }
+      // ... up to 4
     ],
+    "differential_summary": {
+      "leading": "Damper Actuator Blade Slip",
+      "dominance": 0.13,
+      "leading_corroborated": true,
+      "hypothesis_count": 4
+    },
+    "key_evidence": [ { "label": "Mixed Air Temp", "value": 30.8, "unit": "°C", "confidence": 0.95 } ],
     "financial_impact": {
-      "overhead_percent": "+18% energy overhead over 7 days",
-      "estimated_cost_qard": "12,400 QAR/week if unaddressed"
+      "monthly_savings_qar": 499.0,
+      "excess_cooling_kw": 9.9,
+      "basis": "Stuck-open OA damper ... ~QAR 499/month at the Tier-3 rate.",
+      "if_ignored": "Sustained energy waste ... until the damper actuator is repaired.",
+      "confidence": 0.6,
+      "assumption": "airflow estimated (nominal AHU)"
     },
-    "bft_quorum": {
-      "status": "APPROVED",
-      "participating_nodes": ["Energy_Agent", "Safety_Agent", "Comfort_Agent"],
-      "votes": [
-        { "agent": "Energy_Agent",  "vote": "APPROVE", "reason": "..." },
-        { "agent": "Safety_Agent",  "vote": "APPROVE", "reason": "..." },
-        { "agent": "Comfort_Agent", "vote": "APPROVE_WITH_CONDITION", "conditions": ["Maintain Lobby setpoint at 22C"], "reason": "..." }
-      ]
-    },
-    "h4_verification": {
-      "status": "VERIFIED",
-      "faithfulness_score": 0.94,
-      "evidence_count": 12,
-      "synthesis_grounding": "All stated facts verified directly from live digital twin telemetry ledger"
+    "verification": {
+      "truth_score": 0.96,
+      "evidence_count": 19,
+      "data_coverage": 1.0,
+      "agents_converged": 3,
+      "abstained": false,
+      "has_unverified_claims": false,
+      "synthesis_grounding": "Unconfirmed: competing hypotheses remain — run the discriminating test(s) before acting."
     }
   }
 }
 ```
-**Errors**: `404` `Advisory {id} not found` (searches `advisory_history` then `pending_advisories`).
 
-> Note: this endpoint returns a **presentation-shaped** explainability block with representative defaults for the demo narrative. The ground-truth, per-run verification data lives in `investigation_result` (endpoint 10).
+**Response 200 — fallback** (advisory has no `investigation_result`): a presentation-shaped block with representative defaults and `explainability.note: "presentation defaults — advisory carried no investigation_result"`.
+
+**Errors**: `404` `Advisory {id} not found` (searches `advisory_history` then `pending_advisories`).
 
 ## 14. `GET /intelligence/summary`
 **Response 200**

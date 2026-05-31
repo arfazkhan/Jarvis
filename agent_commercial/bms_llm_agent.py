@@ -2723,11 +2723,17 @@ class BMSLLMAgent:
                     _indep = len(_sources)
                     # LLM rank weight (decays with position) + corroboration boost.
                     _score = max(0.0, 1.0 - 0.25 * _i) + 0.5 * _indep
+                    # Evidence reliability = how many INDEPENDENT observations agree.
+                    # A single-sensor claim (e.g. one actuator-feedback point) is
+                    # Low no matter how plausible — exactly the trap the experts
+                    # flagged ("feedback lies, MAT stratifies, verify physically").
+                    _reliability = "High" if _indep >= 3 else "Medium" if _indep == 2 else "Low"
                     _scored.append({
                         "label": str(_h.get("label", ""))[:120],
                         "rationale": str(_h.get("rationale", ""))[:240],
                         "supporting_evidence_ids": _cited,
                         "independent_sources": _indep,
+                        "evidence_reliability": _reliability,   # Low(1) / Medium(2) / High(3+) independent sources
                         "discriminating_test": str(_h.get("discriminating_test", ""))[:200],
                         "_score": _score,
                     })

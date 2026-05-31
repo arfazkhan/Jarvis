@@ -338,19 +338,25 @@ async def trigger_swarm_reasoning(payload: TriggerReasoningRequest, request: Req
     advice_text = response.text if hasattr(response, 'text') else str(response)
     confidence = getattr(response, 'confidence', 0.85)
     
-    # Update latest history in orchestrator
+    _ir = getattr(response, "investigation_result", None)
+
+    # Update latest history in orchestrator. Attach the real investigation_result
+    # (ranked hypotheses, differential, metrics) to each advisory so
+    # GET /explain/advisory/{id} can render REAL explainability, not defaults.
     advisories = demo._parse_advisories(advice_text, confidence)
     for adv in advisories:
+        adv.setdefault("id", f"ADV-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:4].upper()}")
         adv["day"] = demo.sim_day
         adv["generated_at"] = demo.sim_time.isoformat()
+        adv["investigation_result"] = _ir
         demo.advisory_history.append(adv)
-        
+
     return {
         "response": advice_text,
         "confidence": confidence,
         "advisories_generated": advisories,
         # Structured payload for demo screens 3 & 4 (real run data).
-        "investigation_result": getattr(response, "investigation_result", None),
+        "investigation_result": _ir,
         "metadata": {
             "truth_score": getattr(response, 'truth_score', 0.9),
             "answer_confidence": getattr(response, 'answer_confidence', 0.9),
@@ -409,8 +415,83 @@ async def explain_advisory(advisory_id: str, request: Request):
                 
     if not target_adv:
         raise HTTPException(404, f"Advisory {advisory_id} not found")
-        
-    # Build robust explainability metadata
+
+    ir = target_adv.get("investigation_result") or {}
+
+    # ── REAL explainability path ───────────────────────────────────────────
+    # If this advisory carries an investigation_result, render the actual
+    # ranked differential, evidence-grounded metrics, and cost case — not
+    # hardcoded demo defaults.
+    if ir and (ir.get("hypotheses") or ir.get("root_cause")):
+        _rc = ir.get("root_cause", {}) or {}
+        _metrics = ir.get("metrics", {}) or {}
+        _diff = ir.get("differential", {}) or {}
+        _cost = ir.get("cost_impact") or {}
+        _hyps = ir.get("hypotheses") or []
+        _flow = ir.get("investigation_flow") or ["Detect", "Investigate", "Reason", "Synthesize", "Advise"]
+
+        causal_chain = [{"step": i + 1, "description": s} for i, s in enumerate(_flow)]
+
+        financial_impact = None
+        if _cost.get("monthly_savings_qar") is not None:
+            financial_impact = {
+                "monthly_savings_qar": _cost.get("monthly_savings_qar"),
+                "excess_cooling_kw": _cost.get("excess_cooling_kw"),
+                "basis": _cost.get("why"),
+                "if_ignored": _cost.get("if_ignored"),
+                "confidence": _cost.get("confidence"),
+                "assumption": _cost.get("assumption"),
+            }
+
+        return {
+            "advisory_id": advisory_id,
+            "title": _rc.get("statement") or target_adv.get("title") or "Investigation",
+            "recommendation": target_adv.get("message", ""),
+            "severity": (ir.get("anomaly", {}) or {}).get("severity") or target_adv.get("severity", "medium"),
+            "confidence": _metrics.get("confidence", target_adv.get("confidence")),
+            "grounded": ir.get("fully_grounded"),
+            "confirmed": _rc.get("confirmed"),
+            "explainability": {
+                "causal_chain": causal_chain,
+                # Ranked competing causes + the discriminating field test for each.
+                "differential_diagnosis": [
+                    {
+                        "rank": i + 1,
+                        "label": h.get("label"),
+                        "probability": h.get("probability"),
+                        "evidence_reliability": h.get("evidence_reliability"),
+                        "independent_sources": h.get("independent_sources"),
+                        "rationale": h.get("rationale"),
+                        "discriminating_test": h.get("discriminating_test"),
+                        "supporting_evidence_ids": h.get("supporting_evidence_ids", []),
+                    }
+                    for i, h in enumerate(_hyps)
+                ],
+                "differential_summary": {
+                    "leading": (_hyps[0].get("label") if _hyps else None),
+                    "dominance": _diff.get("dominance"),
+                    "leading_corroborated": _diff.get("leading_corroborated"),
+                    "hypothesis_count": _diff.get("count", len(_hyps)),
+                },
+                "key_evidence": ir.get("key_evidence", []),
+                "financial_impact": financial_impact,
+                "verification": {
+                    "truth_score": _metrics.get("truth_score"),
+                    "evidence_count": _metrics.get("evidence_count"),
+                    "data_coverage": _metrics.get("data_coverage"),
+                    "agents_converged": _metrics.get("agents_converged"),
+                    "abstained": ir.get("abstained"),
+                    "has_unverified_claims": ir.get("has_unverified_claims"),
+                    "synthesis_grounding": (
+                        "Confirmed: leading cause grounded and corroborated by ≥2 independent sources."
+                        if _rc.get("confirmed") else
+                        "Unconfirmed: competing hypotheses remain — run the discriminating test(s) before acting."
+                    ),
+                },
+            },
+        }
+
+    # ── Fallback (no IR on this advisory): demo-presentation defaults ──────
     eq_id = target_adv.get("equipment_id", "chiller_01")
     return {
         "advisory_id": advisory_id,
@@ -418,7 +499,6 @@ async def explain_advisory(advisory_id: str, request: Request):
         "recommendation": target_adv.get("message", "Perform immediate diagnostic check on cooling components."),
         "severity": target_adv.get("severity", "medium"),
         "confidence": target_adv.get("confidence", 0.88),
-        
         "explainability": {
             "causal_chain": [
                 {"step": 1, "description": f"Abnormal sensor deviation detected on target {eq_id}"},
@@ -430,21 +510,13 @@ async def explain_advisory(advisory_id: str, request: Request):
                 "overhead_percent": "+18% energy overhead over 7 days",
                 "estimated_cost_qard": "12,400 QAR/week if unaddressed"
             },
-            "bft_quorum": {
-                "status": "APPROVED",
-                "participating_nodes": ["Energy_Agent", "Safety_Agent", "Comfort_Agent"],
-                "votes": [
-                    {"agent": "Energy_Agent", "vote": "APPROVE", "reason": "Chiller power draw is exceeding design curves by 22%"},
-                    {"agent": "Safety_Agent", "vote": "APPROVE", "reason": "Vibration profile is within mechanical limits but trending upwards"},
-                    {"agent": "Comfort_Agent", "vote": "APPROVE_WITH_CONDITION", "conditions": ["Maintain Lobby setpoint at 22C"], "reason": "Lobby temperature starts showing thermal lagging"}
-                ]
-            },
             "h4_verification": {
                 "status": "VERIFIED",
                 "faithfulness_score": 0.94,
                 "evidence_count": 12,
                 "synthesis_grounding": "All stated facts verified directly from live digital twin telemetry ledger"
-            }
+            },
+            "note": "presentation defaults — advisory carried no investigation_result"
         }
     }
 
