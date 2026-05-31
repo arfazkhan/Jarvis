@@ -2337,6 +2337,15 @@ class QueenCoordinator(BaseModel):
             # ── STRICT CITATION COUNT ENFORCEMENT ──────────────────────────────
             result_str = self._enforce_citation_counts(result_str, plan)
 
+            # ── Deterministic claim binding (parse-time, no LLM) ──────────
+            # Flag fabricated event-history / frequency / recurrence claims that
+            # no cited evidence supports — these cannot be inferred from a live
+            # snapshot, so an unsupported one is a fabrication. Numbers are bound
+            # by NumericAudit+rebind; this closes the qualitative hole H4 alone
+            # used to gate. Marks [unverified] (never deletes) → degrades
+            # confirmed, fail-safe.
+            result_str = self._enforce_claim_binding(result_str, plan)
+
             # ── Pivot detection + equipment ID whitelist strip ───────────
             try:
                 _parsed = json.loads(result_str)
@@ -2654,6 +2663,75 @@ class QueenCoordinator(BaseModel):
                 flags=re.IGNORECASE,
             )
         return sanitized
+
+    def _enforce_claim_binding(self, result_str: str, plan: Any) -> str:
+        """Deterministic, parse-time guard against fabricated EVENT-HISTORY claims.
+
+        A live snapshot cannot support assertions like 'recurring failure',
+        'documented 3 times in 48h', 'chronic over the past week'. If a sentence
+        makes such a claim and NO cited evidence carries any historical marker,
+        the claim is a fabrication — mark it [unverified] (never delete). This
+        degrades `confirmed` downstream (fail-safe) and removes reliance on the
+        H4 LLM as the sole gate for this claim class. Numbers are already bound
+        by NumericAudit + the telemetry rebind. Conservative by design: only the
+        unambiguous history/frequency/recurrence patterns are touched.
+        """
+        try:
+            import json as _json
+            import re as _re
+            if plan is None:
+                return result_str
+            _ev_items = plan.evidence.get_all() if hasattr(plan.evidence, "get_all") else list(plan.evidence)
+            if not _ev_items:
+                return result_str
+            _parsed = _json.loads(result_str)
+            _ev = {e.id: e for e in _ev_items}
+
+            def _ev_text(_e) -> str:
+                return (
+                    str(getattr(_e, "summary", "")) + " " +
+                    _json.dumps(getattr(_e, "raw_payload", {}) or {})
+                ).lower()
+
+            # Claim looks like an event-history / frequency / recurrence assertion
+            _HIST_CLAIM = _re.compile(
+                r"\b(documented|recorded|logged|recurr\w*|chronic|repeated(?:ly)?|"
+                r"\d+\s*times|(?:over|in|across|during)\s+the\s+(?:past|last)|"
+                r"\d+\s*(?:hours?|days?|weeks?|months?)\b)",
+                _re.IGNORECASE,
+            )
+            # Evidence actually carries historical/temporal substantiation
+            _HIST_EV = _re.compile(
+                r"(history|histor\w*|prior|previous|recurr\w*|times|fired|occurr\w*|"
+                r"timestamp|\d+\s*(?:hours?|days?|weeks?|months?)|start_stop|runtime)",
+                _re.IGNORECASE,
+            )
+
+            _flagged = 0
+            for _adv in _parsed.get("advisories", []):
+                _cited = [eid for eid in (_adv.get("evidence_ids") or []) if eid in _ev]
+                _has_hist_ev = any(_HIST_EV.search(_ev_text(_ev[eid])) for eid in _cited)
+                _msg = _adv.get("message") or ""
+                if not _msg or _has_hist_ev:
+                    continue
+                _sentences = _re.split(r"(?<=[.!?])\s+", _msg)
+                _out = []
+                for _s in _sentences:
+                    if _HIST_CLAIM.search(_s) and "[unverified" not in _s.lower():
+                        _s = _s.rstrip() + " [unverified: no historical evidence in ledger]"
+                        _flagged += 1
+                    _out.append(_s)
+                _adv["message"] = " ".join(_out)
+            if _flagged:
+                logger.warning(
+                    f"[Queen][ClaimBind] flagged {_flagged} unsupported history/frequency "
+                    f"claim(s) as [unverified] — no historical evidence cited"
+                )
+                return _json.dumps(_parsed)
+            return result_str
+        except Exception as _cb_err:
+            logger.debug(f"[Queen] claim-binding skipped (non-fatal): {_cb_err}")
+            return result_str
 
     def _enforce_citation_counts(self, result_str: str, plan: Any) -> str:
         """
