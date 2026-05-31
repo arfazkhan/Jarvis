@@ -2645,6 +2645,41 @@ class BMSLLMAgent:
             except Exception as _ke_err:
                 logger.debug(f"key_evidence fallback skipped: {_ke_err}")
 
+        # Final fallback: pull cards straight from the promoted live-snapshot
+        # evidence in the ledger. This is the SAME always-populated source the
+        # cost/differential use, so the evidence panel never collapses to 0 even
+        # when computed_claims is empty AND the context snapshot is the lean one.
+        if not key_evidence and plan is not None:
+            try:
+                _eqn3 = re.sub(r'[-_\s]', '', str(equipment_id or "")).upper()
+                for _ev in plan.evidence.get_all():
+                    if str(getattr(_ev, "source_tool", "")) != "live_snapshot:equipment":
+                        continue
+                    _pl = getattr(_ev, "raw_payload", {}) or {}
+                    if _eqn3 and re.sub(r'[-_\s]', '', str(_pl.get("equipment_id", ""))).upper() != _eqn3:
+                        continue
+                    for _pk, _pv in (_pl.get("points", {}) or {}).items():
+                        _val = _pv.get("value") if isinstance(_pv, dict) else _pv
+                        if not isinstance(_val, (int, float)):
+                            continue
+                        _unit = (_pv.get("unit") if isinstance(_pv, dict) else "") or ""
+                        # fraction → percent for readability
+                        if _unit in ("fraction", "") and 0.0 < _val <= 1.0 and any(
+                            k in str(_pk).lower() for k in ("damper", "valve", "dmpr")
+                        ):
+                            _val = round(_val * 100, 1)
+                            _unit = "%"
+                        key_evidence.append({
+                            "label": str(_pk), "value": round(_val, 2) if isinstance(_val, float) else _val,
+                            "unit": _unit, "confidence": None,
+                        })
+                        if len(key_evidence) >= 6:
+                            break
+                    if key_evidence:
+                        break
+            except Exception as _ke2_err:
+                logger.debug(f"key_evidence ledger fallback skipped: {_ke2_err}")
+
         # Derived cost/savings — pull the grounded CostDeriver evidence straight
         # from the ledger so the dashboard can SHOW the QAR/month case (the
         # synthesis LLM's own cost numbers get stripped by NumericAudit sampling).

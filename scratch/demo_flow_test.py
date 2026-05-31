@@ -182,10 +182,14 @@ async def main():
     # Anomalous spike — watchdog now fires with a real z-score
     ok_mat = await inject_point(EQ, "MAT", "Mixed Air Temp", 30.8, "C")
     await inject_point(EQ, "SAT", "Supply Air Temp", 16.5, "C")
-    # ONE internally-consistent damper story: commanded 15%, physically slipped
-    # to 85% open (the fault). Reading = actual position = 0.85. No conflicting
-    # 36% anywhere — keeps H4 from (correctly) abstaining on contradictory data.
-    await inject_point(EQ, "OA_DMPR", "OA Damper Position", 0.85, "fraction")
+    # REALISTIC damper trap: the actuator POSITION FEEDBACK reads 15% — matching
+    # the command — because feedback reports actuator-shaft angle, not the true
+    # blade angle. The physical slip (blades ~85% open) is NOT in telemetry; it
+    # is only discoverable by the discriminating test (visual blade/linkage
+    # inspection). So ARVIS must INFER excess OA from the mixed-air balance
+    # (MAT 30.8 ≫ expected 26.7 at 15%), exactly like the human engineer — no
+    # free "85%" handed to either side. Keeps the blind head-to-head fair.
+    await inject_point(EQ, "OA_DMPR", "OA Damper Position", 0.15, "fraction")
     await inject_point(EQ, "OA_DMPR_CMD", "OA Damper Command", 0.15, "fraction")
     await inject_point(EQ, "CHW_VALVE", "CHW Valve", 0.99, "fraction")
     # OAT + RAT so the thermodynamic + cost derivers can fire (mixed-air balance
@@ -207,23 +211,24 @@ async def main():
         await inject_point(_zid, "VAV_DMPR", "VAV Damper", 0.85, "fraction")
         await inject_point(_zid, "LIGHT_STATUS", "Lights", 1.0, "bool")
 
-    # Cascade alarms.
-    # source_point_id is set per-alarm to the actual causal point so that
-    # analyze_cascade / get_alarm_clusters correctly attribute root cause.
-    # ALM-AHU07-002 (damper slip) is CRITICAL so it sorts first in priority
-    # queues and the cascade-analysis fallback picks it as root_cause_alarm_id.
+    # Cascade alarms — SYMPTOMS only, no root cause named in any message.
+    # source_point_id is set per-alarm to the actual point so analyze_cascade /
+    # get_alarm_clusters can attribute correlation. The SAT-deviation alarm is
+    # CRITICAL so it sorts first, but it states the symptom (can't hold SAT),
+    # not the cause — ARVIS must infer the fault from the mixed-air balance.
     _sev_map = {"HIGH": AlarmSeverity.HIGH, "MEDIUM": AlarmSeverity.MEDIUM,
                 "CRITICAL": AlarmSeverity.CRITICAL}
     injected_alarms = 0
     try:
         for aid, eq_sfx, src_pid, msg, sev in [
-            # Root-cause alarm — CRITICAL so cascade fallback picks it first
-            ("ALM-AHU07-002", EQ, f"{EQ}/OA_DMPR",
-             "AHU-07: OA damper at 85% open vs commanded 15% — actuator slip confirmed",
+            # CRITICAL anomaly: cannot hold SAT — symptom only, no root cause named
+            # (no answer leak; the fault must be INFERRED, not read off an alarm).
+            ("ALM-AHU07-002", EQ, f"{EQ}/SAT",
+             "AHU-07: Supply air 16.5°C, 3.0°C above 13.5°C setpoint — unit cannot hold supply temperature",
              "CRITICAL"),
-            # Downstream thermal symptom driven by the damper slip
+            # Mixed-air temperature anomaly (the measured deviation; cause unstated)
             ("ALM-AHU07-001", EQ, f"{EQ}/MAT",
-             "AHU-07: Mixed air temp 30.8°C, 6.8°C above setpoint — caused by damper ingress",
+             "AHU-07: Mixed air temp 30.8°C — high, z-score 5.8 vs rolling baseline",
              "HIGH"),
             # CHW valve driven to saturation trying to compensate
             ("ALM-AHU07-003", EQ, f"{EQ}/CHW_VALVE",
