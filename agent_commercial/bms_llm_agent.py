@@ -2673,6 +2673,76 @@ class BMSLLMAgent:
         except Exception as _cost_ev_err:
             logger.debug(f"cost_impact extraction skipped: {_cost_ev_err}")
 
+        # ── General ranked differential (domain-agnostic RCA) ──────────────
+        # A senior engineer never commits to ONE cause — they hold competing
+        # hypotheses and name the discriminating test for each. ARVIS already
+        # runs multiple agents from different lenses; this surfaces that as a
+        # ranked differential instead of collapsing to a single narrative.
+        # Scoring is domain-agnostic: a hypothesis is ranked by how many
+        # INDEPENDENT evidence sources corroborate it (one sensor ≠ proof).
+        # Works for any equipment/fault — no per-domain rules.
+        hypotheses: List[Dict[str, Any]] = []
+        _dominance = 0.0
+        _top_corroborated = False
+        try:
+            if plan is not None and len(plan.evidence) > 0:
+                _ev_all = plan.evidence.get_all()
+                _valid_ids = {e.id for e in _ev_all}
+                _src_of = {e.id: str(getattr(e, "source_tool", "")) for e in _ev_all}
+                _ev_lines = [
+                    f"{e.id} [{_src_of.get(e.id, '')}] {str(getattr(e, 'summary', ''))[:140]}"
+                    for e in _ev_all[:30]
+                ]
+                _sys = (
+                    "You are a diagnostic reasoner for building systems. Given the EVIDENCE LEDGER and "
+                    "the draft ADVISORY, enumerate the COMPETING root-cause hypotheses a senior engineer "
+                    "would hold — not only the leading one. Rules: (1) 2 to 4 hypotheses. (2) Each cites "
+                    "supporting_evidence_ids ONLY from the ledger (exact ids, never invented). (3) Give a "
+                    "discriminating_test: the single observation or measurement that confirms or refutes "
+                    "THIS hypothesis versus the others. (4) Order most-supported first. (5) Never invent "
+                    "ids or numbers. Domain-agnostic — applies to any equipment. Return JSON: "
+                    '{"hypotheses":[{"label":str,"rationale":str,"supporting_evidence_ids":[str],"discriminating_test":str}]}'
+                )
+                _usr = (
+                    f"EVIDENCE LEDGER:\n" + "\n".join(_ev_lines) +
+                    f"\n\nDRAFT ADVISORY:\n{text[:1500]}\n\nList the competing hypotheses."
+                )
+                _resp = await self.llm.ask_json(
+                    messages=[{"role": "user", "content": _usr}],
+                    system_msgs=[{"role": "system", "content": _sys}],
+                    channel="reflect",
+                )
+                _raw = (_resp.get("hypotheses") if isinstance(_resp, dict) else None) or []
+                _scored = []
+                for _i, _h in enumerate(_raw[:4]):
+                    if not isinstance(_h, dict):
+                        continue
+                    _cited = [x for x in (_h.get("supporting_evidence_ids") or []) if x in _valid_ids]
+                    _sources = {_src_of.get(x, "") for x in _cited}
+                    _sources.discard("")
+                    _indep = len(_sources)
+                    # LLM rank weight (decays with position) + corroboration boost.
+                    _score = max(0.0, 1.0 - 0.25 * _i) + 0.5 * _indep
+                    _scored.append({
+                        "label": str(_h.get("label", ""))[:120],
+                        "rationale": str(_h.get("rationale", ""))[:240],
+                        "supporting_evidence_ids": _cited,
+                        "independent_sources": _indep,
+                        "discriminating_test": str(_h.get("discriminating_test", ""))[:200],
+                        "_score": _score,
+                    })
+                _tot = sum(h["_score"] for h in _scored) or 1.0
+                for _h in _scored:
+                    _h["probability"] = round(_h.pop("_score") / _tot, 2)
+                hypotheses = sorted(_scored, key=lambda h: h["probability"], reverse=True)
+                if hypotheses:
+                    _top = hypotheses[0]
+                    _second = hypotheses[1] if len(hypotheses) > 1 else None
+                    _dominance = round(_top["probability"] - (_second["probability"] if _second else 0.0), 2)
+                    _top_corroborated = _top["independent_sources"] >= 2
+        except Exception as _hyp_err:
+            logger.debug(f"differential build skipped: {_hyp_err}")
+
         # Recommended actions — parse numbered list from advice
         actions = []
         for _am in re.finditer(r"(?:^|\n|<br>)\s*(?:\*\*)?\d+\.\s*(?:\*\*)?([^\n<*]{6,120})", text):
@@ -2755,7 +2825,21 @@ class BMSLLMAgent:
                 "label": root_cause_label,           # "identified" vs "probable—unconfirmed"
                 "statement": root_cause,
                 "confidence_band": confidence_band,  # Low/Medium/High — diagnostic
-                "confirmed": fully_grounded and confidence_band in ("Medium", "High"),
+                # General confirmed gate: grounded AND band high enough AND the
+                # leading hypothesis is corroborated by >=2 INDEPENDENT evidence
+                # sources AND it dominates the runner-up. A single-sensor lead can
+                # never be 'confirmed' — for any equipment/fault.
+                "confirmed": (
+                    fully_grounded and confidence_band in ("Medium", "High")
+                    and _top_corroborated and _dominance >= 0.15
+                ),
+            },
+            # Ranked competing hypotheses with the discriminating test for each.
+            "hypotheses": hypotheses,
+            "differential": {
+                "dominance": _dominance,                 # prob gap, leader vs runner-up
+                "leading_corroborated": _top_corroborated,
+                "count": len(hypotheses),
             },
             "metrics": {
                 "elapsed_seconds": round(elapsed_s, 1),

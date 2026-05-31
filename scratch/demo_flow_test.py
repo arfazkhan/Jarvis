@@ -355,6 +355,14 @@ async def main():
     C.check("S4", "cost impact (grounded QAR/month savings)",
             bool(_cost.get("monthly_savings_qar")),
             note=f"QAR{_cost.get('monthly_savings_qar')}/mo from {_cost.get('excess_cooling_kw')}kW excess")
+    _hyps = IR.get("hypotheses") or []
+    _diff = IR.get("differential") or {}
+    C.check("S4", "ranked differential (>=2 competing hypotheses)",
+            len(_hyps) >= 2,
+            note=f"{len(_hyps)} hyps, dominance={_diff.get('dominance')} corroborated={_diff.get('leading_corroborated')}")
+    C.check("S4", "each hypothesis has a discriminating test",
+            all(h.get("discriminating_test") for h in _hyps) if _hyps else False,
+            note=f"top: {(_hyps[0].get('label') if _hyps else None)}")
 
     # ════════════════════════════════════════════════════════════════════════
     _hdr(4, "Investigation Artifacts")
