@@ -305,27 +305,51 @@ Built by `_build_investigation_result()` in `bms_llm_agent.py`. `null` where not
 
   "hypotheses": [                            // ranked competing root causes (domain-agnostic differential)
     {
-      "label": "Damper Actuator Blade Slip",
-      "rationale": "Actual OA damper 85% vs 15% command; MAT 30.8 > expected 26.7 at commanded position.",
-      "supporting_evidence_ids": ["a31f628a-9bd", "0c80f001-163"],
-      "independent_sources": 2,              // # of DISTINCT evidence source_tools backing it
-      "evidence_reliability": "Medium",      // Low(1) / Medium(2) / High(3+) independent agreeing sources
-      "discriminating_test": "Visual blade/linkage inspection at the mixing box vs the 15% command.",
-      "probability": 0.34                    // normalized score (rank + corroboration)
+      "label": "Cooling-coil capacity / CHW flow restriction",
+      "rationale": "CHW valve 99% yet SAT > setpoint; coil overwhelmed, not failed.",
+      "supporting_evidence_ids": ["a31f628a-9bd", "0c80f001-163", "<derived:thermodynamics>"],
+      "independent_sources": 2,              // # of DISTINCT CURRENT evidence source_tools (memory_recall excluded)
+      "evidence_reliability": "Medium",      // Low(1) / Medium(2) / High(3+) | "Prior (uncorroborated)" if recall-only
+      "recall_only": false,                  // true → supported ONLY by memory_recall; can never lead
+      "mechanism_grounded": true,            // label keyword present in cited evidence content (else sunk)
+      "precondition": "",                    // design/config assumption the mechanism rests on
+      "precondition_grounded": true,         // false → unverified design precondition; cannot sit at top confidence
+      "discriminating_test": "Clamp-on CHW flow + strainer ΔP at the AHU.",
+      "probability": 0.34                    // normalized score (rank + corroboration, after all gates)
     },
     {
-      "label": "Cooling-coil capacity / CHW flow restriction",
-      "rationale": "CHW valve 99% yet SAT 16.5 > setpoint; low coil ΔT suggests flow/heat-transfer limit.",
-      "supporting_evidence_ids": ["..."],
+      "label": "OA damper position sensor / MAT sensor fault",
+      "rationale": "MAT measured upstream of coil; a biased sensor mimics excess OA.",
+      "supporting_evidence_ids": ["<live_snapshot:equipment>"],
       "independent_sources": 1,
-      "discriminating_test": "Clamp-on CHW flow + strainer ΔP at AHU-07.",
-      "probability": 0.21
+      "evidence_reliability": "Low",
+      "recall_only": false,
+      "mechanism_grounded": true,
+      "precondition": "",
+      "precondition_grounded": true,
+      "discriminating_test": "Handheld thermometer traverse in the mixing box.",
+      "probability": 0.29
+    },
+    {
+      "label": "Mechanical OA damper actuator slip",
+      "rationale": "Damper physically open beyond command — possible but design-dependent.",
+      "supporting_evidence_ids": ["<live_snapshot:equipment>", "<derived:thermodynamics>"],
+      "independent_sources": 2,
+      "evidence_reliability": "Medium",
+      "recall_only": false,
+      "mechanism_grounded": true,
+      // DEMOTED: needs a motorized damper; Gulf commercial OA dampers are often FIXED →
+      // precondition unverified → cannot lead until inspection confirms damper type.
+      "precondition": "Assumes a MOTORIZED, free-to-travel damper — UNVERIFIED (often FIXED at minimum). Confirm on inspection.",
+      "precondition_grounded": false,
+      "discriminating_test": "Is the OA damper motorized or a bolted louver? Visual inspection.",
+      "probability": 0.12
     }
     // ... up to 4
   ],
   "differential": {
-    "dominance": 0.13,                       // probability gap, leader vs runner-up
-    "leading_corroborated": true,            // leader backed by >=2 independent sources
+    "dominance": 0.05,                       // probability gap, leader vs runner-up
+    "leading_corroborated": true,            // leader backed by >=2 independent CURRENT sources
     "count": 4
   },
 
@@ -339,10 +363,16 @@ Built by `_build_investigation_result()` in `bms_llm_agent.py`. `null` where not
 }
 ```
 
-**Honesty invariants** (enforced in code, not prompt):
-- A numeric value only appears if it traces to an evidence id; un-traceable numbers are stripped to `[unverified]` and quarantined.
-- `confirmed` can be `true` **only** when `fully_grounded` is true AND band ∈ {Medium, High} AND the leading hypothesis is corroborated by **≥2 independent evidence sources** AND it **dominates** the runner-up (`differential.dominance ≥ 0.15`). A single-sensor lead can never be `confirmed` — for any equipment/fault.
-- `hypotheses[]` is a **ranked differential**: ARVIS holds competing causes (not one), scored by independent-source corroboration, each with the `discriminating_test` that separates it from the others. Domain-agnostic — no per-fault rules.
+**Honesty invariants** (enforced in deterministic code at parse time, not by prompt or LLM judge):
+- **Numbers** — a numeric value only appears if it traces to an evidence id (NumericAudit + telemetry rebind); un-traceable numbers → `[unverified]` + quarantined.
+- **Event-history claims** — "recurring / documented N times / over the past …" with no historical evidence → `[unverified]` (`_enforce_claim_binding`).
+- **Every assertive sentence (claim-first)** — any advisory sentence with ≥3 significant terms, NONE of which appear anywhere in the evidence ledger, is marked `[unverified]` (`_enforce_sentence_grounding`). Regardless of how the LLM wrote the prose, an unbacked sentence cannot reach the operator unmarked. H4 (LLM) is now only a backstop for semantic contradiction.
+- **`confirmed`** is `true` **only** when `fully_grounded` AND band ∈ {Medium, High} AND the leading hypothesis is corroborated by **≥2 independent CURRENT evidence sources** AND it **dominates** the runner-up (`differential.dominance ≥ 0.15`). A single-sensor lead can never be `confirmed`.
+- **`hypotheses[]`** is a ranked differential (2–4 competing causes), each with a `discriminating_test`. Scoring gates (all deterministic, domain-agnostic — no per-fault rules):
+  - `recall_only=true` (supported only by `memory_recall:` evidence) → ×0.1, can never lead. Memory is prior context, not present proof.
+  - `mechanism_grounded=false` (label keyword absent from cited evidence content, e.g. "damper" cited against a chiller snapshot) → ×0.05.
+  - `precondition_grounded=false` (design precondition unverified — e.g. damper-slip needs a MOTORIZED damper; Gulf commercial dampers are often FIXED) → ×0.25, and the assumption is surfaced in `precondition`. Covers motorized damper, VFD, compressor unloader/staging.
+- **Recall is equipment-scoped** at every channel (auto-recall, skillbook tools, scenario retriever): a fault learned on AHU-07 is not retrieved for a chiller or a different AHU.
 - `truth_score` (groundedness) is reported separately from `metrics.confidence` (diagnostic) — never merged.
 - `cost_impact` is computed deterministically from telemetry (mixed-air balance → excess load → tariff), not authored by the LLM; assumptions are surfaced in `assumption`/`confidence`.
 
