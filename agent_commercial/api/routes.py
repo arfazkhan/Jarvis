@@ -34,6 +34,7 @@ from agent_commercial.api.auth import (
 )
 from agent_commercial.api.middleware import SecurityAuditMiddleware, RateLimitMiddleware
 from agent_commercial.api.routes_omega import router as omega_router
+from agent_commercial.api.routes_demo import router as demo_router
 
 logger = logging.getLogger("arvis.bms.api")
 
@@ -274,6 +275,8 @@ def create_api(
 
     # Include Omega Simulation Routes
     app.include_router(omega_router)
+    # Include ARVIS Demo Capabilities routes (/api/v1/demo/*) — see docs/API_DEMO.md
+    app.include_router(demo_router)
 
     # ═══════════════════════════════════════════════════════════════════════
     # HEALTH CHECK
