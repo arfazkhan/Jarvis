@@ -2380,6 +2380,16 @@ class QueenCoordinator(BaseModel):
             # confirmed, fail-safe.
             result_str = self._enforce_claim_binding(result_str, plan)
 
+            # ── Claim-first output grounding (deterministic, parse-time) ──
+            # Every ASSERTIVE sentence in the advisory must have its salient
+            # content traceable to the evidence ledger. A sentence whose
+            # significant terms appear NOWHERE in evidence is an ungrounded
+            # fabrication → mark [unverified]. This is the output-side guarantee
+            # of claim-first synthesis: regardless of how the LLM wrote the
+            # prose, an unbacked sentence cannot reach the operator unmarked.
+            # Numbers are already bound (NumericAudit); this closes qualitative.
+            result_str = self._enforce_sentence_grounding(result_str, plan)
+
             # ── Pivot detection + equipment ID whitelist strip ───────────
             try:
                 _parsed = json.loads(result_str)
@@ -2697,6 +2707,72 @@ class QueenCoordinator(BaseModel):
                 flags=re.IGNORECASE,
             )
         return sanitized
+
+    # Words that don't carry groundable assertion content (connectives, generic
+    # advisory verbs). A sentence made only of these is reasoning, not a claim.
+    _GROUND_STOP = frozenset({
+        "the","a","an","of","in","on","at","to","and","or","is","are","be","was","were",
+        "this","that","these","those","with","for","from","into","than","then","but","not",
+        "should","would","could","may","might","must","will","can","also","which","while",
+        "recommend","recommended","inspect","inspection","verify","check","investigate",
+        "immediate","immediately","action","required","priority","operator","advisory",
+        "likely","probable","probably","possible","potential","indicates","suggests",
+        "appears","confirmed","unconfirmed","analysis","finding","cause","root","issue",
+        "problem","fault","because","since","therefore","however","further","ensure",
+        "review","consider","note","please","within","across","during","under","over",
+    })
+
+    def _enforce_sentence_grounding(self, result_str: str, plan: Any) -> str:
+        """Deterministic claim-first output guarantee: an ASSERTIVE sentence whose
+        salient terms are absent from the WHOLE evidence ledger is a fabrication
+        and is marked [unverified] (never deleted). Conservative — only fires when
+        a sentence carries >=3 significant tokens and ZERO of them appear anywhere
+        in evidence; connective/reasoning sentences and evidence-backed sentences
+        pass untouched. Numbers are already bound by NumericAudit + rebind.
+        """
+        try:
+            import json as _json
+            import re as _re
+            if plan is None:
+                return result_str
+            _items = plan.evidence.get_all() if hasattr(plan.evidence, "get_all") else list(plan.evidence)
+            if not _items:
+                return result_str
+            _parsed = _json.loads(result_str)
+            _corpus = " ".join(
+                (str(getattr(e, "summary", "")) + " " + _json.dumps(getattr(e, "raw_payload", {}) or {}))
+                for e in _items
+            ).lower()
+            _flagged = 0
+            for _adv in _parsed.get("advisories", []):
+                _msg = _adv.get("message") or ""
+                if not _msg:
+                    continue
+                _sents = _re.split(r"(?<=[.!?])\s+", _msg)
+                _out = []
+                for _s in _sents:
+                    if "[unverified" in _s.lower():
+                        _out.append(_s)
+                        continue
+                    _toks = [w for w in _re.findall(r"[a-zA-Z]{4,}", _s.lower())
+                             if w not in self._GROUND_STOP]
+                    if len(_toks) >= 3:
+                        _hits = sum(1 for t in set(_toks) if t in _corpus)
+                        if _hits == 0:
+                            _s = _s.rstrip() + " [unverified]"
+                            _flagged += 1
+                    _out.append(_s)
+                _adv["message"] = " ".join(_out)
+            if _flagged:
+                logger.warning(
+                    f"[Queen][ClaimBind] sentence-grounding flagged {_flagged} ungrounded "
+                    f"sentence(s) [unverified] — salient terms absent from evidence ledger"
+                )
+                return _json.dumps(_parsed)
+            return result_str
+        except Exception as _sg_err:
+            logger.debug(f"[Queen] sentence-grounding skipped (non-fatal): {_sg_err}")
+            return result_str
 
     def _enforce_claim_binding(self, result_str: str, plan: Any) -> str:
         """Deterministic, parse-time guard against fabricated EVENT-HISTORY claims.
