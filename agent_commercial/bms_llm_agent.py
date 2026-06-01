@@ -2724,6 +2724,19 @@ class BMSLLMAgent:
                 _ev_all = plan.evidence.get_all()
                 _valid_ids = {e.id for e in _ev_all}
                 _src_of = {e.id: str(getattr(e, "source_tool", "")) for e in _ev_all}
+                # id → searchable content (summary + payload) for grounding the
+                # hypothesis MECHANISM, not just its evidence-id citation. A
+                # "damper" hypothesis citing a chiller's snapshot (no damper)
+                # is ungrounded and must not lead.
+                import json as _json2
+                _ev_text = {
+                    e.id: (str(getattr(e, "summary", "")) + " " +
+                           _json2.dumps(getattr(e, "raw_payload", {}) or {})).lower()
+                    for e in _ev_all
+                }
+                _STOP = {"the","a","an","of","in","on","at","to","and","or","is","are","be",
+                         "actuator","failure","fault","issue","problem","slip","high","low",
+                         "elevated","reduced","insufficient","limitation","anomaly","degradation"}
                 _ev_lines = [
                     f"{e.id} [{_src_of.get(e.id, '')}] {str(getattr(e, 'summary', ''))[:140]}"
                     for e in _ev_all[:30]
@@ -2755,20 +2768,43 @@ class BMSLLMAgent:
                     _cited = [x for x in (_h.get("supporting_evidence_ids") or []) if x in _valid_ids]
                     _sources = {_src_of.get(x, "") for x in _cited}
                     _sources.discard("")
-                    _indep = len(_sources)
+                    # Memory recall is PRIOR context, not current evidence. It must
+                    # not count as an independent corroborating source, and a
+                    # hypothesis supported ONLY by recall cannot lead — otherwise a
+                    # fault learned on other equipment dominates this diagnosis.
+                    _current_sources = {s for s in _sources if not s.startswith("memory_recall")}
+                    _recall_sources = {s for s in _sources if s.startswith("memory_recall")}
+                    _indep = len(_current_sources)               # corroboration = CURRENT sources only
+                    _recall_only = bool(_cited) and _indep == 0 and bool(_recall_sources)
+                    # ── Mechanism grounding ──────────────────────────────────
+                    # The hypothesis LABEL must be supported by the CONTENT of
+                    # the evidence it cites — not just cite a valid id. Extract
+                    # significant label tokens; if NONE appear in the cited
+                    # evidence text, the mechanism is ungrounded (e.g. "damper"
+                    # on a chiller) → sink it so real, grounded causes lead.
+                    _label = str(_h.get("label", ""))
+                    _tokens = [w for w in re.findall(r"[a-zA-Z]{4,}", _label.lower()) if w not in _STOP]
+                    _cited_text = " ".join(_ev_text.get(x, "") for x in _cited)
+                    _mech_grounded = (not _tokens) or any(t in _cited_text for t in _tokens)
                     # LLM rank weight (decays with position) + corroboration boost.
                     _score = max(0.0, 1.0 - 0.25 * _i) + 0.5 * _indep
-                    # Evidence reliability = how many INDEPENDENT observations agree.
-                    # A single-sensor claim (e.g. one actuator-feedback point) is
-                    # Low no matter how plausible — exactly the trap the experts
-                    # flagged ("feedback lies, MAT stratifies, verify physically").
-                    _reliability = "High" if _indep >= 3 else "Medium" if _indep == 2 else "Low"
+                    if _recall_only:
+                        _score *= 0.1   # memory-only hypothesis: keep it visible, never let it lead
+                    if not _mech_grounded:
+                        _score *= 0.05  # mechanism not in cited evidence → cannot lead
+                    # Evidence reliability = how many INDEPENDENT CURRENT observations agree.
+                    # A single-sensor claim is Low no matter how plausible; a recall-only
+                    # hypothesis is explicitly "Prior (uncorroborated)".
+                    _reliability = ("Prior (uncorroborated)" if _recall_only
+                                    else "High" if _indep >= 3 else "Medium" if _indep == 2 else "Low")
                     _scored.append({
                         "label": str(_h.get("label", ""))[:120],
                         "rationale": str(_h.get("rationale", ""))[:240],
                         "supporting_evidence_ids": _cited,
                         "independent_sources": _indep,
-                        "evidence_reliability": _reliability,   # Low(1) / Medium(2) / High(3+) independent sources
+                        "evidence_reliability": _reliability,
+                        "recall_only": _recall_only,
+                        "mechanism_grounded": _mech_grounded,
                         "discriminating_test": str(_h.get("discriminating_test", ""))[:200],
                         "_score": _score,
                     })
@@ -2776,6 +2812,16 @@ class BMSLLMAgent:
                 for _h in _scored:
                     _h["probability"] = round(_h.pop("_score") / _tot, 2)
                 hypotheses = sorted(_scored, key=lambda h: h["probability"], reverse=True)
+                # DEBUG: expose where the leading hypothesis comes from — its
+                # cited evidence source_tools tell us recall vs current vs none.
+                try:
+                    _dbg = [
+                        f"{h['label'][:30]}|p={h['probability']}|src={[_src_of.get(x,'?') for x in h['supporting_evidence_ids']]}|recall_only={h['recall_only']}"
+                        for h in hypotheses[:4]
+                    ]
+                    logger.info(f"[Differential] eq={equipment_id} hyps={_dbg}")
+                except Exception:
+                    pass
                 if hypotheses:
                     _top = hypotheses[0]
                     _second = hypotheses[1] if len(hypotheses) > 1 else None
@@ -2978,6 +3024,12 @@ class BMSLLMAgent:
         State-machine triggered skillbook write — not LLM-optional.
         Called after every chat response that contains a confirmed diagnosis.
         """
+        # 0. Eval isolation: skip skill auto-write when disabled (battery sets
+        # this so scenario N doesn't pollute the shared knowledge_base that
+        # scenario N+1 recalls from in the same run).
+        import os as _os
+        if _os.environ.get("ARVIS_DISABLE_SKILL_WRITE", "").strip() in ("1", "true", "True"):
+            return
         # 1. Abort write if text contains unverified markers
         unverified_markers = ["[unverified]", "[unverified_synthesis]"]
         text_lower = text.lower()

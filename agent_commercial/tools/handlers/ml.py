@@ -250,17 +250,42 @@ class MLHandlerMixin:
                 "error": "query is required",
             }
 
+        # Equipment-scope: a skill learned on AHU-07 must not surface for a
+        # chiller or a DIFFERENT AHU. Semantic recall over-triggers across
+        # equipment; drop any skill that names an equipment id absent from the
+        # query's target set. Equipment-agnostic skills (no id) are kept.
+        import re as _re
+        _equip_re = _re.compile(r'\b(?:CH|AHU|VAV|FCU|MTR|CHILLER|PUMP|CT)\b[-_\s]?\d+', _re.IGNORECASE)
+
+        def _eqset(text):
+            return {_re.sub(r'[-_\s]', '', m).upper().replace("CHILLER", "CH") for m in _equip_re.findall(text or "")}
+
+        _q_equip = _eqset(query)
+
         def _normalize_skills_response(raw_results, used_embedding: bool, model_name: str):
             """Normalize any results list to schema-compliant response."""
             skills = []
+            _dropped = 0
             for r in raw_results:
+                _title = r.get("title", r.get("content", "")[:80])
+                _desc = r.get("description", r.get("content", ""))
+                if _q_equip:
+                    _skill_eq = _eqset(_title) | _eqset(_desc)
+                    _meta_eq = r.get("equipment_id")
+                    if _meta_eq:
+                        _skill_eq |= _eqset(str(_meta_eq))
+                    if _skill_eq and not (_skill_eq & _q_equip):
+                        _dropped += 1
+                        continue  # names a different unit → off-scope, drop
                 skills.append({
                     "skill_id": r.get("skill_id", r.get("id", "")),
-                    "title": r.get("title", r.get("content", "")[:80]),
+                    "title": _title,
                     "skill_type": r.get("skill_type", r.get("source", "operational")),
                     "similarity_score": r.get("score", r.get("similarity_score", 0.0)),
-                    "description": r.get("description", r.get("content", "")),
+                    "description": _desc,
                 })
+            if _dropped:
+                logger.info(f"[ML] find_similar_skills equipment-scope: dropped {_dropped} off-equipment skill(s)")
             return {
                 "skills": skills,
                 "total_matches": len(skills),
@@ -280,7 +305,10 @@ class MLHandlerMixin:
                 if hits:
                     raw_results = [
                         {"skill_id": h.id, "score": h.confidence, "content": h.content,
-                         "source": h.source, "equipment_type": equipment_type}
+                         "source": h.source, "equipment_type": equipment_type,
+                         # surface equipment_id from metadata so the scope filter
+                         # can drop off-equipment skills whose CONTENT omits the id
+                         "equipment_id": (h.metadata or {}).get("equipment_id") if hasattr(h, "metadata") else None}
                         for h in hits
                     ]
                     result = _normalize_skills_response(raw_results, True, "MemoryOrchestrator:T5")
@@ -338,6 +366,7 @@ class MLHandlerMixin:
                     "skill_type": _sd.get("skill_type", "pattern"),
                     "score": float(_sd.get("confidence", 0.5)),
                     "description": _sd.get("description", ""),
+                    "equipment_id": _sd.get("equipment_id"),
                 })
             if raw_results:
                 logger.info(

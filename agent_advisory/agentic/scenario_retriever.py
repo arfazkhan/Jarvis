@@ -185,11 +185,22 @@ class ScenarioRetriever:
         """
         # Build query text from context
         query_text = self._build_query_text(context, issue_type)
-        
+        _eq_ctx = context.get("equipment_id") or context.get("equipment") or ""
+
         if self.use_chromadb and self.embedder:
-            return await self._retrieve_with_embeddings(query_text, issue_type, k)
+            return await self._retrieve_with_embeddings(query_text, issue_type, k, equipment_id=_eq_ctx)
         else:
             return self._retrieve_fallback(context, issue_type, k)
+
+    @staticmethod
+    def _equip_type(eq: str) -> str:
+        """Equipment-type prefix for scoping (AHU-07→AHU, Chiller-01→CH)."""
+        import re as _re
+        if not eq:
+            return ""
+        _m = _re.match(r'\s*([A-Za-z]+)', str(eq))
+        _t = (_m.group(1).upper() if _m else "")
+        return "CH" if _t.startswith("CH") else _t
     
     async def retrieve_with_graph_filter(
         self,
@@ -290,11 +301,13 @@ class ScenarioRetriever:
         self,
         query_text: str,
         issue_type: Optional[str],
-        k: int
+        k: int,
+        equipment_id: str = ""
     ) -> List[HistoricalScenario]:
         """Retrieve using vector similarity"""
         # Generate embedding
         query_embedding = self.embedder.encode(query_text).tolist()
+        _target_type = self._equip_type(equipment_id)
         
         # Build where filter
         where_filter = None
@@ -317,13 +330,23 @@ class ScenarioRetriever:
         scenarios = []
         
         if results and results.get("ids") and results["ids"][0]:
+            _dropped = 0
             for i, scenario_id in enumerate(results["ids"][0]):
                 metadata = results["metadatas"][0][i] if results.get("metadatas") else {}
+                # Equipment-type scope: a scenario learned on a different
+                # equipment TYPE (e.g. an AHU damper case) must not be retrieved
+                # for a chiller. Scenarios with no equipment tag stay (generic).
+                if _target_type:
+                    _scn_eq = metadata.get("equipment_id") or metadata.get("equipment") or ""
+                    _scn_type = self._equip_type(_scn_eq)
+                    if _scn_type and _scn_type != _target_type:
+                        _dropped += 1
+                        continue
                 distance = results["distances"][0][i] if results.get("distances") else 1.0
-                
+
                 # Convert distance to similarity (cosine distance)
                 similarity = 1 - distance
-                
+
                 scenarios.append(HistoricalScenario(
                     scenario_id=scenario_id,
                     context_summary=results["documents"][0][i] if results.get("documents") else "",

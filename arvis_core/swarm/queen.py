@@ -788,14 +788,48 @@ class QueenCoordinator(BaseModel):
                 recall_bundle = await _mo.recall_for_investigation(plan)
                 if not recall_bundle.is_empty:
                     _recall_context_block = recall_bundle.to_context_block()
+                    # ── Equipment-scope filter ──────────────────────────────
+                    # A fault pattern learned on AHU-07 must NOT surface for
+                    # CHILLER-01 or a healthy AHU-21. Recall is semantic, so it
+                    # over-triggers across equipment. Keep a hit only if it is
+                    # equipment-agnostic OR references the equipment under
+                    # investigation. Without this, a recalled prior conclusion
+                    # becomes the leading hypothesis for the wrong unit.
+                    _equip_re = re.compile(r'\b(?:CH|AHU|VAV|FCU|MTR|CHILLER|PUMP|CT|COOLING[\s_-]?TOWER)\b[-_\s]?\d+', re.IGNORECASE)
+
+                    def _equip_set(text: str) -> set:
+                        return {re.sub(r'[-_\s]', '', m).upper().replace("CHILLER", "CH") for m in _equip_re.findall(text or "")}
+
+                    _target_eq = _equip_set(query)
+                    for _t in (plan.tasks or []):
+                        _target_eq |= _equip_set(getattr(_t, "goal", ""))
+
+                    def _hit_in_scope(hit) -> bool:
+                        if not _target_eq:
+                            return True  # no clear target → don't over-filter
+                        _hit_eq = _equip_set(str(hit.content))
+                        _meta_eq = hit.metadata.get("equipment_id") if isinstance(hit.metadata, dict) else None
+                        if _meta_eq:
+                            _hit_eq |= _equip_set(str(_meta_eq))
+                        if not _hit_eq:
+                            return True  # equipment-agnostic knowledge → allowed
+                        return bool(_hit_eq & _target_eq)  # only if it overlaps the target
+
+                    _all_hits = (recall_bundle.similar_investigations + recall_bundle.applicable_skills
+                                 + recall_bundle.matching_patterns)
+                    _scoped = [h for h in _all_hits if _hit_in_scope(h)]
+                    _dropped = len(_all_hits) - len(_scoped)
                     logger.info(f"[Queen] Auto-recall: {len(recall_bundle.similar_investigations)} past investigations, "
                                 f"{len(recall_bundle.applicable_skills)} skills, "
-                                f"{len(recall_bundle.matching_patterns)} patterns injected")
-                    # Inject recall hits as Evidence so plan coverage counts them
+                                f"{len(recall_bundle.matching_patterns)} patterns "
+                                f"(scoped: kept {len(_scoped)}, dropped {_dropped} off-equipment)")
+                    # Inject recall hits as Evidence so plan coverage counts them.
+                    # Tagged source_tool="memory_recall:*" so the differential
+                    # scorer treats them as PRIOR context, not current evidence
+                    # (a recall-only hypothesis cannot lead — see _build_investigation_result).
                     from arvis_core.evidence import Evidence, FreshnessStatus
                     from arvis_core.memory.types import MemoryTier
-                    for hit in (recall_bundle.similar_investigations + recall_bundle.applicable_skills
-                                + recall_bundle.matching_patterns)[:10]:
+                    for hit in _scoped[:10]:
                         ev = Evidence(
                             source_tool=f"memory_recall:{hit.tier.value}",
                             raw_payload={"content": hit.content, "source": hit.source, **hit.metadata},

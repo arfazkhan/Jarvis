@@ -164,6 +164,38 @@ class SovereignHandlerMixin:
                 "summary": {"total": 0, "note": "No matching patterns found in institutional memory"},
             }
 
+        # Equipment-scope: drop institutional skills that name a DIFFERENT unit
+        # than the one under investigation (a learned AHU-07 fault must not
+        # surface for a chiller or another AHU). Equipment-agnostic skills kept.
+        try:
+            import re as _re
+            _eqre = _re.compile(r'\b(?:CH|AHU|VAV|FCU|MTR|CHILLER|PUMP|CT)\b[-_\s]?\d+', _re.IGNORECASE)
+
+            def _eqset(t):
+                return {_re.sub(r'[-_\s]', '', m).upper().replace("CHILLER", "CH") for m in _eqre.findall(t or "")}
+
+            _q_eq = _eqset(query) | _eqset(str(equipment_id or ""))
+            if _q_eq and isinstance(results, list):
+                _kept = []
+                _drop = 0
+                for r in results:
+                    _r_eq = _eqset(str(r.get("equipment_id") or "")) | _eqset(str(r.get("content") or "")) | _eqset(str(r.get("title") or ""))
+                    if _r_eq and not (_r_eq & _q_eq):
+                        _drop += 1
+                        continue
+                    _kept.append(r)
+                if _drop:
+                    logger.info(f"[Sovereign] query_skillbook equipment-scope: dropped {_drop} off-equipment skill(s)")
+                results = _kept
+        except Exception as _scope_err:
+            logger.debug(f"[Sovereign] equipment-scope skipped: {_scope_err}")
+
+        if not results:
+            return {
+                "query": query, "skills": [],
+                "summary": {"total": 0, "note": "No on-equipment patterns in institutional memory"},
+            }
+
         # RAG reranker: cross-encoder post-pass to improve result ordering
         try:
             from agent_commercial.ml.rag_optimizer import CrossEncoderReranker
@@ -253,6 +285,32 @@ class SovereignHandlerMixin:
         skill_id = f"skill_{uuid.uuid4().hex[:8]}"
         created_at = datetime.now().isoformat()
 
+        # Always persist to SQLite skills table — canonical durable memory for
+        # cross-equipment recall, temporal decay, and long-term institutional learning.
+        building_id = args.get("building_id", "default")
+        try:
+            from agent_commercial.skillbook import get_skillbook
+            _sb = get_skillbook(building_id)
+            await _sb.ensure_initialized()
+            added = await _sb.add_skill(
+                skill_type=skill_type,
+                title=title,
+                description=description,
+                equipment_id=equipment_id,
+                confidence=confidence,
+                tags=list(tags) if tags else [],
+                created_by="arvis_auto",
+            )
+            if added:
+                skill_id = added[0].skill_id
+            written = True
+            logger.info(
+                f"[Skillbook] SQLite persisted: '{title}' eq={equipment_id} "
+                f"id={skill_id} conf={confidence:.2f}"
+            )
+        except Exception as _sql_err:
+            logger.warning(f"[Skillbook] SQLite write failed (non-fatal): {_sql_err}")
+
         if not written:
             # Fallback: try legacy add_skill if it exists
             if knowledge_base and hasattr(knowledge_base, "add_skill"):
@@ -340,21 +398,36 @@ class SovereignHandlerMixin:
         world_model = getattr(self, "world_model", None)
         if world_model and hasattr(world_model, "correlate_events"):
             try:
-                return await world_model.correlate_events(
+                res = await world_model.correlate_events(
                     event_type=event_type,
                     time_range=time_range,
                     correlate_with=correlate_with,
                     min_correlation=min_correlation
                 )
+                if isinstance(res, dict):
+                    # Schema keys: primary_cause, timeline, confidence
+                    corrs = res.get("correlations") or []
+                    if res.get("primary_cause") is None:
+                        top = corrs[0] if corrs and isinstance(corrs[0], dict) else {}
+                        res["primary_cause"] = top.get("cause") or top.get("equipment_id")
+                    res.setdefault("timeline", res.get("events") or [])
+                    if res.get("confidence") is None:
+                        top = corrs[0] if corrs and isinstance(corrs[0], dict) else {}
+                        res["confidence"] = top.get("correlation") or top.get("confidence") or 0.0
+                return res
             except Exception as e:
                 logger.error(f"Error in event correlation: {e}")
-        
+
         # Fallback: basic correlation
         return {
             "event_type": event_type,
             "time_range": time_range,
             "correlations": [],
-            "note": "Event correlation requires world_model module"
+            "note": "Event correlation requires world_model module",
+            # Schema keys
+            "primary_cause": None,
+            "timeline": [],
+            "confidence": 0.0,
         }
 
     async def _handle_replay_investigation(self, args: Dict) -> Dict:
