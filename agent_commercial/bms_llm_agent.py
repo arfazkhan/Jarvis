@@ -2748,17 +2748,27 @@ class BMSLLMAgent:
                     "supporting_evidence_ids ONLY from the ledger (exact ids, never invented). (3) Give a "
                     "discriminating_test: the single observation or measurement that confirms or refutes "
                     "THIS hypothesis versus the others. (4) Order most-supported first. (5) Never invent "
-                    "ids or numbers. Domain-agnostic — applies to any equipment. Return JSON: "
-                    '{"hypotheses":[{"label":str,"rationale":str,"supporting_evidence_ids":[str],"discriminating_test":str}]}'
+                    "ids or numbers. (6) State the PRECONDITION each hypothesis requires to be physically "
+                    "possible — the design/configuration assumption it rests on (e.g. 'OA damper slip' "
+                    "requires a MOTORIZED, free-to-travel damper; a fixed/bolted minimum-OA louver cannot "
+                    "slip). If that precondition is not established by the evidence, say so. "
+                    "Also set precondition_met: \"true\" only if the EVIDENCE confirms the required "
+                    "design/config, \"false\" if evidence CONTRADICTS it, \"unknown\" if evidence is silent. "
+                    "Domain-agnostic — applies to any equipment. Return JSON: "
+                    '{"hypotheses":[{"label":str,"rationale":str,"supporting_evidence_ids":[str],'
+                    '"discriminating_test":str,"precondition":str,"precondition_met":"true|false|unknown"}]}'
                 )
                 _usr = (
                     f"EVIDENCE LEDGER:\n" + "\n".join(_ev_lines) +
                     f"\n\nDRAFT ADVISORY:\n{text[:1500]}\n\nList the competing hypotheses."
                 )
+                # Use a capable channel — the differential carries design-context
+                # reasoning + structured JSON the weak 'reflect' model dropped
+                # (returned 0 hypotheses), and is the operator-facing ranked list.
                 _resp = await self.llm.ask_json(
                     messages=[{"role": "user", "content": _usr}],
                     system_msgs=[{"role": "system", "content": _sys}],
-                    channel="reflect",
+                    channel="reasoning",
                 )
                 _raw = (_resp.get("hypotheses") if isinstance(_resp, dict) else None) or []
                 _scored = []
@@ -2786,12 +2796,59 @@ class BMSLLMAgent:
                     _tokens = [w for w in re.findall(r"[a-zA-Z]{4,}", _label.lower()) if w not in _STOP]
                     _cited_text = " ".join(_ev_text.get(x, "") for x in _cited)
                     _mech_grounded = (not _tokens) or any(t in _cited_text for t in _tokens)
+                    # ── Precondition / design-context gate (equipment-agnostic) ──
+                    # A hypothesis cannot lead unless the DESIGN PRECONDITION its
+                    # mechanism rests on is grounded. This is general: a fault that
+                    # needs a specific moving part / configuration is not viable if
+                    # that part isn't established by evidence. The LLM self-assesses
+                    # precondition_met; a deterministic backstop covers known
+                    # design-dependent mechanisms across all equipment classes.
+                    _ll = _label.lower()
+                    _precond = str(_h.get("precondition", "")).strip()
+                    _pm = str(_h.get("precondition_met", "unknown")).strip().lower()
+                    _all_ev_text = " ".join(_ev_text.values())
+                    # mechanism keyword → (enabling design terms, default base-rate note)
+                    _DESIGN_REQS = [
+                        (("damper",), ("slip", "stuck", "actuator", "creep", "open", "economiz"),
+                         ("motorized", "modulating", "economiz", "actuated damper", "2-position", "two-position"),
+                         "Assumes a MOTORIZED, free-to-travel damper — UNVERIFIED (Gulf commercial OA dampers are often FIXED at minimum). Confirm damper type on inspection."),
+                        (("vfd", "variable speed", "variable-speed", "speed reduction", "inverter"), (),
+                         ("vfd", "variable speed", "variable-speed", "inverter", "drive hz", "speed %"),
+                         "Assumes a variable-speed drive — UNVERIFIED; the unit may be fixed-speed."),
+                        (("unloader", "staging", "compressor stage", "multi-stage"), (),
+                         ("unloader", "multi-stage", "staged", "stages"),
+                         "Assumes compressor unloading/staging hardware — UNVERIFIED for this unit."),
+                    ]
+                    _precond_grounded = True
+                    _hit_text = (_ll + " " + _precond.lower())
+                    for _kw, _verbs, _enable, _note in _DESIGN_REQS:
+                        _kw_hit = any(k in _hit_text for k in _kw)
+                        _verb_hit = (not _verbs) or any(v in _hit_text for v in _verbs)
+                        if _kw_hit and _verb_hit:
+                            _enabled = any(e in _all_ev_text for e in _enable)
+                            _contradicted = any(c in _all_ev_text for c in ("fixed damper", "bolted", "fixed louver", "fixed-speed", "fixed speed", "2-position valve", "manual valve"))
+                            if _contradicted and not _enabled:
+                                _precond_grounded = False
+                                if not _precond:
+                                    _precond = "Design evidence CONTRADICTS the required configuration — mechanism not physically possible."
+                            elif not _enabled:
+                                _precond_grounded = False
+                                if not _precond:
+                                    _precond = _note
+                            break
+                    # LLM explicitly flagged its precondition as CONTRADICTED.
+                    # (Do not demote on "unknown" — that's the default for the
+                    # many hypotheses whose precondition is trivially met.)
+                    if _pm in ("false", "no"):
+                        _precond_grounded = False
                     # LLM rank weight (decays with position) + corroboration boost.
                     _score = max(0.0, 1.0 - 0.25 * _i) + 0.5 * _indep
                     if _recall_only:
                         _score *= 0.1   # memory-only hypothesis: keep it visible, never let it lead
                     if not _mech_grounded:
                         _score *= 0.05  # mechanism not in cited evidence → cannot lead
+                    if not _precond_grounded:
+                        _score *= 0.25  # unverified design precondition → can't sit at top confidence
                     # Evidence reliability = how many INDEPENDENT CURRENT observations agree.
                     # A single-sensor claim is Low no matter how plausible; a recall-only
                     # hypothesis is explicitly "Prior (uncorroborated)".
@@ -2805,6 +2862,8 @@ class BMSLLMAgent:
                         "evidence_reliability": _reliability,
                         "recall_only": _recall_only,
                         "mechanism_grounded": _mech_grounded,
+                        "precondition": _precond[:220],
+                        "precondition_grounded": _precond_grounded,
                         "discriminating_test": str(_h.get("discriminating_test", ""))[:200],
                         "_score": _score,
                     })
