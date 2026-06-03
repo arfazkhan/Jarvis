@@ -41,31 +41,41 @@ class CrossEncoderReranker:
         or the local model fails to load.
     """
 
+    # CLASS-LEVEL model cache — the BGE reranker is ~1.1 GB / 568M params.
+    # A new CrossEncoderReranker() is created per skillbook query; without a
+    # shared cache the model reloads every call → memory blows up and the
+    # process gets OOM-killed under concurrent swarms. Load once, share.
+    _CLS_local_model = None
+    _CLS_local_ok    = None   # None = untried, True/False after first attempt
+
     def __init__(self):
-        self._local_model  = None   # CrossEncoder instance (lazy loaded)
-        self._local_ok     = None   # None = untried, True/False after first attempt
         self._bedrock_client  = None
         self._bedrock_region  = os.environ.get("AWS_BEDROCK_REGION", "us-west-2")
         self.is_available  = True   # always True — one of the two tiers will work
 
+    @property
+    def _local_ok(self):
+        return type(self)._CLS_local_ok
+
     # ------------------------------------------------------------------
-    # Tier 1: local BGE
+    # Tier 1: local BGE  (shared singleton model)
     # ------------------------------------------------------------------
 
     def _get_local_model(self):
-        if self._local_ok is False:
+        cls = CrossEncoderReranker
+        if cls._CLS_local_ok is False:
             return None
-        if self._local_model is None:
+        if cls._CLS_local_model is None:
             try:
                 from sentence_transformers import CrossEncoder
-                logger.info(f"[Reranker] Loading {_BGE_MODEL_NAME} …")
-                self._local_model = CrossEncoder(_BGE_MODEL_NAME)
-                self._local_ok    = True
-                logger.info("[Reranker] BGE model ready.")
+                logger.info(f"[Reranker] Loading {_BGE_MODEL_NAME} (one-time, shared) …")
+                cls._CLS_local_model = CrossEncoder(_BGE_MODEL_NAME)
+                cls._CLS_local_ok    = True
+                logger.info("[Reranker] BGE model ready (cached for all rerank calls).")
             except Exception as e:
                 logger.warning(f"[Reranker] Could not load BGE model: {e}. Will use Bedrock fallback.")
-                self._local_ok = False
-        return self._local_model
+                cls._CLS_local_ok = False
+        return cls._CLS_local_model
 
     def _rerank_local(self, query: str, documents: List[str], top_n: int,
                       candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -157,7 +167,7 @@ class CrossEncoderReranker:
                 return results
             except Exception as e:
                 logger.warning(f"[Reranker] BGE rerank failed: {e}. Trying Bedrock fallback …")
-                self._local_ok = False  # don't retry broken model in same session
+                CrossEncoderReranker._CLS_local_ok = False  # don't retry broken model in same session
 
         # ── Tier 2: Amazon Rerank fallback ────────────────────────────
         try:
