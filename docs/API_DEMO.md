@@ -300,7 +300,11 @@ Built by `_build_investigation_result()` in `bms_llm_agent.py`. `null` where not
     "confidence": 0.6,                       // 0.6 if airflow assumed, 0.85 if measured
     "why": "Stuck-open OA damper pulls hot outdoor air past the commanded mix; the cooling coil burns extra chiller energy ... ~QAR 499/month at the Tier-3 rate.",
     "if_ignored": "Sustained energy waste continues every operating hour, the coil stays saturated ... until the damper actuator is repaired.",
-    "assumption": "airflow estimated (nominal AHU)"   // or "airflow measured"
+    "assumption": "airflow estimated (nominal AHU)",  // or "airflow measured"
+    "premise": "Assumes the high mixed-air temperature is REAL excess-outdoor-air load, not a MAT-sensor fault.",
+    "premise_holds": true,                     // false when the leading hypothesis is a sensor fault
+    "conditional": false,                      // true → figure rests on an unconfirmed premise
+    "caveat": ""                               // set when conditional: "...if MAT reading is false this is ~QAR 0..."
   },
 
   "hypotheses": [                            // ranked competing root causes (domain-agnostic differential)
@@ -385,7 +389,7 @@ Built by `_build_investigation_result()` in `bms_llm_agent.py`. `null` where not
 - **Recall is equipment-scoped** at every channel (auto-recall, skillbook tools, scenario retriever): a fault learned on AHU-07 is not retrieved for a chiller or a different AHU.
 - **`operator_summary`** is the plain-language layer (deterministic, no LLM, stable structure) — render it as the headline card and collapse `hypotheses[]` / `differential` / `metrics` behind a "details for engineers" toggle. It carries the same honesty into prose: never says "confirmed" unless `root_cause.confirmed` is true, surfaces the design `caveat`, and tags the cost as an estimate.
 - `truth_score` (groundedness) is reported separately from `metrics.confidence` (diagnostic) — never merged.
-- `cost_impact` is computed deterministically from telemetry (mixed-air balance → excess load → tariff), not authored by the LLM; assumptions are surfaced in `assumption`/`confidence`.
+- `cost_impact` is computed deterministically from telemetry (mixed-air balance → excess load → tariff), not authored by the LLM; assumptions are surfaced in `assumption`/`confidence`. It is also **conditional on the diagnosis**: if the leading hypothesis is a sensor fault (the high MAT may be false), `conditional=true`, `premise_holds=false`, confidence is capped, and a `caveat` notes the real figure may be ~QAR 0 — so the cost can never contradict the root cause.
 
 ---
 

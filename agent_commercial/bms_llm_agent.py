@@ -2889,6 +2889,36 @@ class BMSLLMAgent:
         except Exception as _hyp_err:
             logger.debug(f"differential build skipped: {_hyp_err}")
 
+        # ── Cost conditionality ──────────────────────────────────────────
+        # The excess-OA cost assumes the high mixed-air temp is REAL heat. If
+        # the leading hypothesis is a SENSOR fault (MAT lying), there is no real
+        # excess-OA load → the figure is ~QAR 0. Tie cost to the OA premise so it
+        # can't contradict the diagnosis.
+        if cost_impact:
+            try:
+                _lead_lbl = (hypotheses[0].get("label", "").lower() if hypotheses else "")
+                _oa_premise = any(k in _lead_lbl for k in
+                                  ("damper", "outdoor air", "oa ", "mixing", "ventilation", "economiz", "ingress"))
+                _sensor_lead = (any(k in _lead_lbl for k in
+                                    ("sensor", "transmitter", "bias", "calibration", "mis-read", "faulty reading"))
+                                and not _oa_premise)
+                cost_impact["premise"] = "Assumes the high mixed-air temperature is REAL excess-outdoor-air load, not a MAT-sensor fault."
+                if _sensor_lead:
+                    cost_impact["premise_holds"] = False
+                    cost_impact["conditional"] = True
+                    cost_impact["confidence"] = min(float(cost_impact.get("confidence", 0.6)), 0.2)
+                    cost_impact["why"] = "IF the excess outdoor air is real: " + str(cost_impact.get("why", ""))
+                    cost_impact["caveat"] = (
+                        "Leading cause is a sensor fault — if the MAT reading is false there is NO "
+                        "excess-OA energy waste and this figure is effectively QAR 0. Confirm the "
+                        "sensor before citing the savings."
+                    )
+                else:
+                    cost_impact["premise_holds"] = True
+                    cost_impact["conditional"] = False
+            except Exception as _ce:
+                logger.debug(f"cost conditionality skipped: {_ce}")
+
         # Recommended actions — parse numbered list from advice
         actions = []
         for _am in re.finditer(r"(?:^|\n|<br>)\s*(?:\*\*)?\d+\.\s*(?:\*\*)?([^\n<*]{6,120})", text):
@@ -3061,13 +3091,19 @@ class BMSLLMAgent:
         if _top.get("precondition") and not _top.get("precondition_grounded", True):
             _caveat = "Caveat: " + _top.get("precondition")
 
-        # money — only if grounded and present
+        # money — only if grounded and present; flag if it rests on an unconfirmed premise
         _cost_line = ""
         if cost.get("monthly_savings_qar"):
-            _cost_line = (
-                f"Estimated waste if left unfixed: ~QAR {cost.get('monthly_savings_qar'):.0f}/month "
-                f"({cost.get('assumption','estimate')})."
-            )
+            if cost.get("conditional"):
+                _cost_line = (
+                    f"IF the excess outdoor air is confirmed: ~QAR {cost.get('monthly_savings_qar'):.0f}/month "
+                    f"— but the leading cause is a sensor fault, so this may be ~QAR 0. Confirm first."
+                )
+            else:
+                _cost_line = (
+                    f"Estimated waste if left unfixed: ~QAR {cost.get('monthly_savings_qar'):.0f}/month "
+                    f"({cost.get('assumption','estimate')})."
+                )
 
         _headline = (
             f"{eq}: {_lead} — "
