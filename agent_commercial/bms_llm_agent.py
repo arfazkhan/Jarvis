@@ -3012,7 +3012,79 @@ class BMSLLMAgent:
         # Scenario-specific follow-up questions (screen 5) — generated from THIS
         # investigation's real facts, not a static template.
         result["suggested_questions"] = self._generate_followup_questions(result)
+        # Plain-language operator summary — deterministic, no LLM. Translates the
+        # technical differential into "what / how sure / do this / costs / watch".
+        result["operator_summary"] = self._build_operator_summary(result)
         return result
+
+    def _build_operator_summary(self, inv: Dict[str, Any]) -> Dict[str, Any]:
+        """Turn the technical investigation_result into plain English an operator
+        (not an HVAC engineer) can act on. Deterministic — assembled from the
+        already-computed fields, no extra LLM call."""
+        eq = inv.get("equipment_id") or "the equipment"
+        rc = inv.get("root_cause", {}) or {}
+        hyps = inv.get("hypotheses") or []
+        anomaly = inv.get("anomaly", {}) or {}
+        cost = inv.get("cost_impact") or {}
+        actions = inv.get("recommended_actions") or []
+        diff = inv.get("differential", {}) or {}
+        confirmed = bool(rc.get("confirmed"))
+        band = (rc.get("confidence_band") or "").lower()
+
+        _top = hyps[0] if hyps else {}
+        _lead = _top.get("label") or rc.get("statement") or "an anomaly"
+        _test = _top.get("discriminating_test") or (actions[0] if actions else "Schedule an inspection.")
+
+        # what's happening — from the anomaly/severity in plain words
+        _sev = (anomaly.get("severity") or "").lower()
+        _whats = (
+            f"{eq} is showing an abnormal reading"
+            + (f" ({anomaly.get('type')})" if anomaly.get("type") else "")
+            + (f", flagged {anomaly.get('severity')}" if _sev else "")
+            + (f" — about {abs(float(anomaly.get('z_score'))):.0f}x its normal variation"
+               if isinstance(anomaly.get("z_score"), (int, float)) else "")
+            + "."
+        )
+
+        # how sure — never overstate
+        if confirmed:
+            _sure = f"Most likely cause: {_lead}. This is corroborated by multiple readings (confidence: {band or 'medium'})."
+        else:
+            _n = diff.get("count") or len(hyps)
+            _sure = (
+                f"Most likely cause: {_lead} — but NOT confirmed; {_n} competing causes are still close. "
+                "Treat it as a lead to check, not a verdict."
+            )
+
+        # caveat — surface an unverified design assumption if the leader has one
+        _caveat = ""
+        if _top.get("precondition") and not _top.get("precondition_grounded", True):
+            _caveat = "Caveat: " + _top.get("precondition")
+
+        # money — only if grounded and present
+        _cost_line = ""
+        if cost.get("monthly_savings_qar"):
+            _cost_line = (
+                f"Estimated waste if left unfixed: ~QAR {cost.get('monthly_savings_qar'):.0f}/month "
+                f"({cost.get('assumption','estimate')})."
+            )
+
+        _headline = (
+            f"{eq}: {_lead} — "
+            + ("CONFIRMED, act now." if confirmed else "most probable cause, inspection needed.")
+        )
+        return {
+            "headline": _headline,
+            "whats_happening": _whats,
+            "how_sure": _sure,
+            "do_this_first": _test,
+            "caveat": _caveat,
+            "cost_if_ignored": _cost_line,
+            "bottom_line": (
+                "Confirmed — proceed with the fix." if confirmed
+                else "Unconfirmed — run the one check above before committing parts or labour."
+            ),
+        }
 
     def _generate_followup_questions(self, inv: Dict[str, Any]) -> List[str]:
         """Build follow-up questions grounded in the actual investigation.

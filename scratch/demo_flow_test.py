@@ -189,8 +189,8 @@ async def main():
     # inspection). So ARVIS must INFER excess OA from the mixed-air balance
     # (MAT 30.8 ≫ expected 26.7 at 15%), exactly like the human engineer — no
     # free "85%" handed to either side. Keeps the blind head-to-head fair.
-    await inject_point(EQ, "OA_DMPR", "OA Damper Position", 0.15, "fraction")
-    await inject_point(EQ, "OA_DMPR_CMD", "OA Damper Command", 0.15, "fraction")
+    await inject_point(EQ, "OA_DMPR", "Motorized OA Damper Position", 0.15, "fraction")
+    await inject_point(EQ, "OA_DMPR_CMD", "Motorized OA Damper Command", 0.15, "fraction")
     await inject_point(EQ, "CHW_VALVE", "CHW Valve", 0.99, "fraction")
     # OAT + RAT so the thermodynamic + cost derivers can fire (mixed-air balance
     # needs all three of MAT/OAT/RAT). Qatar hot outdoor air (42°C) mixed with
@@ -356,6 +356,10 @@ async def main():
             bool(IR.get("anomaly")), note=str(IR.get("anomaly", {}).get("severity")))
     C.check("S4", "data_coverage metric", _m.get("data_coverage") is not None,
             note=f"{_m.get('data_coverage')}")
+    _ops = IR.get("operator_summary") or {}
+    C.check("S4", "operator summary (plain-language, headline + bottom_line)",
+            bool(_ops.get("headline")) and bool(_ops.get("bottom_line")),
+            note=str(_ops.get("headline"))[:70])
     _cost = IR.get("cost_impact") or {}
     C.check("S4", "cost impact (grounded QAR/month savings)",
             bool(_cost.get("monthly_savings_qar")),
