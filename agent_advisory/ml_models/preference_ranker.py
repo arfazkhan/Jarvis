@@ -176,7 +176,16 @@ class PreferenceRankingModel:
             
             # Get preference score
             if self.model is not None and self.is_trained:
-                score = float(self.model.predict(features.reshape(1, -1))[0])
+                # The persisted model was fitted on a named DataFrame, so predicting
+                # on a bare ndarray triggers a sklearn feature-name warning. Re-attach
+                # the model's own feature names when they line up (also guarantees
+                # column alignment).
+                _X = features.reshape(1, -1)
+                _fn = getattr(self.model, "feature_name_", None)
+                if _fn and len(_fn) == _X.shape[1]:
+                    import pandas as pd
+                    _X = pd.DataFrame(_X, columns=_fn)
+                score = float(self.model.predict(_X)[0])
             else:
                 # Fallback: use operator persona or heuristics
                 score = self._heuristic_score(option, context, operator_id)

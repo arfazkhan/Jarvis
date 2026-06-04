@@ -706,6 +706,23 @@ class PredictionEngine:
     # PERSISTENCE (Warm-Start)
     # ═══════════════════════════════════════════════════════════════════════
 
+    @staticmethod
+    def _ensure_baselines_schema(conn) -> None:
+        """Self-heal the prediction_baselines table. It may pre-exist (created by an
+        older/other component) WITHOUT the building_id column the engine now needs,
+        which caused 'no such column: building_id' on every load/save. Create it if
+        missing, ALTER in building_id if absent. Idempotent."""
+        cur = conn.cursor()
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS prediction_baselines ("
+            "building_id TEXT DEFAULT 'default', hour INTEGER, metric TEXT, "
+            "value REAL, samples INTEGER DEFAULT 0, updated_at TEXT)"
+        )
+        cols = [r[1] for r in cur.execute("PRAGMA table_info(prediction_baselines)")]
+        if "building_id" not in cols:
+            cur.execute("ALTER TABLE prediction_baselines ADD COLUMN building_id TEXT DEFAULT 'default'")
+        conn.commit()
+
     def save_baselines(self, db=None) -> bool:
         """Persist baselines to DB for warm-start recovery."""
         try:
@@ -715,6 +732,7 @@ class PredictionEngine:
 
             import sqlite3
             conn = sqlite3.connect(str(db.db_path))
+            self._ensure_baselines_schema(conn)
             cursor = conn.cursor()
 
             cursor.execute("DELETE FROM prediction_baselines WHERE building_id = ?", (self.building_id,))
@@ -749,6 +767,7 @@ class PredictionEngine:
 
             import sqlite3
             conn = sqlite3.connect(str(db.db_path))
+            self._ensure_baselines_schema(conn)
             cursor = conn.cursor()
 
             cursor.execute(

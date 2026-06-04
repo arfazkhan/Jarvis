@@ -388,39 +388,33 @@ Return ONLY valid JSON array of 5 options. No markdown, no explanation outside J
         if self.llm is None:
             raise ValueError("LLM not available")
         
-        # UnifiedLLM uses ask() which is async
+        # Use ask_json — it adds markdown-fence stripping, robust extraction, a
+        # self-repair loop, and a fallback model. The old raw ask()+json.loads had
+        # none of that, so a single empty/non-JSON Bedrock reply hard-failed
+        # ('Expecting value: line 1 column 1') instead of retrying.
         try:
-            response = await self.llm.ask(
+            parsed = await self.llm.ask_json(
                 messages=[{"role": "user", "content": prompt}],
                 system_msgs=[{"role": "system", "content": self.SYSTEM_PROMPT}],
+                channel="structured",
             )
         except Exception as e:
             logger.warning("LLM call failed: %s, using fallback", e)
             raise ValueError(f"LLM call failed: {e}")
-        
-        # Response is a string content directly
-        if isinstance(response, dict):
-            content = response.get("content", response.get("text", ""))
+
+        # ask_json returns a parsed object — a list of options, or a dict that
+        # wraps them. Normalize to a list.
+        if isinstance(parsed, list):
+            options_data = parsed
+        elif isinstance(parsed, dict):
+            options_data = (parsed.get("options") or parsed.get("recommendations")
+                            or ([parsed] if (parsed.get("action") or parsed.get("title")) else []))
         else:
-            content = str(response) if response else ""
-        
-        if not content:
-            raise ValueError("Empty LLM response")
-        
-        # Parse JSON
-        # Handle potential markdown code blocks
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0]
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0]
-        
-        try:
-            options_data = json.loads(content.strip())
-        except json.JSONDecodeError as e:
-            logger.error("Failed to parse LLM JSON: %s", e)
-            logger.debug("Raw response: %s", content[:500])
-            raise
-        
+            options_data = []
+
+        if not options_data:
+            raise ValueError("Empty/invalid LLM options response")
+
         # Convert to GeneratedOption objects
         options = []
         for opt_data in options_data:
