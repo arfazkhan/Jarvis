@@ -277,6 +277,25 @@ async def list_scenarios():
     """
     return SCENARIO_CATALOG
 
+@router.post("/admin/discover-draft")
+async def discover_draft(request: Request, payload: Dict[str, Any] = Body(default={})):
+    """
+    Pre-deployment sweep: read the discovered inventory (bms_state — populated by
+    BACnet/Modbus discovery or the simulator), infer design_attributes with
+    confidence, and return a DRAFT commissioning spec for human review. Optionally
+    writes it to a file when 'out' is given. Never auto-asserts physics-gating design.
+    """
+    from agent_commercial.discovery_commission import sweep_and_draft, write_draft
+    bms_state = getattr(request.app.state, "bms_state", None)
+    database = getattr(request.app.state, "database", None) or getattr(request.app.state, "db", None)
+    if bms_state is None:
+        raise HTTPException(503, "BMS state engine not available")
+    building_id = payload.get("building_id", "default")
+    draft = await sweep_and_draft(bms_state, database, building_id)
+    if payload.get("out"):
+        write_draft(draft, payload["out"])
+    return {"status": "success", "draft": draft}
+
 @router.post("/admin/commission")
 async def commission(request: Request, payload: Dict[str, Any] = Body(...)):
     """
