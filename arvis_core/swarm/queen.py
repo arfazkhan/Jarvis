@@ -113,7 +113,14 @@ _VERB_REPLACEMENTS = {
     "modified": "recommend modifying",
 }
 
-_SESSION_ACTIVE_NODES: Dict[str, List[str]] = {}
+# Per-equipment routed-node cache. Keeps the dispatched agent set stable across
+# the internal turns of ONE investigation (seconds apart) without freezing it
+# forever: entries carry a timestamp and expire after _SESSION_NODES_TTL_S, so a
+# later investigation on changed building state re-routes fresh. Without the TTL
+# this is a process-lifetime global that pins a possibly-wrong first route onto
+# every future investigation (same bleed class as the battery contamination).
+_SESSION_ACTIVE_NODES: Dict[str, "tuple[float, List[str]]"] = {}
+_SESSION_NODES_TTL_S = 120.0
 
 
 class QueenCoordinator(BaseModel):
@@ -694,14 +701,16 @@ class QueenCoordinator(BaseModel):
         if _eq_m:
             target_eq = _eq_m.group(0).upper().replace(" ", "-")
 
-        if target_eq and target_eq in _SESSION_ACTIVE_NODES:
-            cached_names = _SESSION_ACTIVE_NODES[target_eq]
+        import time as _time
+        _cached = _SESSION_ACTIVE_NODES.get(target_eq) if target_eq else None
+        if _cached and (_time.time() - _cached[0]) < _SESSION_NODES_TTL_S:
+            cached_names = _cached[1]
             active_nodes = [self.nodes[name] for name in cached_names if name in self.nodes]
-            logger.info(f"[Queen] Reusing cached active nodes for {target_eq}: {[n.name for n in active_nodes]}")
+            logger.info(f"[Queen] Reusing cached active nodes for {target_eq} (age {_time.time()-_cached[0]:.0f}s): {[n.name for n in active_nodes]}")
         else:
             active_nodes = await self._route_intent(query)
             if target_eq and active_nodes:
-                _SESSION_ACTIVE_NODES[target_eq] = [n.name for n in active_nodes]
+                _SESSION_ACTIVE_NODES[target_eq] = (_time.time(), [n.name for n in active_nodes])
         
         # 1.1 CRITICAL GROUNDING OVERRIDE: Ensure Safety agents are active if breaches exist
         thermal_breaches = (context or {}).get("GROUNDING_THERMAL_SAFETY", [])
