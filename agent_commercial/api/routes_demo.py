@@ -394,6 +394,28 @@ async def inject_ahu07(request: Request, payload: Optional[InjectAhu07Request] =
     if dt == "fixed":
         # Fixed manual louver configuration — only injects OA damper position set to 15%, no command telemetry
         await inject_p("AHU-07", "OA_DMPR", "OA Damper Position", 0.15, "fraction")
+        # Explicit DESIGN FACT as a POINT — the point_id survives into the swarm's
+        # equipment evidence raw_payload (point display names are dropped by the
+        # snapshot, point_ids are not). The precondition gate scans that text and,
+        # seeing "fixed manual louver / non motorized", marks OA-damper slip as
+        # physically impossible. (Alarm below is belt-and-suspenders for synthesis,
+        # but alarms are NOT promoted to plan.evidence so the point is what the
+        # deterministic gate actually keys on.)
+        await inject_p("AHU-07", "OA_DAMPER_TYPE_FIXED_MANUAL_LOUVER_NON_MOTORIZED",
+                       "OA Damper Type: fixed manual louver, non-motorized, cannot slip", 1.0, "design")
+        # Explicit DESIGN FACT into synthesis context too.
+        await bms_state.add_alarm(Alarm(
+            alarm_id="ALM-AHU07-DESIGN",
+            source_point_id="AHU-07/OA_DMPR",
+            equipment_id="AHU-07",
+            message=("AHU-07 DESIGN FACT: OA damper is a FIXED MANUAL LOUVER "
+                     "(non-motorized, bolted at ~15% minimum OA). It cannot modulate, "
+                     "actuate, or slip — mechanical OA-damper slip is physically "
+                     "impossible for this unit. Investigate the cooling/CHW side instead."),
+            severity=AlarmSeverity.LOW,
+            state=AlarmState.ACTIVE,
+            triggered_at=datetime.now()
+        ))
     else:
         # Motorized modulating damper — must include the 'motorized' keyword
         # in the point names so the design-precondition gate grounds it as enabled.

@@ -2860,7 +2860,10 @@ class BMSLLMAgent:
                     _ll = _label.lower()
                     _precond = str(_h.get("precondition", "")).strip()
                     _pm = str(_h.get("precondition_met", "unknown")).strip().lower()
-                    _all_ev_text = " ".join(_ev_text.values())
+                    # Design-fact scan covers the evidence ledger AND the advisory
+                    # draft (a design-context alarm surfaces in synthesis). Normalize
+                    # underscores so point-id tokens like OA_DMPR_FIXED match phrases.
+                    _all_ev_text = (" ".join(_ev_text.values()) + " " + str(text or "")).lower().replace("_", " ")
                     # mechanism keyword → (enabling design terms, default base-rate note)
                     _DESIGN_REQS = [
                         (("damper",), ("slip", "stuck", "actuator", "creep", "open", "economiz"),
@@ -2874,17 +2877,25 @@ class BMSLLMAgent:
                          "Assumes compressor unloading/staging hardware — UNVERIFIED for this unit."),
                     ]
                     _precond_grounded = True
+                    _precond_impossible = False   # design evidence CONTRADICTS → physically impossible
                     _hit_text = (_ll + " " + _precond.lower())
+                    _CONTRA = ("fixed damper", "fixed manual", "manual louver", "fixed louver",
+                               "non-motorized", "non motorized", "nonmotorized", "bolted",
+                               "cannot slip", "cannot modulate", "fixed at minimum", "fixed minimum",
+                               "fixed-speed", "fixed speed", "2-position valve", "manual valve")
                     for _kw, _verbs, _enable, _note in _DESIGN_REQS:
                         _kw_hit = any(k in _hit_text for k in _kw)
                         _verb_hit = (not _verbs) or any(v in _hit_text for v in _verbs)
                         if _kw_hit and _verb_hit:
                             _enabled = any(e in _all_ev_text for e in _enable)
-                            _contradicted = any(c in _all_ev_text for c in ("fixed damper", "bolted", "fixed louver", "fixed-speed", "fixed speed", "2-position valve", "manual valve"))
-                            if _contradicted and not _enabled:
+                            _contradicted = any(c in _all_ev_text for c in _CONTRA)
+                            if _contradicted:
+                                # Positive design evidence says this mechanism cannot
+                                # occur — override generic enabling vocab, mark impossible.
                                 _precond_grounded = False
+                                _precond_impossible = True
                                 if not _precond:
-                                    _precond = "Design evidence CONTRADICTS the required configuration — mechanism not physically possible."
+                                    _precond = "Design evidence CONTRADICTS the required configuration — mechanism is physically impossible for this unit."
                             elif not _enabled:
                                 _precond_grounded = False
                                 if not _precond:
@@ -2895,13 +2906,16 @@ class BMSLLMAgent:
                     # many hypotheses whose precondition is trivially met.)
                     if _pm in ("false", "no"):
                         _precond_grounded = False
+                        _precond_impossible = True
                     # LLM rank weight (decays with position) + corroboration boost.
                     _score = max(0.0, 1.0 - 0.25 * _i) + 0.5 * _indep
                     if _recall_only:
                         _score *= 0.1   # memory-only hypothesis: keep it visible, never let it lead
                     if not _mech_grounded:
                         _score *= 0.05  # mechanism not in cited evidence → cannot lead
-                    if not _precond_grounded:
+                    if _precond_impossible:
+                        _score *= 0.05  # design CONTRADICTS mechanism → physically impossible, crush it
+                    elif not _precond_grounded:
                         _score *= 0.25  # unverified design precondition → can't sit at top confidence
                     # Evidence reliability = how many INDEPENDENT CURRENT observations agree.
                     # A single-sensor claim is Low no matter how plausible; a recall-only
