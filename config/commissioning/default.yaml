@@ -1,0 +1,74 @@
+# ARVIS commissioning spec — default building (simulator canonical set).
+# Declares the design facts ARVIS must NOT guess: damper type, VFD, economizer,
+# compressor staging, plus zones for ghost-space detection. Applied at boot
+# (merged onto the simulator-generated equipment). For a real building, replace
+# with the surveyed nameplate/schedule data.
+building_id: default
+
+equipment:
+  - id: CH-01
+    type: chiller
+    design_attributes:
+      has_vfd: true
+      compressor_staging: unloader      # multi-stage with unloaders
+      condenser: water_cooled
+    specs:
+      manufacturer: York
+      model: YK-Centrifugal
+      install_date: 2018-06-01
+      runtime_hours: 41000
+
+  - id: AHU-01
+    type: air_handling_unit
+    design_attributes:
+      damper_type: motorized            # modulating economizer damper
+      has_vfd: true
+      economizer: true
+    specs:
+      install_date: 2018-06-01
+      runtime_hours: 39800
+
+  - id: AHU-02
+    type: air_handling_unit
+    design_attributes:
+      damper_type: fixed                # fixed minimum-OA louver, non-motorized
+      has_vfd: true
+      economizer: false
+    specs:
+      install_date: 2018-06-01
+      runtime_hours: 39950
+
+  - id: VAV-01
+    type: variable_air_volume
+    design_attributes:
+      valve_type: modulating
+      reheat: hot_water
+
+  - id: VAV-02
+    type: variable_air_volume
+    design_attributes:
+      valve_type: modulating
+      reheat: electric
+
+zones:
+  - zone_id: ZONE-01
+    name: Floor 1 Open Office
+    floor: "1"
+    co2_point_id: ZONE-01/CO2
+    vav_point_id: ZONE-01/VAV_DMPR
+    lighting_point_id: ZONE-01/LIGHT
+    load_kw: 3.0
+  - zone_id: ZONE-02
+    name: Floor 2 Conference
+    floor: "2"
+    co2_point_id: ZONE-02/CO2
+    vav_point_id: ZONE-02/VAV_DMPR
+    lighting_point_id: ZONE-02/LIGHT
+    load_kw: 2.5
+  - zone_id: ZONE-03
+    name: Floor 3 Executive
+    floor: "3"
+    co2_point_id: ZONE-03/CO2
+    vav_point_id: ZONE-03/VAV_DMPR
+    lighting_point_id: ZONE-03/LIGHT
+    load_kw: 2.0

@@ -277,6 +277,27 @@ async def list_scenarios():
     """
     return SCENARIO_CATALOG
 
+@router.post("/admin/commission")
+async def commission(request: Request, payload: Dict[str, Any] = Body(...)):
+    """
+    Commission a building — apply declared design facts (design_attributes, zones,
+    specs) to live state. Body: {"spec": {...}} inline OR {"path": "config/.../x.yaml"}.
+    Idempotent (upserts). This is the runtime equivalent of the boot-time auto-load.
+    """
+    from agent_commercial.commissioning import load_spec, commission_building
+    bms_state = getattr(request.app.state, "bms_state", None)
+    database = getattr(request.app.state, "database", None) or getattr(request.app.state, "db", None)
+    if bms_state is None:
+        raise HTTPException(503, "BMS state engine not available")
+    spec = payload.get("spec")
+    if spec is None:
+        _path = payload.get("path")
+        if not _path:
+            raise HTTPException(400, "Provide 'spec' (inline) or 'path' (server file)")
+        spec = load_spec(_path)
+    summary = await commission_building(spec, bms_state, database)
+    return {"status": "success", "commissioned": summary}
+
 @router.post("/scenario/inject")
 async def inject_scenario(payload: InjectScenarioRequest, request: Request):
     """

@@ -502,6 +502,24 @@ class OpsCopilot:
             await self._start_modbus()
             self._bms_connected = True
 
+        # Commissioning — apply the building's declared design facts (design_attributes,
+        # zones, specs) AFTER equipment is registered so they merge onto the live records.
+        # Convention: config/commissioning/<building_id>.yaml (or .json). No file → skip
+        # (features that need design facts fall back to "unknown / confirm on inspection").
+        try:
+            import os
+            from agent_commercial.commissioning import load_spec, commission_building, default_spec_path
+            _bid = os.environ.get("ARVIS_BUILDING_ID", "default")
+            _spec_path = os.environ.get("ARVIS_COMMISSIONING_SPEC", "") or str(default_spec_path(_bid))
+            if os.path.exists(_spec_path):
+                _csum = await commission_building(load_spec(_spec_path), self.state_engine,
+                                                  getattr(self, "database", None) or getattr(self, "db", None))
+                logger.info(f"[Commission] applied {_spec_path}: {_csum}")
+            else:
+                logger.info(f"[Commission] no spec at {_spec_path} — building not commissioned (design facts unknown)")
+        except Exception as _cerr:
+            logger.warning(f"[Commission] skipped (non-fatal): {_cerr}")
+
         # Set up alarm engine with equipment topology
         equipment = await self.state_engine.get_all_equipment()
         self.alarm_engine.set_equipment_topology(equipment)
