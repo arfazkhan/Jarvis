@@ -31,6 +31,7 @@ from agent_cognitive.context_graph import ContextGraph
 from agent_cognitive.prediction_engine import PredictionEngine
 from agent_advisory.goal_generator import GoalGenerator, GoalDiscoveryEngine
 from agent_cognitive.meta_cognition import MetaCognition
+from arvis_core.memory.belief_store import BuildingBeliefStore
 
 logger = logging.getLogger("arvis.cognitive")
 
@@ -50,6 +51,7 @@ class CognitiveLoop:
         self.event_bus = event_bus
         self.memory = MemoryManager()
         self.context = ContextGraph()
+        self.belief_store = BuildingBeliefStore()  # CBBE stateful store
         self.predictor = PredictionEngine(self.memory, self.context)
         
         # Get mode configuration
@@ -95,7 +97,7 @@ class CognitiveLoop:
             self._alarm_engine = AlarmEngine()
             self._energy_analyzer = EnergyAnalyzer()
             self._pm_engine = PredictiveMaintenanceEngine()
-            self._fleet_intelligence = FleetIntelligence()
+            self._fleet_intelligence = FleetIntelligence(building_ids=["default"])
 
             # Wire alarm-resolved → skillbook write (state machine, not LLM-optional)
             self._bms_state.on_alarm_resolved(self._on_event)
@@ -366,6 +368,12 @@ class CognitiveLoop:
         - Commercial: Equipment health, alarm analysis, energy insights
         """
         try:
+            if self.mode == ArvisMode.COMMERCIAL:
+                try:
+                    self.belief_store.apply_time_decay(decay_rate=0.05)
+                except Exception as b_err:
+                    logger.debug(f"[CognitiveLoop] Belief Store decay failed: {b_err}")
+
             if self.mode == ArvisMode.RESIDENTIAL:
                 self._run_residential_cycle()
             else:
@@ -535,6 +543,12 @@ class CognitiveLoop:
         # 7. LLM cross-signal synthesis (when ≥2 distinct signal types present)
         if len(set(s.get("type") for s in suggestions)) >= 2:
             self._synthesize_cross_signal_insight(suggestions)
+
+        # CBBE: Update the Building Belief Store with perceived anomalies
+        try:
+            self._update_building_beliefs(suggestions)
+        except Exception as b_err:
+            logger.debug(f"[CognitiveLoop] Belief Store update failed: {b_err}")
 
         # 8. Publish Insights
         self._publish_suggestions(suggestions, source="ops_copilot")
@@ -949,4 +963,53 @@ class CognitiveLoop:
             self._pm_engine = pm_engine
 
         logger.info("BMS engines injected into cognitive loop")
+
+    def _update_building_beliefs(self, suggestions: List[Dict[str, Any]]) -> None:
+        """
+        Process the suggestions generated this cycle and update/reinforce
+        the stateful Building Belief Store (BBS) accordingly.
+        """
+        if not suggestions:
+            return
+            
+        logger.info(f"[CBBE] Processing {len(suggestions)} active suggestions to update latent building beliefs...")
+        for sug in suggestions:
+            sug_type = sug.get("type", "")
+            priority = sug.get("priority", "low")
+            equip_id = sug.get("equipment_id") or sug.get("probable_root_cause")
+            
+            # Skip if we can't associate with a specific equipment target
+            if not equip_id:
+                continue
+                
+            msg = sug.get("message", "")
+            if not msg:
+                continue
+                
+            # Formulate the latent hypothesis based on the perceived alarm/warning
+            if sug_type == "equipment_health":
+                hypothesis = f"{equip_id} exhibits degraded operational performance"
+            elif sug_type == "alarm_correlation":
+                hypothesis = f"{equip_id} is under an active alarm cascade / operational deviation"
+            elif sug_type == "filter_degradation":
+                hypothesis = f"{equip_id} shows progressive physical filter degradation"
+            elif sug_type == "energy_waste":
+                hypothesis = f"{equip_id} exhibits high energy waste or sensible heat inefficiency"
+            else:
+                hypothesis = f"{equip_id} shows abnormal operating anomalies: {msg[:100]}..."
+                
+            # Map risk priority to base confidence
+            conf_map = {"critical": 0.95, "high": 0.85, "medium": 0.70, "low": 0.50}
+            base_conf = sug.get("confidence") or conf_map.get(priority.lower(), 0.60)
+            
+            try:
+                self.belief_store.add_or_update_belief(
+                    target_id=equip_id,
+                    hypothesis=hypothesis,
+                    confidence=base_conf,
+                    supporting_signals=[msg],
+                    verification_status="PENDING_INSPECTION"
+                )
+            except Exception as b_err:
+                logger.debug(f"[CBBE] Failed to update belief store: {b_err}")
 
