@@ -7,7 +7,7 @@ Includes Group 1 to Group 5 endpoints to show real swarm reasoning, explainabili
 curated scenario injection, and real-time telemetry from the digital twin.
 """
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Body
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Dict, Any, List, Optional
@@ -36,6 +36,9 @@ class TriggerReasoningRequest(BaseModel):
 class InjectScenarioRequest(BaseModel):
     scenario_id: str = Field(..., example="chiller_vibration")
 
+class InjectAhu07Request(BaseModel):
+    damper_type: Optional[str] = Field(default="fixed", description="fixed or motorized")
+
 class WorkOrderRequest(BaseModel):
     equipment_id: str = Field(..., example="AHU-07")
     title: str = Field(..., example="Inspect OA damper actuator")
@@ -46,6 +49,12 @@ class WorkOrderRequest(BaseModel):
 
 # In-memory work-order store (demo). Swap for DB-backed store in production.
 _WORK_ORDERS: List[Dict[str, Any]] = []
+_LAST_TRIGGER_RUNS: Dict[str, Dict[str, Any]] = {}
+# In-flight swarm runs, keyed by equipment. Concurrent/duplicate triggers for the
+# SAME equipment (frontend SSE reconnect storm fired 3 in 13ms) must NOT each spawn
+# a full swarm — that drove the OOM and inflated belief confidence. Coalesce: the
+# 2nd..Nth concurrent caller awaits the FIRST run's result instead of launching its own.
+_INFLIGHT_TRIGGERS: Dict[str, "asyncio.Future"] = {}
 
 # Helper to get/init DemoOrchestrator
 def get_demo_orchestrator(request: Request) -> DemoOrchestrator:
@@ -89,8 +98,8 @@ async def get_building_overview(request: Request):
         eq_points = {}
         for point_id in eq.data_points:
             if point_id in current_values:
-                # Strip equipment prefix
-                param_name = point_id.replace(f"{eq.equipment_id}_", "")
+                # Strip equipment prefix (support both _ and / delimiters)
+                param_name = point_id.replace(f"{eq.equipment_id}_", "").replace(f"{eq.equipment_id}/", "")
                 eq_points[param_name] = current_values[point_id]
         eq_data["points"] = eq_points
         
@@ -135,7 +144,7 @@ async def get_equipment_detail(equipment_id: str, request: Request):
     points_detail = []
     for pid in eq.data_points:
         val = current_values.get(pid, 0.0)
-        param_name = pid.replace(f"{equipment_id}_", "")
+        param_name = pid.replace(f"{equipment_id}_", "").replace(f"{equipment_id}/", "")
         
         # Get simulated or real 60-minute history
         history = []
@@ -293,6 +302,187 @@ async def inject_scenario(payload: InjectScenarioRequest, request: Request):
         "message": f"Injected: {selected_scen['name']}"
     }
 
+@router.post("/scenario/inject-ahu07")
+async def inject_ahu07(request: Request, payload: Optional[InjectAhu07Request] = Body(None)):
+    """
+    Inject the full, high-fidelity AHU-07 fault scenario (points, alarms, rolling z-score baseline, etc.)
+    with an optional 'damper_type' parameter to toggle the design precondition.
+    """
+    if payload is None:
+        payload = InjectAhu07Request()
+    bms_state = getattr(request.app.state, "bms_state", None)
+    if not bms_state:
+        raise HTTPException(503, "BMS State Engine not available")
+        
+    from agent_commercial.bms_data_model import (
+        BMSDataPoint, Alarm, AlarmSeverity, AlarmState,
+        Equipment, EquipmentType, EquipmentStatus
+    )
+    from datetime import timedelta
+    import random as _rnd
+    
+    # 1. Register topological mechanical equipment
+    await bms_state.register_equipment(Equipment(
+        equipment_id="AHU-07",
+        name="AHU Floor 28 (Executive)",
+        equipment_type=EquipmentType.AHU,
+        location="Floor 28, Zone A",
+        status=EquipmentStatus.RUNNING
+    ))
+    await bms_state.register_equipment(Equipment(
+        equipment_id="ZONE-28A",
+        name="Office 28A",
+        equipment_type=EquipmentType.OTHER,
+        location="Floor 28, Zone A",
+        parent_equipment_id="AHU-07"
+    ))
+    await bms_state.register_equipment(Equipment(
+        equipment_id="ZONE-28B",
+        name="Office 28B",
+        equipment_type=EquipmentType.OTHER,
+        location="Floor 28, Zone B",
+        parent_equipment_id="AHU-07"
+    ))
+    await bms_state.register_equipment(Equipment(
+        equipment_id="ZONE-28C",
+        name="Office 28C",
+        equipment_type=EquipmentType.OTHER,
+        location="Floor 28, Zone C",
+        parent_equipment_id="AHU-07"
+    ))
+    
+    # Helper to inject points
+    async def inject_p(eq: str, pid: str, name: str, value: float, unit: str = "C"):
+        await bms_state.update_point(BMSDataPoint(
+            point_id=f"{eq}/{pid}",
+            equipment_id=eq,
+            name=name,
+            value=value,
+            unit=unit,
+            timestamp=datetime.now(),
+            source="simulator"
+        ))
+
+    # 2. Seed baseline history for mixed air temperature to satisfy z-score watchdogs
+    # Seed ~35 normal MAT readings so the watchdog has rolling history
+    # (min_history=30) and computes a REAL z-score when the spike lands.
+    now = datetime.now()
+    for i in range(35):
+        hist_time = now - timedelta(minutes=(35 - i))
+        val = round(24.0 + _rnd.uniform(-0.4, 0.4), 2)
+        await bms_state.update_point(BMSDataPoint(
+            point_id="AHU-07/MAT",
+            equipment_id="AHU-07",
+            name="Mixed Air Temp",
+            value=val,
+            unit="C",
+            timestamp=hist_time,
+            source="simulator"
+        ))
+
+    # Anomalous spike — watchdog now fires with a real z-score
+    await inject_p("AHU-07", "MAT", "Mixed Air Temp", 30.8, "C")
+    
+    # 3. Inject active sensor telemetry
+    await inject_p("AHU-07", "SAT", "Supply Air Temp", 16.5, "C")
+    await inject_p("AHU-07", "OAT", "Outdoor Air Temp", 42.0, "C")
+    await inject_p("AHU-07", "RAT", "Return Air Temp", 24.0, "C")
+    await inject_p("AHU-07", "CHW_VALVE", "CHW Valve", 0.99, "fraction")
+    
+    # Toggle design precondition based on damper_type
+    dt = (payload.damper_type or "fixed").lower()
+    if dt == "fixed":
+        # Fixed manual louver configuration — only injects OA damper position set to 15%, no command telemetry
+        await inject_p("AHU-07", "OA_DMPR", "OA Damper Position", 0.15, "fraction")
+    else:
+        # Motorized modulating damper — must include the 'motorized' keyword
+        # in the point names so the design-precondition gate grounds it as enabled.
+        await inject_p("AHU-07", "OA_DMPR_CMD", "Motorized OA Damper Command", 0.15, "fraction")
+        await inject_p("AHU-07", "OA_DMPR", "Motorized OA Damper Position", 0.15, "fraction")
+    
+    # Zone telemetry
+    _zone_temps = {"ZONE-28A": 25.8, "ZONE-28B": 26.1, "ZONE-28C": 25.5}
+    for zid, zt in _zone_temps.items():
+        await inject_p(zid, "ZN_TEMP", "Zone Temp", zt, "C")
+        await inject_p(zid, "ZN_SETPOINT", "Zone Setpoint", 23.0, "C")
+        await inject_p(zid, "CO2", "Zone CO2", 720.0, "ppm")
+        await inject_p(zid, "VAV_DMPR", "VAV Damper", 0.85, "fraction")
+        await inject_p(zid, "LIGHT_STATUS", "Lights", 1.0, "bool")
+        
+    # 4. Inject active cascade alarms
+    await bms_state.add_alarm(Alarm(
+        alarm_id="ALM-AHU07-002",
+        source_point_id="AHU-07/SAT",
+        equipment_id="AHU-07",
+        message="AHU-07: Supply air 16.5°C, 3.0°C above 13.5°C setpoint — unit cannot hold supply temperature",
+        severity=AlarmSeverity.CRITICAL,
+        state=AlarmState.ACTIVE,
+        triggered_at=datetime.now()
+    ))
+    await bms_state.add_alarm(Alarm(
+        alarm_id="ALM-AHU07-001",
+        source_point_id="AHU-07/MAT",
+        equipment_id="AHU-07",
+        message="AHU-07: Mixed air temp 30.8°C — high, z-score 5.8 vs rolling baseline",
+        severity=AlarmSeverity.HIGH,
+        state=AlarmState.ACTIVE,
+        triggered_at=datetime.now()
+    ))
+    await bms_state.add_alarm(Alarm(
+        alarm_id="ALM-AHU07-003",
+        source_point_id="AHU-07/CHW_VALVE",
+        equipment_id="AHU-07",
+        message="AHU-07: CHW valve at 99% open — cooling capacity exhausted, SAT 16.5°C",
+        severity=AlarmSeverity.HIGH,
+        state=AlarmState.ACTIVE,
+        triggered_at=datetime.now()
+    ))
+    await bms_state.add_alarm(Alarm(
+        alarm_id="ALM-AHU07-004",
+        source_point_id="ZONE-28A/ZN_TEMP",
+        equipment_id="ZONE-28A",
+        message="Zone 28A overtemp 25.8°C vs 23.0°C setpoint",
+        severity=AlarmSeverity.MEDIUM,
+        state=AlarmState.ACTIVE,
+        triggered_at=datetime.now()
+    ))
+    await bms_state.add_alarm(Alarm(
+        alarm_id="ALM-AHU07-005",
+        source_point_id="ZONE-28B/ZN_TEMP",
+        equipment_id="ZONE-28B",
+        message="Zone 28B overtemp 26.1°C vs 23.0°C setpoint",
+        severity=AlarmSeverity.MEDIUM,
+        state=AlarmState.ACTIVE,
+        triggered_at=datetime.now()
+    ))
+    await bms_state.add_alarm(Alarm(
+        alarm_id="ALM-AHU07-006",
+        source_point_id="ZONE-28C/ZN_TEMP",
+        equipment_id="ZONE-28C",
+        message="Zone 28C overtemp 25.5°C vs 23.0°C setpoint",
+        severity=AlarmSeverity.MEDIUM,
+        state=AlarmState.ACTIVE,
+        triggered_at=datetime.now()
+    ))
+    
+    # Broadcast scenario injection
+    await broadcaster.broadcast("system", {
+        "message": f"🚀 High-fidelity AHU-07 scenario injected ({dt} damper configuration). Anomaly watchdog initialized.",
+        "progress": 100
+    })
+    
+    return {
+        "status": "success",
+        "message": f"AHU-07 high-fidelity fixture successfully seeded with {dt} damper.",
+        "details": {
+            "equipment_registered": ["AHU-07", "ZONE-28A", "ZONE-28B", "ZONE-28C"],
+            "damper_type": dt,
+            "telemetry_points_seeded": 16,
+            "baseline_history_readings": 35,
+            "alarms_active": 6
+        }
+    }
+
 @router.get("/scenario/active")
 async def get_active_scenarios(request: Request):
     """
@@ -314,55 +504,98 @@ async def trigger_swarm_reasoning(payload: TriggerReasoningRequest, request: Req
     Trigger the actual multi-agent swarm to analyze the building.
     Returns the real response, BFT consensus details, and H4 verification artifacts.
     """
-    demo = get_demo_orchestrator(request)
-    if not demo.llm_agent:
-        raise HTTPException(503, "ARVIS LLM Agent not connected")
-        
-    bms_state = getattr(request.app.state, "bms_state", None)
-    snapshot = await bms_state.get_snapshot() if bms_state else {}
+    import re
+    import time
     
-    context = {
-        "sim_day": demo.sim_day,
-        "sim_time": demo.sim_time.isoformat(),
-        "source": "api_manual_trigger",
-        "LIVE_BMS_SNAPSHOT": snapshot
-    }
+    _eq_m = re.search(r'\b(?:CH|AHU|VAV|FCU|MTR|CHILLER)\b[-_\s]?\d+', payload.query, re.IGNORECASE)
+    target_eq = _eq_m.group(0).upper().replace(" ", "-") if _eq_m else "default"
     
-    # Direct swarm execution
-    response = await demo.llm_agent.chat(
-        query=payload.query,
-        context=context,
-        channel="demo"
-    )
-    
-    advice_text = response.text if hasattr(response, 'text') else str(response)
-    confidence = getattr(response, 'confidence', 0.85)
-    
-    _ir = getattr(response, "investigation_result", None)
+    now_ts = time.time()
 
-    # Update latest history in orchestrator. Attach the real investigation_result
-    # (ranked hypotheses, differential, metrics) to each advisory so
-    # GET /explain/advisory/{id} can render REAL explainability, not defaults.
-    advisories = demo._parse_advisories(advice_text, confidence)
-    for adv in advisories:
-        adv.setdefault("id", f"ADV-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:4].upper()}")
-        adv["day"] = demo.sim_day
-        adv["generated_at"] = demo.sim_time.isoformat()
-        adv["investigation_result"] = _ir
-        demo.advisory_history.append(adv)
+    # 1. Coalesce CONCURRENT duplicates: if a swarm for this equipment is already
+    #    running, await ITS result rather than launching a second swarm. This is
+    #    what actually prevents the duplicate-swarm storm (the post-completion
+    #    cache below cannot — concurrent triggers all arrive before any completes).
+    _running = _INFLIGHT_TRIGGERS.get(target_eq)
+    if _running is not None and not _running.done():
+        logger.info(f"[Demo] Coalescing duplicate trigger for {target_eq} onto in-flight run")
+        try:
+            _shared = await asyncio.shield(_running)
+            _out = dict(_shared)
+            _out["coalesced"] = True   # honest: this was not a fresh run
+            return _out
+        except Exception:
+            pass  # in-flight run failed; fall through to run our own
 
-    return {
-        "response": advice_text,
-        "confidence": confidence,
-        "advisories_generated": advisories,
-        # Structured payload for demo screens 3 & 4 (real run data).
-        "investigation_result": _ir,
-        "metadata": {
-            "truth_score": getattr(response, 'truth_score', 0.9),
-            "answer_confidence": getattr(response, 'answer_confidence', 0.9),
-            "data_coverage": getattr(response, 'data_coverage', 0.8)
+    # 2. Short post-completion cache for a genuine re-trigger seconds later.
+    #    Tagged honestly as cached so the client never mistakes it for fresh.
+    if target_eq in _LAST_TRIGGER_RUNS:
+        cached = _LAST_TRIGGER_RUNS[target_eq]
+        _age = now_ts - cached["timestamp"]
+        if _age < 45.0:
+            logger.info(f"[Demo] Serving cached trigger response for {target_eq} (age: {_age:.1f}s)")
+            _out = dict(cached["response"])
+            _out["cached"] = True
+            _out["cache_age_s"] = round(_age, 1)
+            return _out
+
+    async def _run_trigger() -> Dict[str, Any]:
+        demo = get_demo_orchestrator(request)
+        if not demo.llm_agent:
+            raise HTTPException(503, "ARVIS LLM Agent not connected")
+
+        bms_state = getattr(request.app.state, "bms_state", None)
+        snapshot = await bms_state.get_snapshot() if bms_state else {}
+
+        context = {
+            "sim_day": demo.sim_day,
+            "sim_time": demo.sim_time.isoformat(),
+            "source": "api_manual_trigger",
+            "LIVE_BMS_SNAPSHOT": snapshot
         }
-    }
+
+        # Direct swarm execution
+        response = await demo.llm_agent.chat(
+            query=payload.query,
+            context=context,
+            channel="demo"
+        )
+
+        advice_text = response.text if hasattr(response, 'text') else str(response)
+        confidence = getattr(response, 'confidence', 0.85)
+        _ir = getattr(response, "investigation_result", None)
+
+        # Attach the real investigation_result to each advisory for explainability.
+        advisories = demo._parse_advisories(advice_text, confidence)
+        for adv in advisories:
+            adv.setdefault("id", f"ADV-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:4].upper()}")
+            adv["day"] = demo.sim_day
+            adv["generated_at"] = demo.sim_time.isoformat()
+            adv["investigation_result"] = _ir
+            demo.advisory_history.append(adv)
+
+        res_payload = {
+            "response": advice_text,
+            "confidence": confidence,
+            "advisories_generated": advisories,
+            "investigation_result": _ir,
+            "metadata": {
+                "truth_score": getattr(response, 'truth_score', 0.9),
+                "answer_confidence": getattr(response, 'answer_confidence', 0.9),
+                "data_coverage": getattr(response, 'data_coverage', 0.8)
+            }
+        }
+        _LAST_TRIGGER_RUNS[target_eq] = {"timestamp": time.time(), "response": res_payload}
+        return res_payload
+
+    _task = asyncio.ensure_future(_run_trigger())
+    _INFLIGHT_TRIGGERS[target_eq] = _task
+    try:
+        res_payload = await _task
+    finally:
+        _INFLIGHT_TRIGGERS.pop(target_eq, None)
+
+    return res_payload
 
 @router.get("/reasoning/latest")
 async def get_latest_reasoning(request: Request):
@@ -704,7 +937,7 @@ async def get_artifact_set(artifact_set_id: str):
 
 
 @router.get("/artifacts/{artifact_set_id}/download/{artifact_type}")
-async def download_artifact(artifact_set_id: str, artifact_type: str):
+async def download_artifact(artifact_set_id: str, artifact_type: str, format: Optional[str] = None):
     """
     Download a single artifact from a set by type.
 
@@ -714,6 +947,12 @@ async def download_artifact(artifact_set_id: str, artifact_type: str):
     import json as _json
     from fastapi.responses import HTMLResponse, JSONResponse, Response
     from agent_commercial.api.artifacts import get_artifact_set as _get
+    from agent_commercial.api.artifact_html_templates import (
+        render_reasoning_roadmap_html,
+        render_feedback_vs_command_html,
+        render_evidence_manifest_html,
+        render_trend_chart_json_html,
+    )
 
     aset = _get(artifact_set_id)
     if not aset:
@@ -732,20 +971,45 @@ async def download_artifact(artifact_set_id: str, artifact_type: str):
     content = artifact.get("content")
     mime = artifact.get("mime", "application/octet-stream")
     label = artifact.get("label", artifact_type).replace(" ", "_").replace("—", "-")
+    eq_id = aset.get("equipment_id", "AHU-07")
+
+    # If the user explicitly wants raw JSON, bypass rendering
+    if format == "json":
+        return JSONResponse(
+            content=content if isinstance(content, (dict, list)) else {"data": content},
+            headers={"Content-Disposition": f'attachment; filename="{label}.json"'},
+        )
 
     if mime == "text/html":
         return HTMLResponse(content=content)
 
-    if artifact_type == "trend_chart" and isinstance(content, dict):
-        fmt = content.get("format", "")
-        if fmt == "png_base64":
-            import base64 as _b64
-            raw = _b64.b64decode(content["data"])
-            return Response(
-                content=raw,
-                media_type="image/png",
-                headers={"Content-Disposition": f'attachment; filename="{label}.png"'},
-            )
+    if artifact_type == "trend_chart":
+        if isinstance(content, dict):
+            fmt = content.get("format", "")
+            if fmt == "png_base64":
+                import base64 as _b64
+                raw = _b64.b64decode(content["data"])
+                return Response(
+                    content=raw,
+                    media_type="image/png",
+                    headers={"Content-Disposition": f'inline; filename="{label}.png"'},
+                )
+            elif fmt == "sparkline":
+                # Render sparklines JSON beautifully in HTML
+                html_rendered = render_trend_chart_json_html(eq_id, content)
+                return HTMLResponse(content=html_rendered)
+
+    if artifact_type == "reasoning_roadmap" and isinstance(content, dict):
+        html_rendered = render_reasoning_roadmap_html(eq_id, content)
+        return HTMLResponse(content=html_rendered)
+
+    if artifact_type == "feedback_vs_command" and isinstance(content, dict):
+        html_rendered = render_feedback_vs_command_html(eq_id, content)
+        return HTMLResponse(content=html_rendered)
+
+    if artifact_type == "evidence_manifest" and isinstance(content, dict):
+        html_rendered = render_evidence_manifest_html(eq_id, content)
+        return HTMLResponse(content=html_rendered)
 
     # Default: JSON
     return JSONResponse(

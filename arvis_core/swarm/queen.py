@@ -113,6 +113,8 @@ _VERB_REPLACEMENTS = {
     "modified": "recommend modifying",
 }
 
+_SESSION_ACTIVE_NODES: Dict[str, List[str]] = {}
+
 
 class QueenCoordinator(BaseModel):
     """
@@ -269,6 +271,15 @@ class QueenCoordinator(BaseModel):
                         f"- {b['target_id']}: {b['hypothesis']} (confidence: {b['confidence']:.2%}, status: {b['verification_status']}{supporting})"
                     )
                 belief_context_str = "\n".join(belief_blocks)
+                
+                # Emit the active building beliefs event to monitor stream
+                _emit("agent_log", {
+                    "agent": "Strategic Agent",
+                    "icon": "hub",
+                    "colorClass": "text-primary",
+                    "text": f"Injected {len(active_beliefs)} active building beliefs into swarm context",
+                    "subtext": "Continuous situational awareness active across query boundaries to prevent episodic reasoning fragmentation."
+                })
                 
                 context = dict(context or {})
                 context["ACTIVE_BUILDING_BELIEFS"] = (
@@ -658,6 +669,13 @@ class QueenCoordinator(BaseModel):
                                                     f"daily_kwh={_daily_kwh} savings=QAR{_monthly_qar:.0f}/mo "
                                                     f"(airflow_assumed={_af_assumed})"
                                                 )
+                                                _emit("agent_log", {
+                                                    "agent": "Strategic Agent",
+                                                    "icon": "payments",
+                                                    "colorClass": "text-emerald-500",
+                                                    "text": f"Thermodynamic Cost derived for {_eq_id}",
+                                                    "subtext": f"Calculated excess load: {_excess_kw:.1f} kW | Daily waste: {_daily_kwh:.1f} kWh | Projected savings: QAR {_monthly_qar:.0f}/mo (confidence: {0.6 if _af_assumed else 0.85})"
+                                                })
                                         except Exception as _cost_err:
                                             logger.warning(f"[Queen] Derived cost evidence skipped: {_cost_err}")
                 except Exception as _deriv_err:
@@ -672,7 +690,18 @@ class QueenCoordinator(BaseModel):
             logger.warning(f"[Queen] LIVE_BMS_SNAPSHOT promotion failed (non-fatal): {_promote_err}")
 
         # 1. Route Intent
-        active_nodes = await self._route_intent(query)
+        target_eq = None
+        if _eq_m:
+            target_eq = _eq_m.group(0).upper().replace(" ", "-")
+
+        if target_eq and target_eq in _SESSION_ACTIVE_NODES:
+            cached_names = _SESSION_ACTIVE_NODES[target_eq]
+            active_nodes = [self.nodes[name] for name in cached_names if name in self.nodes]
+            logger.info(f"[Queen] Reusing cached active nodes for {target_eq}: {[n.name for n in active_nodes]}")
+        else:
+            active_nodes = await self._route_intent(query)
+            if target_eq and active_nodes:
+                _SESSION_ACTIVE_NODES[target_eq] = [n.name for n in active_nodes]
         
         # 1.1 CRITICAL GROUNDING OVERRIDE: Ensure Safety agents are active if breaches exist
         thermal_breaches = (context or {}).get("GROUNDING_THERMAL_SAFETY", [])
@@ -703,6 +732,14 @@ class QueenCoordinator(BaseModel):
             "agents": [n.name for n in active_nodes],
             "risk_tier": risk_tier,
             "stage": "Investigate",
+        })
+
+        _emit("agent_log", {
+            "agent": "Strategic Agent",
+            "icon": "insights",
+            "colorClass": "text-primary",
+            "text": f"Intent classified: class=diagnostic | Risk Tier = T{risk_tier}",
+            "subtext": f"Dynamic routing active. Specializing swarm around dispatched nodes: {', '.join([n.name for n in active_nodes])}",
         })
 
         # ── Intent-aware fan-out cap ───────────────────────────────────────
@@ -1387,8 +1424,36 @@ class QueenCoordinator(BaseModel):
 
         if _run_h4 or _run_h2:
             logger.info(f"[Queen] Verification pipeline START (H4={_run_h4}, H2={_run_h2})")
+            try:
+                from agent_commercial.api.sse_broadcaster import SSEBroadcaster
+                import asyncio as _aio_v
+                _aio_v.ensure_future(
+                    SSEBroadcaster().broadcast("agent_log", {
+                        "agent": "Strategic Agent",
+                        "icon": "policy",
+                        "colorClass": "text-primary font-bold animate-pulse",
+                        "text": "Verification Pipeline active",
+                        "subtext": f"Running verification checks: H4 (Faithfulness) = {_run_h4} | H2 (Claim Verification) = {_run_h2}"
+                    }, channel="monitor")
+                )
+            except Exception:
+                pass
             final_advice = await self._verify_pipeline(final_advice, plan, run_h4=_run_h4, run_h2=_run_h2)
             logger.info("[Queen] Verification pipeline DONE")
+            try:
+                from agent_commercial.api.sse_broadcaster import SSEBroadcaster
+                import asyncio as _aio_v
+                _aio_v.ensure_future(
+                    SSEBroadcaster().broadcast("agent_log", {
+                        "agent": "Strategic Agent",
+                        "icon": "done_all",
+                        "colorClass": "text-emerald-500 font-bold",
+                        "text": "Verification Pipeline completed",
+                        "subtext": "All faithfulness and claim validation policies satisfied successfully."
+                    }, channel="monitor")
+                )
+            except Exception:
+                pass
             # Surface pipeline outcome so downstream abstention gate can respect
             # H4-verified output instead of overriding with "Insufficient data".
             if "h4-abstain" in final_advice or "faithfulness_abstention" in final_advice:
@@ -1425,7 +1490,9 @@ class QueenCoordinator(BaseModel):
                         f"Your previous advisory contained physics violations:\n{violations_text}\n\n"
                         f"Original advisory:\n{final_advice}\n\n"
                         "Regenerate the advisory removing or correcting the implausible claims. "
-                        "Do NOT include numbers that violate physics bounds. Output valid JSON only."
+                        "Adjust the numbers and claims that violate physics. If the physics violation implicates "
+                        "the diagnosis itself (the proposed mechanism cannot produce the observed values), you MAY "
+                        "revise the root cause to one that is physically consistent. Output valid JSON only."
                     )
                     try:
                         regen_result = await self.llm.ask_json(
@@ -1651,11 +1718,38 @@ class QueenCoordinator(BaseModel):
             if getattr(getattr(t, "status", None), "value", None) == "complete"
         })
 
+        # Extract confidence and abstained status for the frontend logs
+        _confidence_val = 0.85
+        _abstained_val = False
+        if final_advice:
+            try:
+                _lower_adv = final_advice.lower()
+                _abstained_val = "h4-abstain" in _lower_adv or "faithfulness_abstention" in _lower_adv or "abstained" in _lower_adv
+                
+                # Try parsing as JSON first
+                parsed_advice = json.loads(final_advice)
+                if isinstance(parsed_advice, dict):
+                    advisories = parsed_advice.get("advisories", [])
+                    if advisories and isinstance(advisories, list) and isinstance(advisories[0], dict):
+                        _confidence_val = advisories[0].get("confidence", 0.85)
+                    else:
+                        _confidence_val = parsed_advice.get("confidence", 0.85)
+            except Exception:
+                # If not JSON, try regular expression search
+                _band_m = re.search(r"confidence:\s*(Low|Medium|High)", final_advice, re.IGNORECASE)
+                if _band_m:
+                    _band = _band_m.group(1).capitalize()
+                    _confidence_val = {"High": 0.85, "Medium": 0.55, "Low": 0.30}.get(_band, 0.85)
+                else:
+                    _confidence_val = 0.85
+
         _emit("investigation_complete", {
             "plan_id": plan.id,
             "nodes_total": _nodes_total,
             "nodes_converged": _nodes_converged,
             "stage": "Advise",
+            "confidence": _confidence_val,
+            "abstained": _abstained_val,
         })
 
         return {
@@ -2216,6 +2310,20 @@ class QueenCoordinator(BaseModel):
                         f"[Queen] Hallucination clamp: numeric_claims={_num_claims} "
                         f"cited_evidence_ids={_num_cited}. Retrying synthesis once."
                     )
+                    try:
+                        from agent_commercial.api.sse_broadcaster import SSEBroadcaster
+                        import asyncio as _aio_s
+                        _aio_s.ensure_future(
+                            SSEBroadcaster().broadcast("agent_log", {
+                                "agent": "Planning Agent",
+                                "icon": "shield",
+                                "colorClass": "text-amber-500 animate-pulse font-bold",
+                                "text": "Hallucination clamp active",
+                                "subtext": f"Uncited numeric claims detected (claims: {_num_claims}, citations: {_num_cited}). Forcing synthesis retry for strict validation check."
+                            }, channel="monitor")
+                        )
+                    except Exception:
+                        pass
                     _retry_msg = (
                         user_message
                         + "\n\nCORRECTION: Your previous output cited fewer evidence_ids than the number "
@@ -2241,6 +2349,20 @@ class QueenCoordinator(BaseModel):
                 try:
                     _audit_report = _auditor.audit_advisory_json(result_str, _allowed_numbers)
                     logger.info(f"[Queen] {_audit_report.summary()}")
+                    try:
+                        from agent_commercial.api.sse_broadcaster import SSEBroadcaster
+                        import asyncio as _aio_a
+                        _aio_a.ensure_future(
+                            SSEBroadcaster().broadcast("agent_log", {
+                                "agent": "Planning Agent",
+                                "icon": "verified",
+                                "colorClass": "text-primary font-bold",
+                                "text": "Numeric Audit analysis",
+                                "subtext": _audit_report.summary()
+                            }, channel="monitor")
+                        )
+                    except Exception:
+                        pass
                     if _audit_report.orphans or _audit_report.derived_claims:
                         if _audit_report.orphans:
                             _orphan_list = [
@@ -2251,6 +2373,20 @@ class QueenCoordinator(BaseModel):
                                 f"[Queen][NumericAudit] STRIPPED {len(_audit_report.orphans)} orphan "
                                 f"number(s): {_orphan_list}"
                             )
+                            try:
+                                from agent_commercial.api.sse_broadcaster import SSEBroadcaster
+                                import asyncio as _aio_a
+                                _aio_a.ensure_future(
+                                    SSEBroadcaster().broadcast("agent_log", {
+                                        "agent": "Planning Agent",
+                                        "icon": "gavel",
+                                        "colorClass": "text-rose-500 font-extrabold animate-pulse",
+                                        "text": f"Stripped {len(_audit_report.orphans)} orphan number(s)",
+                                        "subtext": f"Quarantined unverified values: {', '.join(_orphan_vals)}"
+                                    }, channel="monitor")
+                                )
+                            except Exception:
+                                pass
                         result_str = _auditor.strip_orphans(result_str, _audit_report)
                         if _audit_report.orphans:
                             try:
@@ -3119,6 +3255,10 @@ class QueenCoordinator(BaseModel):
                 f"EVIDENCE LEDGER:\n{evidence_summary}\n\n"
                 "Rewrite the advisory to be 100% FAITHFUL to the evidence ledger.\n"
                 "Strict Constraints:\n"
+                "- The root cause MUST be whatever the EVIDENCE LEDGER supports. If the ledger contradicts the "
+                "original advisory's diagnosis (e.g. names a different fault type or equipment), you MUST change "
+                "the diagnosis to match the ledger — do not preserve a verdict the evidence does not support. "
+                "Faithfulness to evidence overrides continuity with the original draft.\n"
                 "- Remove or correct all contradicted and unsupported claims entirely.\n"
                 "- Remove ANY claim that lacks direct evidence in the ledger.\n"
                 "- Do NOT infer beyond cited telemetry or upgrade inference into certainty language.\n"

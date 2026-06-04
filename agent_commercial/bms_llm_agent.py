@@ -88,6 +88,7 @@ class _TurnLedger:
         plan_id: Optional[str],
         intent_class: Optional[str],
         risk_tier: Optional[int],
+        investigation_result: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Extract key findings from a completed turn and store them."""
         key = self._session_key(operator_id, building_id)
@@ -132,6 +133,7 @@ class _TurnLedger:
             "equipment_targets": sorted(set(equipment_targets)),
             "evidence_ids_cited": sorted(set(cited_ev_ids)),
             "max_severity": _rank_severities(severities),
+            "investigation_result": investigation_result,
         }
         bucket.append(entry)
         # FIFO cap
@@ -1560,45 +1562,8 @@ class BMSLLMAgent:
                 final_advice = str(swarm_payload)
                 swarm_context = {}
 
-            # ── Record this turn in TurnLedger (Fix #5) ─────────────────
-            # Persist key findings so next turn's chat() can inject them as
-            # PRIOR_TURN_FINDINGS. Done BEFORE response post-processing so
-            # ledger captures raw synthesis output (most structured form).
-            try:
-                _advice_json: Optional[Dict[str, Any]] = None
-                if final_advice and (final_advice.strip().startswith("{") or final_advice.strip().startswith("[")):
-                    import json as _json_for_ledger
-                    try:
-                        _parsed = _json_for_ledger.loads(final_advice)
-                        if isinstance(_parsed, dict):
-                            _advice_json = _parsed
-                    except Exception:
-                        pass
-                _plan_id = getattr(_investigation_plan, "id", None) if _investigation_plan else None
-                _intent_class = None
-                _risk_tier = None
-                if isinstance(swarm_context, dict):
-                    _risk_tier = swarm_context.get("_risk_tier")
-                if hasattr(self.queen, "_last_intent"):
-                    _li = self.queen._last_intent
-                    if _li is not None:
-                        _intent_class = getattr(_li, "intent_class", None)
-                _TURN_LEDGER.append_turn(
-                    operator_id=_operator_id,
-                    building_id=_building_id,
-                    query=query,
-                    advice_text=final_advice or "",
-                    advice_json=_advice_json,
-                    plan_id=_plan_id,
-                    intent_class=_intent_class,
-                    risk_tier=_risk_tier,
-                )
-                logger.debug(
-                    f"[TurnLedger] recorded turn plan_id={_plan_id} intent={_intent_class} "
-                    f"tier=T{_risk_tier}"
-                )
-            except Exception as _tl_err:
-                logger.debug(f"[TurnLedger] record failed (non-fatal): {_tl_err}")
+            # ── Record this turn in TurnLedger (Fix #5) (Moved downstream) ──────
+            pass
 
             computed_claims = []
             # Parse JSON final_advice if returned as raw JSON structure
@@ -2351,6 +2316,46 @@ class BMSLLMAgent:
             except Exception as _ir_err:
                 logger.debug(f"investigation_result build failed (non-fatal): {_ir_err}")
 
+            # ── Record this turn in TurnLedger (Fix #5) ─────────────────
+            # Persist key findings so next turn's chat() can inject them as
+            # PRIOR_TURN_FINDINGS. Done downstream to capture investigation_result.
+            try:
+                _advice_json: Optional[Dict[str, Any]] = None
+                if final_advice and (final_advice.strip().startswith("{") or final_advice.strip().startswith("[")):
+                    import json as _json_for_ledger
+                    try:
+                        _parsed = _json_for_ledger.loads(final_advice)
+                        if isinstance(_parsed, dict):
+                            _advice_json = _parsed
+                    except Exception:
+                        pass
+                _plan_id = getattr(_investigation_plan, "id", None) if _investigation_plan else None
+                _intent_class = None
+                _risk_tier = None
+                if isinstance(swarm_context, dict):
+                    _risk_tier = swarm_context.get("_risk_tier")
+                if hasattr(self.queen, "_last_intent"):
+                    _li = self.queen._last_intent
+                    if _li is not None:
+                        _intent_class = getattr(_li, "intent_class", None)
+                _TURN_LEDGER.append_turn(
+                    operator_id=_operator_id,
+                    building_id=_building_id,
+                    query=query,
+                    advice_text=final_advice or "",
+                    advice_json=_advice_json,
+                    plan_id=_plan_id,
+                    intent_class=_intent_class,
+                    risk_tier=_risk_tier,
+                    investigation_result=_inv_result,
+                )
+                logger.debug(
+                    f"[TurnLedger] recorded turn plan_id={_plan_id} intent={_intent_class} "
+                    f"tier=T{_risk_tier}"
+                )
+            except Exception as _tl_err:
+                logger.debug(f"[TurnLedger] record failed (non-fatal): {_tl_err}")
+
             return ChatResponse(
                 text=final_advice,
                 tool_calls=_tc,
@@ -2741,6 +2746,49 @@ class BMSLLMAgent:
                     f"{e.id} [{_src_of.get(e.id, '')}] {str(getattr(e, 'summary', ''))[:140]}"
                     for e in _ev_all[:30]
                 ]
+
+                # Load prior turn hypotheses and current belief store priors
+                prior_hypotheses_block = ""
+                try:
+                    _operator_id = context.get("_operator_id") or "default"
+                    _building_id = context.get("_building_id") or "default"
+                    recent_turns = _TURN_LEDGER.get_recent(operator_id=_operator_id, building_id=_building_id, n=1)
+                    if recent_turns and equipment_id:
+                        last_turn = recent_turns[0]
+                        last_result = last_turn.get("investigation_result")
+                        if last_result and last_result.get("equipment_id") == equipment_id:
+                            last_hyps = last_result.get("hypotheses") or []
+                            if last_hyps:
+                                lines = []
+                                for h in last_hyps:
+                                    lines.append(f"- Hypothesis: {h.get('label')} (probability: {h.get('probability')})")
+                                prior_hypotheses_block = "\nPRIOR COMPETING HYPOTHESES FROM PREVIOUS TURN:\n" + "\n".join(lines)
+                except Exception as _prior_err:
+                    logger.debug(f"Failed to load prior hypotheses from _TURN_LEDGER: {_prior_err}")
+
+                active_beliefs_str = ""
+                try:
+                    if equipment_id:
+                        from arvis_core.memory.belief_store import BuildingBeliefStore
+                        belief_store = BuildingBeliefStore()
+                        all_beliefs = belief_store.list_active_beliefs()
+                        filtered_beliefs = []
+                        for b in all_beliefs:
+                            if b.get("target_id") == equipment_id and b.get("confidence", 0.0) > 0.8:
+                                filtered_beliefs.append(
+                                    f"- Belief target: {b['target_id']}, hypothesis: {b['hypothesis']} "
+                                    f"(confidence: {b['confidence']:.2%}, status: {b['verification_status']})"
+                                )
+                        if filtered_beliefs:
+                            active_beliefs_str = (
+                                "\nACTIVE BUILDING BELIEFS (prior hypotheses from earlier turns — treat as PRIORS, "
+                                "not facts). Weigh them, but if the CURRENT evidence ledger contradicts a belief, "
+                                "follow the evidence and revise it. Do not preserve a belief the evidence rejects:\n"
+                                + "\n".join(filtered_beliefs)
+                            )
+                except Exception as _b_err:
+                    logger.debug(f"Failed to query belief store in _build_investigation_result: {_b_err}")
+
                 _sys = (
                     "You are a diagnostic reasoner for building systems. Given the EVIDENCE LEDGER and "
                     "the draft ADVISORY, enumerate the COMPETING root-cause hypotheses a senior engineer "
@@ -2754,14 +2802,20 @@ class BMSLLMAgent:
                     "slip). If that precondition is not established by the evidence, say so. "
                     "Also set precondition_met: \"true\" only if the EVIDENCE confirms the required "
                     "design/config, \"false\" if evidence CONTRADICTS it, \"unknown\" if evidence is silent. "
+                )
+                if active_beliefs_str:
+                    _sys += active_beliefs_str + "\n"
+                _sys += (
                     "Domain-agnostic — applies to any equipment. Return JSON: "
                     '{"hypotheses":[{"label":str,"rationale":str,"supporting_evidence_ids":[str],'
                     '"discriminating_test":str,"precondition":str,"precondition_met":"true|false|unknown"}]}'
                 )
                 _usr = (
-                    f"EVIDENCE LEDGER:\n" + "\n".join(_ev_lines) +
-                    f"\n\nDRAFT ADVISORY:\n{text[:1500]}\n\nList the competing hypotheses."
+                    f"EVIDENCE LEDGER:\n" + "\n".join(_ev_lines)
                 )
+                if prior_hypotheses_block:
+                    _usr += "\n" + prior_hypotheses_block
+                _usr += f"\n\nDRAFT ADVISORY:\n{text[:1500]}\n\nList the competing hypotheses."
                 # Use a capable channel — the differential carries design-context
                 # reasoning + structured JSON the weak 'reflect' model dropped
                 # (returned 0 hypotheses), and is the operator-facing ranked list.
@@ -2919,6 +2973,56 @@ class BMSLLMAgent:
             except Exception as _ce:
                 logger.debug(f"cost conditionality skipped: {_ce}")
 
+        # ── Synthesis ↔ differential reconciliation ───────────────────────
+        # root_cause.statement is parsed from the advisory PROSE (free-running
+        # LLM). hypotheses[0] is the GROUNDED, scored, precondition-gated
+        # differential leader. These can diverge (observed: prose said "damper
+        # blade slip" while the differential scored damper p=0.02 and led with
+        # "OAT/RAT sensor error p=0.89"). The differential is the authoritative
+        # ranked verdict — when they disagree it wins, and we flag it so the
+        # contested verdict is never presented as confident (and never learned).
+        diagnosis_agreement = None
+        try:
+            if hypotheses and root_cause:
+                _STOP = {"the","a","an","of","for","to","is","in","on","and","or","at","by",
+                         "causing","cause","root","fault","error","high","low","ahu","due"}
+                def _toks(s):
+                    return {w for w in re.findall(r"[a-z]+", (s or "").lower())
+                            if len(w) > 2 and w not in _STOP}
+                _lead = hypotheses[0]
+                _lead_tok = _toks(_lead.get("label"))
+                _rc_tok = _toks(root_cause)
+                _overlap = bool(_lead_tok & _rc_tok)
+                # Leader is decisive enough to override the prose.
+                _lead_decisive = (_lead.get("probability", 0.0) >= 0.5 and _dominance >= 0.15)
+                diagnosis_agreement = _overlap
+                if not _overlap and _lead_decisive:
+                    # Prose disagrees with the dominant grounded hypothesis →
+                    # the differential leads the verdict; prose verdict demoted.
+                    logger.warning(
+                        f"[Reconcile] eq={equipment_id} prose root_cause '{str(root_cause)[:60]}' "
+                        f"conflicts with differential leader '{_lead.get('label','')[:60]}' "
+                        f"(p={_lead.get('probability')}). Differential wins."
+                    )
+                    root_cause = _lead.get("label") or root_cause
+                    root_cause_label = "Most probable cause (ranked differential) — prose advisory diverged; physical inspection required"
+                    # A diagnosis the prose contradicts can never be 'confirmed'.
+                    fully_grounded = False
+                elif not _overlap and not _lead_decisive:
+                    # Genuinely contested — neither prose nor a dominant leader.
+                    root_cause_label = "Cause contested — competing hypotheses unresolved"
+        except Exception as _rec_err:
+            logger.debug(f"reconciliation skipped: {_rec_err}")
+        # Stash per-equipment so the skillbook auto-write gate can refuse to
+        # LEARN a verdict the prose and differential disagreed on.
+        try:
+            if equipment_id:
+                if not hasattr(self, "_last_diag_agreement"):
+                    self._last_diag_agreement = {}
+                self._last_diag_agreement[equipment_id] = diagnosis_agreement
+        except Exception:
+            pass
+
         # Recommended actions — parse numbered list from advice
         actions = []
         for _am in re.finditer(r"(?:^|\n|<br>)\s*(?:\*\*)?\d+\.\s*(?:\*\*)?([^\n<*]{6,120})", text):
@@ -3016,6 +3120,9 @@ class BMSLLMAgent:
                 "dominance": _dominance,                 # prob gap, leader vs runner-up
                 "leading_corroborated": _top_corroborated,
                 "count": len(hypotheses),
+                # True = prose advisory and ranked differential agree on the cause;
+                # False = they diverged (verdict demoted, not learned); None = n/a.
+                "synthesis_agreement": diagnosis_agreement,
             },
             "metrics": {
                 "elapsed_seconds": round(elapsed_s, 1),
@@ -3206,6 +3313,20 @@ class BMSLLMAgent:
 
         diagnosis = self._extract_fault_diagnosis(text, query)
         if diagnosis is None:
+            return
+
+        # 1b. Contested-verdict gate: if this turn's prose advisory and the
+        # ranked differential disagreed on the root cause, the verdict is
+        # unresolved — do NOT persist it as a learned fault_pattern (otherwise
+        # the contested conclusion gets recalled and reinforced next time,
+        # poisoning future investigations).
+        _eq_d = diagnosis.get("equipment_id")
+        _agree = getattr(self, "_last_diag_agreement", {}).get(_eq_d)
+        if _agree is False:
+            logger.info(
+                "[Skillbook] Auto-write aborted: prose advisory and ranked differential "
+                f"disagree on the root cause for {_eq_d} — verdict contested, not learned."
+            )
             return
 
         # 2. Programmatic Memory Write-Gating for confirmed mechanical faults without physical inspection
