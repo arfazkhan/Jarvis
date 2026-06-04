@@ -291,7 +291,10 @@ async def discover_draft(request: Request, payload: Dict[str, Any] = Body(defaul
     if bms_state is None:
         raise HTTPException(503, "BMS state engine not available")
     building_id = payload.get("building_id", "default")
-    draft = await sweep_and_draft(bms_state, database, building_id)
+    # Pass the shared LLM so the optional LLM proposer can run (gated by ARVIS_LLM_DISCOVERY).
+    _llm_agent = getattr(request.app.state, "llm_agent", None)
+    _llm = getattr(_llm_agent, "llm", None) if _llm_agent else None
+    draft = await sweep_and_draft(bms_state, database, building_id, llm=_llm)
     if payload.get("out"):
         write_draft(draft, payload["out"])
     return {"status": "success", "draft": draft}

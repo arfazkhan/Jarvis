@@ -123,14 +123,168 @@ def infer_design_attributes(equipment_id: str, points: List[Any]) -> Dict[str, D
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# Step 2b — OPTIONAL LLM proposer (smarter on messy naming / device gestalt)
+# ──────────────────────────────────────────────────────────────────────────
+# The LLM PROPOSES; the deterministic rules above are the safety FLOOR. The LLM
+# never gets authority over a physics-gating value: its proposals go through the
+# SAME confidence/evidence/needs_confirmation gate, every cited point_id is
+# evidence-bound (hallucinated citations are dropped, and a value asserted with
+# no valid evidence is REJECTED), and on conflict the rules value wins while
+# confirmation is forced. Behind ARVIS_LLM_DISCOVERY=1; rules-only is the default.
+_LLM_DESIGN_KEYS = ("damper_type", "has_vfd", "economizer", "valve_type", "compressor_staging")
+
+
+async def infer_design_attributes_llm(
+    equipment_id: str, equipment_type: str, points: List[Any], llm: Any,
+) -> Dict[str, Dict[str, Any]]:
+    """Ask the LLM to read this device's point list and propose design facts with
+    cited point_id evidence. Returns the same {value, confidence, evidence} shape.
+    Evidence-bound + anti-hallucination filtered. Empty on any failure (floor stays)."""
+    valid_ids = {str(getattr(p, "point_id", "") or "") for p in points}
+    valid_ids.discard("")
+    if not valid_ids:
+        return {}
+    _plist = "\n".join(
+        f"- {getattr(p,'point_id','')} | name='{getattr(p,'name','')}' | unit='{getattr(p,'unit','')}' "
+        f"| kind={getattr(getattr(p,'point_type',''),'value',getattr(p,'point_type',''))}"
+        for p in points
+    )
+    _sys = (
+        "You are a BMS commissioning engineer reading one device's BACnet/Modbus point list. "
+        "Propose ONLY the design facts the points give POSITIVE evidence for. Rules: "
+        "(1) keys allowed: damper_type(fixed|motorized|2-position), has_vfd(bool), "
+        "economizer(bool), valve_type(modulating|2-position), compressor_staging(none|staged|unloader). "
+        "(2) Cite evidence_point_ids using EXACT ids from the list — never invent an id. "
+        "(3) NEVER assert a fact from ABSENCE: a damper with only a position READING (no command "
+        "output) is value=null with reason 'cannot determine fixed vs motorized'. Do NOT guess 'fixed'. "
+        "(4) Omit any fact you have no point evidence for. (5) confidence 0..1. "
+        'Output JSON: {"design":[{"attr":str,"value":any|null,"confidence":float,'
+        '"evidence_point_ids":[str],"reason":str}]}'
+    )
+    _usr = f"Equipment: {equipment_id} (type={equipment_type})\nPoints:\n{_plist}\n\nPropose design facts."
+    try:
+        resp = await llm.ask_json(
+            messages=[{"role": "user", "content": _usr}],
+            system_msgs=[{"role": "system", "content": _sys}],
+            channel="structured",
+        )
+    except Exception as e:
+        logger.debug(f"[Discovery][LLM] proposer failed for {equipment_id}: {e}")
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for item in (resp.get("design") if isinstance(resp, dict) else None) or []:
+        if not isinstance(item, dict):
+            continue
+        attr = str(item.get("attr", "")).strip()
+        if attr not in _LLM_DESIGN_KEYS:
+            continue
+        # Evidence-bind: keep only cited ids that actually exist.
+        ev = [e for e in (item.get("evidence_point_ids") or []) if e in valid_ids]
+        val = item.get("value")
+        # Anti-hallucination: a non-null value asserted with NO valid evidence is rejected.
+        if val is not None and not ev:
+            logger.debug(f"[Discovery][LLM] rejected {equipment_id}.{attr}={val} — no valid evidence cited")
+            continue
+        try:
+            conf = float(item.get("confidence", 0.5))
+        except (TypeError, ValueError):
+            conf = 0.5
+        out[attr] = {"value": val, "confidence": max(0.0, min(conf, 0.9)),
+                     "evidence": f"LLM: {item.get('reason','')[:120]}" + (f" [{', '.join(ev[:3])}]" if ev else "")}
+    return out
+
+
+def _norm_val(v: Any) -> str:
+    return str(v).strip().lower() if v is not None else "∅"
+
+
+def merge_design_proposals(rules: Dict[str, Dict], llm: Dict[str, Dict]) -> Dict[str, Dict[str, Any]]:
+    """Merge rules (FLOOR) + LLM proposals. Agreement boosts confidence; conflict
+    keeps the rules VALUE but forces confirmation at low confidence; single-source
+    LLM is confidence-capped. Physics-gating facts always need_confirmation."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for k in set(rules) | set(llm):
+        r, l = rules.get(k), llm.get(k)
+        if r and l:
+            if _norm_val(r.get("value")) == _norm_val(l.get("value")):
+                out[k] = {"value": r.get("value"),
+                          "confidence": min(0.95, max(r.get("confidence", 0), l.get("confidence", 0)) + 0.1),
+                          "evidence": f"{r.get('evidence','')} || {l.get('evidence','')}",
+                          "source": "rules+llm (agree)"}
+            else:  # conflict → deterministic floor value wins, force confirm
+                out[k] = {"value": r.get("value"), "confidence": min(r.get("confidence", 0.3), 0.4),
+                          "evidence": f"CONFLICT rules={r.get('value')} vs llm={l.get('value')}: "
+                                      f"{r.get('evidence','')} || {l.get('evidence','')}",
+                          "source": "conflict", "_force_confirm": True}
+        elif r:
+            out[k] = {**r, "source": "rules"}
+        else:  # LLM-only — capped, the rules floor saw nothing
+            out[k] = {**l, "confidence": min(l.get("confidence", 0.5), 0.7), "source": "llm-only"}
+    for k, v in out.items():
+        v["needs_confirmation"] = bool(
+            v.pop("_force_confirm", False) or k in _PHYSICS_GATING or v.get("confidence", 0) < 0.8
+            or v.get("value") is None
+        )
+        v.setdefault("confirmed", False)
+    return out
+
+
+# Which design facts even APPLY to an equipment class — cuts noise (a water meter
+# has no damper). Substring match on the equipment type; unknown types allow all.
+_RELEVANT_DESIGN = {
+    "air_handling": {"damper_type", "has_vfd", "economizer", "valve_type"},
+    "ahu": {"damper_type", "has_vfd", "economizer", "valve_type"},
+    "chiller": {"has_vfd", "compressor_staging", "valve_type"},
+    "variable_air": {"damper_type", "valve_type"},
+    "vav": {"damper_type", "valve_type"},
+    "fan_coil": {"valve_type", "has_vfd"},
+    "fcu": {"valve_type", "has_vfd"},
+    "pump": {"has_vfd", "valve_type"},
+    "fan": {"has_vfd"},
+    "boiler": {"valve_type", "compressor_staging"},
+    "cooling_tower": {"has_vfd"},
+    # meters / lighting / sensors / generic zones → no mechanical design facts
+    "meter": set(), "lighting": set(), "sensor": set(),
+}
+
+
+def _relevant_keys(equipment_type: str) -> Optional[set]:
+    et = str(equipment_type or "").lower()
+    for k, v in _RELEVANT_DESIGN.items():
+        if k in et:
+            return v
+    return None  # unknown type → allow all (don't silently drop)
+
+
+async def infer_design_hybrid(
+    equipment_id: str, equipment_type: str, points: List[Any], llm: Any = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Rules always (offline floor). LLM merged in when provided + ARVIS_LLM_DISCOVERY=1.
+    Result filtered to design facts relevant to the equipment class."""
+    import os
+    rules = infer_design_attributes(equipment_id, points)
+    merged = rules
+    if llm is not None and os.environ.get("ARVIS_LLM_DISCOVERY", "").strip() in ("1", "true", "True"):
+        llm_props = await infer_design_attributes_llm(equipment_id, equipment_type, points, llm)
+        if llm_props:
+            merged = merge_design_proposals(rules, llm_props)
+    allowed = _relevant_keys(equipment_type)
+    if allowed is not None:
+        merged = {k: v for k, v in merged.items() if k in allowed}
+    return merged
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # Step 1+3 — sweep the inventory and build the draft spec
 # ──────────────────────────────────────────────────────────────────────────
 async def sweep_and_draft(
     bms_state: Any,
     database: Any = None,
     building_id: str = "default",
+    llm: Any = None,
 ) -> Dict[str, Any]:
-    """Read the live inventory from bms_state, infer design, build a draft spec dict."""
+    """Read the live inventory from bms_state, infer design, build a draft spec dict.
+    Pass llm + set ARVIS_LLM_DISCOVERY=1 to enable the LLM proposer (rules stay the floor)."""
     equipment = await bms_state.get_all_equipment()
     draft_equipment: List[Dict[str, Any]] = []
 
@@ -141,7 +295,7 @@ async def sweep_and_draft(
         except Exception:
             points = []
         eqtype = getattr(getattr(eq, "equipment_type", ""), "value", str(getattr(eq, "equipment_type", "")))
-        design = infer_design_attributes(eid, points)
+        design = await infer_design_hybrid(eid, eqtype, points, llm)
         draft_equipment.append({
             "id": eid,
             "type": eqtype,
@@ -261,14 +415,23 @@ def _cli() -> int:
         return 0
 
     # sweep — boot a minimal state engine + simulator so there's an inventory.
+    import os
     from agent_commercial.bms_state_engine import BMSStateEngine
     from agent_commercial.database import get_database
     bms_state = BMSStateEngine()
     database = get_database(None)
     out = args.out or f"config/commissioning/{args.building}.draft.yaml"
 
+    _llm = None
+    if os.environ.get("ARVIS_LLM_DISCOVERY", "").strip() in ("1", "true", "True"):
+        try:
+            from agent_unified.llm import UnifiedLLM
+            _llm = UnifiedLLM()
+        except Exception as e:
+            print(f"[warn] LLM proposer requested but UnifiedLLM init failed: {e}")
+
     async def _run():
-        draft = await sweep_and_draft(bms_state, database, args.building)
+        draft = await sweep_and_draft(bms_state, database, args.building, llm=_llm)
         write_draft(draft, out)
         return draft["_summary"]
 
