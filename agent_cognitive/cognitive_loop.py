@@ -478,7 +478,10 @@ class CognitiveLoop:
         # 5. Proactive Goal Discovery (NEW)
         if self.goal_discovery:
             # Building ID is needed - assume context graph has it or default
-            building_id = self.dispatcher.config.get("building_id", "default")
+            # dispatcher.config is a ModeConfig OBJECT (see .name use above), not a
+            # dict — .get() raised "'ModeConfig' object has no attribute 'get'" and
+            # crashed the cognitive cycle. Read it as an attribute with a default.
+            building_id = getattr(self.dispatcher.config, "building_id", "default")
             new_goals = self.goal_discovery.run_discovery_cycle(building_id)
             if new_goals:
                 logger.info(f"Discovered {len(new_goals)} proactive goals")
