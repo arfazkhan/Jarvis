@@ -476,6 +476,11 @@ class QueenCoordinator(BaseModel):
                         _equipment_status = "stale_telemetry"
 
                     # Active equipment — promote all retained points
+                    _design = _eq_block.get("design", {}) or {}
+                    _design_summary = (
+                        " | design: " + ", ".join(f"{k}={v}" for k, v in _design.items())
+                        if _design else ""
+                    )
                     plan.evidence.add(Evidence(
                         source_tool="live_snapshot:equipment",
                         raw_payload={
@@ -484,10 +489,11 @@ class QueenCoordinator(BaseModel):
                             "status": _equipment_status,
                             "operational": True,
                             "points": _fresh_points,
+                            "design_attributes": _design,   # commissioning-declared design facts
                         },
                         node_name="LiveSnapshotPromoter",
                         freshness=FreshnessStatus.RECENT,
-                        summary=f"{_eq_id} live points: " + ", ".join(
+                        summary=f"{_eq_id}{_design_summary} live points: " + ", ".join(
                             f"{k}={v.get('value')}{v.get('unit','')}" for k, v in list(_fresh_points.items())[:5]
                         ),
                         equipment_id=_eq_id,

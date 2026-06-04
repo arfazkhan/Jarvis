@@ -1341,6 +1341,11 @@ class BMSLLMAgent:
                             "status": status_val,
                             "name": getattr(eq, "name", ""),
                             "points": {},
+                            # Commissioning-declared design facts (damper_type, has_vfd,
+                            # economizer, compressor_staging, valve_type, …). Carried into
+                            # the evidence ledger so the precondition gate uses KNOWN design,
+                            # not telemetry guesswork. Empty {} = not commissioned → unknown.
+                            "design": dict(getattr(eq, "design_attributes", {}) or {}),
                         }
                         try:
                             pts = await self.bms_state.get_points_by_equipment(eq.equipment_id)
@@ -2739,6 +2744,22 @@ class BMSLLMAgent:
                            _json2.dumps(getattr(e, "raw_payload", {}) or {})).lower()
                     for e in _ev_all
                 }
+                # Commissioning-declared design facts for THIS equipment — the
+                # authoritative precondition source (vs guessing from telemetry).
+                # Pulled from the live_snapshot equipment evidence raw_payload.
+                _design_facts: Dict[str, Any] = {}
+                try:
+                    _eqn = re.sub(r"[-_\s]", "", str(equipment_id or "")).upper()
+                    for e in _ev_all:
+                        _rp = getattr(e, "raw_payload", {}) or {}
+                        if not isinstance(_rp, dict):
+                            continue
+                        _da = _rp.get("design_attributes") or {}
+                        if _da and re.sub(r"[-_\s]", "", str(_rp.get("equipment_id", ""))).upper() == _eqn:
+                            _design_facts = {str(k).lower(): v for k, v in _da.items()}
+                            break
+                except Exception:
+                    _design_facts = {}
                 _STOP = {"the","a","an","of","in","on","at","to","and","or","is","are","be",
                          "actuator","failure","fault","issue","problem","slip","high","low",
                          "elevated","reduced","insufficient","limitation","anomaly","degradation"}
@@ -2864,43 +2885,63 @@ class BMSLLMAgent:
                     # draft (a design-context alarm surfaces in synthesis). Normalize
                     # underscores so point-id tokens like OA_DMPR_FIXED match phrases.
                     _all_ev_text = (" ".join(_ev_text.values()) + " " + str(text or "")).lower().replace("_", " ")
-                    # mechanism keyword → (enabling design terms, default base-rate note)
+                    # mechanism kw → (verbs, enabling-text terms, base-rate note,
+                    #                 design_attr KEY, contradicting-values, enabling-values)
+                    # The design_attr KEY + value sets are the AUTHORITATIVE
+                    # commissioning-declared source. Enabling-text/_CONTRA are the
+                    # fallback text-scan used only when the equipment was not
+                    # commissioned with that design fact.
                     _DESIGN_REQS = [
                         (("damper",), ("slip", "stuck", "actuator", "creep", "open", "economiz"),
                          ("motorized", "modulating", "economiz", "actuated damper", "2-position", "two-position"),
-                         "Assumes a MOTORIZED, free-to-travel damper — UNVERIFIED (Gulf commercial OA dampers are often FIXED at minimum). Confirm damper type on inspection."),
+                         "Assumes a MOTORIZED, free-to-travel damper — UNVERIFIED (Gulf commercial OA dampers are often FIXED at minimum). Confirm damper type on inspection.",
+                         "damper_type", ("fixed", "2-position", "2 position", "two-position", "bolted", "manual", "louver"), ("motorized", "modulating")),
                         (("vfd", "variable speed", "variable-speed", "speed reduction", "inverter"), (),
                          ("vfd", "variable speed", "variable-speed", "inverter", "drive hz", "speed %"),
-                         "Assumes a variable-speed drive — UNVERIFIED; the unit may be fixed-speed."),
+                         "Assumes a variable-speed drive — UNVERIFIED; the unit may be fixed-speed.",
+                         "has_vfd", (False, "false", "no", "none", 0), (True, "true", "yes", 1)),
                         (("unloader", "staging", "compressor stage", "multi-stage"), (),
                          ("unloader", "multi-stage", "staged", "stages"),
-                         "Assumes compressor unloading/staging hardware — UNVERIFIED for this unit."),
+                         "Assumes compressor unloading/staging hardware — UNVERIFIED for this unit.",
+                         "compressor_staging", ("none", "single", "fixed", "single-stage"), ("unloader", "staged", "multi-stage", "vfd")),
                     ]
                     _precond_grounded = True
-                    _precond_impossible = False   # design evidence CONTRADICTS → physically impossible
+                    _precond_impossible = False   # design CONTRADICTS → physically impossible
                     _hit_text = (_ll + " " + _precond.lower())
                     _CONTRA = ("fixed damper", "fixed manual", "manual louver", "fixed louver",
                                "non-motorized", "non motorized", "nonmotorized", "bolted",
                                "cannot slip", "cannot modulate", "fixed at minimum", "fixed minimum",
                                "fixed-speed", "fixed speed", "2-position valve", "manual valve")
-                    for _kw, _verbs, _enable, _note in _DESIGN_REQS:
+                    for _kw, _verbs, _enable, _note, _dkey, _contra_vals, _enable_vals in _DESIGN_REQS:
                         _kw_hit = any(k in _hit_text for k in _kw)
                         _verb_hit = (not _verbs) or any(v in _hit_text for v in _verbs)
-                        if _kw_hit and _verb_hit:
+                        if not (_kw_hit and _verb_hit):
+                            continue
+                        _dval = _design_facts.get(_dkey, None) if _design_facts else None
+                        if _dval is not None:
+                            # AUTHORITATIVE: commissioning declared this design fact.
+                            _dn = str(_dval).strip().lower()
+                            if _dval in _contra_vals or _dn in (str(c).lower() for c in _contra_vals):
+                                _precond_grounded = False
+                                _precond_impossible = True
+                                _precond = _precond or f"COMMISSIONED DESIGN: {_dkey}={_dval} — this mechanism is physically impossible for this unit."
+                            elif _dval in _enable_vals or _dn in (str(e).lower() for e in _enable_vals):
+                                pass   # design confirms the precondition is met → no demotion
+                            else:
+                                _precond_grounded = False   # declared but ambiguous value
+                                _precond = _precond or _note
+                        else:
+                            # NOT commissioned with this fact → fall back to text scan.
                             _enabled = any(e in _all_ev_text for e in _enable)
                             _contradicted = any(c in _all_ev_text for c in _CONTRA)
                             if _contradicted:
-                                # Positive design evidence says this mechanism cannot
-                                # occur — override generic enabling vocab, mark impossible.
                                 _precond_grounded = False
                                 _precond_impossible = True
-                                if not _precond:
-                                    _precond = "Design evidence CONTRADICTS the required configuration — mechanism is physically impossible for this unit."
+                                _precond = _precond or "Design evidence CONTRADICTS the required configuration — mechanism is physically impossible for this unit."
                             elif not _enabled:
                                 _precond_grounded = False
-                                if not _precond:
-                                    _precond = _note
-                            break
+                                _precond = _precond or _note
+                        break
                     # LLM explicitly flagged its precondition as CONTRADICTED.
                     # (Do not demote on "unknown" — that's the default for the
                     # many hypotheses whose precondition is trivially met.)
@@ -3006,25 +3047,42 @@ class BMSLLMAgent:
                 _lead = hypotheses[0]
                 _lead_tok = _toks(_lead.get("label"))
                 _rc_tok = _toks(root_cause)
-                _overlap = bool(_lead_tok & _rc_tok)
-                # Leader is decisive enough to override the prose.
+                _overlap_leader = bool(_lead_tok & _rc_tok)
+                # Does the prose verdict match ANY of the top ranked hypotheses?
+                _overlap_any = any(bool(_toks(h.get("label")) & _rc_tok) for h in hypotheses[:3])
                 _lead_decisive = (_lead.get("probability", 0.0) >= 0.5 and _dominance >= 0.15)
-                diagnosis_agreement = _overlap
-                if not _overlap and _lead_decisive:
-                    # Prose disagrees with the dominant grounded hypothesis →
-                    # the differential leads the verdict; prose verdict demoted.
+                diagnosis_agreement = _overlap_leader
+                if _overlap_leader:
+                    pass   # prose and the ranked leader agree — consistent
+                elif not _overlap_any:
+                    # Prose verdict is ABSENT from the entire ranked differential —
+                    # the ranked analysis gives it zero support. It cannot stand;
+                    # replace it with the best-ranked hypothesis regardless of how
+                    # decisive the leader is (observed: prose "Damper Actuator Blade
+                    # Slip" while the differential — correctly — never lists damper).
                     logger.warning(
                         f"[Reconcile] eq={equipment_id} prose root_cause '{str(root_cause)[:60]}' "
-                        f"conflicts with differential leader '{_lead.get('label','')[:60]}' "
-                        f"(p={_lead.get('probability')}). Differential wins."
+                        f"is ABSENT from the ranked differential (leader '{_lead.get('label','')[:50]}' "
+                        f"p={_lead.get('probability')}). Differential overrides prose."
                     )
                     root_cause = _lead.get("label") or root_cause
-                    root_cause_label = "Most probable cause (ranked differential) — prose advisory diverged; physical inspection required"
-                    # A diagnosis the prose contradicts can never be 'confirmed'.
                     fully_grounded = False
-                elif not _overlap and not _lead_decisive:
-                    # Genuinely contested — neither prose nor a dominant leader.
-                    root_cause_label = "Cause contested — competing hypotheses unresolved"
+                    diagnosis_agreement = False
+                    root_cause_label = (
+                        "Most probable cause (ranked differential) — prose advisory diverged; physical inspection required"
+                        if _lead_decisive else
+                        "Cause contested — ranked differential leads; prose advisory diverged"
+                    )
+                else:
+                    # Prose matches a NON-leading ranked hypothesis: it's a contender
+                    # but not the top one. Don't present it as the verdict.
+                    diagnosis_agreement = False
+                    fully_grounded = False
+                    if _lead_decisive:
+                        root_cause = _lead.get("label") or root_cause
+                        root_cause_label = "Most probable cause (ranked differential) — prose advisory diverged; physical inspection required"
+                    else:
+                        root_cause_label = "Cause contested — competing hypotheses unresolved"
         except Exception as _rec_err:
             logger.debug(f"reconciliation skipped: {_rec_err}")
         # Stash per-equipment so the skillbook auto-write gate can refuse to

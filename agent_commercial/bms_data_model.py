@@ -210,6 +210,21 @@ class Equipment:
     model: str = ""
     install_date: Optional[datetime] = None
     expected_lifespan_years: Optional[float] = None
+
+    # Design attributes — declared at COMMISSIONING, not inferred from telemetry.
+    # These are the design/configuration facts an engineer knows from the
+    # nameplate/schedule that GATE physical root-cause hypotheses. ARVIS no longer
+    # guesses them from the presence/absence of telemetry; a hypothesis whose
+    # mechanism needs a design feature that is declared absent is physically
+    # impossible. Keys are free-form but the precondition gate recognizes:
+    #   damper_type: "fixed" | "motorized" | "2-position"
+    #   economizer: bool
+    #   has_vfd: bool                (variable-speed drive present)
+    #   compressor_staging: "none" | "staged" | "unloader" | "vfd"
+    #   valve_type: "modulating" | "2-position"
+    # Anything NOT declared stays UNKNOWN → ARVIS flags "confirm on inspection"
+    # rather than assuming. Populated via register_equipment / commissioning API.
+    design_attributes: Dict[str, Any] = field(default_factory=dict)
     
     # Parent-child relationships (for topology)
     parent_equipment_id: Optional[str] = None

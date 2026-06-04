@@ -321,13 +321,24 @@ async def inject_ahu07(request: Request, payload: Optional[InjectAhu07Request] =
     from datetime import timedelta
     import random as _rnd
     
+    # Commissioning design facts for AHU-07, toggled by the scenario param.
+    # This is what a real onboarding would declare from the nameplate/schedule.
+    dt = (payload.damper_type or "fixed").lower()
+    _ahu07_design = {
+        "damper_type": "motorized" if dt == "motorized" else "fixed",
+        "economizer": (dt == "motorized"),
+        "has_vfd": True,
+        "oa_path": "modulating" if dt == "motorized" else "minimum_only",
+    }
+
     # 1. Register topological mechanical equipment
     await bms_state.register_equipment(Equipment(
         equipment_id="AHU-07",
         name="AHU Floor 28 (Executive)",
         equipment_type=EquipmentType.AHU,
         location="Floor 28, Zone A",
-        status=EquipmentStatus.RUNNING
+        status=EquipmentStatus.RUNNING,
+        design_attributes=_ahu07_design,   # ← commissioning-declared, authoritative
     ))
     await bms_state.register_equipment(Equipment(
         equipment_id="ZONE-28A",
@@ -389,38 +400,25 @@ async def inject_ahu07(request: Request, payload: Optional[InjectAhu07Request] =
     await inject_p("AHU-07", "RAT", "Return Air Temp", 24.0, "C")
     await inject_p("AHU-07", "CHW_VALVE", "CHW Valve", 0.99, "fraction")
     
-    # Toggle design precondition based on damper_type
-    dt = (payload.damper_type or "fixed").lower()
+    # Damper telemetry. The DESIGN precondition is now carried by AHU-07's
+    # commissioned design_attributes (set at registration above) — the gate reads
+    # that structured fact, no keyword-point hack needed. We still surface a concise
+    # design-context alarm so the synthesis LLM also sees it in plain language.
     if dt == "fixed":
-        # Fixed manual louver configuration — only injects OA damper position set to 15%, no command telemetry
         await inject_p("AHU-07", "OA_DMPR", "OA Damper Position", 0.15, "fraction")
-        # Explicit DESIGN FACT as a POINT — the point_id survives into the swarm's
-        # equipment evidence raw_payload (point display names are dropped by the
-        # snapshot, point_ids are not). The precondition gate scans that text and,
-        # seeing "fixed manual louver / non motorized", marks OA-damper slip as
-        # physically impossible. (Alarm below is belt-and-suspenders for synthesis,
-        # but alarms are NOT promoted to plan.evidence so the point is what the
-        # deterministic gate actually keys on.)
-        await inject_p("AHU-07", "OA_DAMPER_TYPE_FIXED_MANUAL_LOUVER_NON_MOTORIZED",
-                       "OA Damper Type: fixed manual louver, non-motorized, cannot slip", 1.0, "design")
-        # Explicit DESIGN FACT into synthesis context too.
         await bms_state.add_alarm(Alarm(
             alarm_id="ALM-AHU07-DESIGN",
             source_point_id="AHU-07/OA_DMPR",
             equipment_id="AHU-07",
-            message=("AHU-07 DESIGN FACT: OA damper is a FIXED MANUAL LOUVER "
-                     "(non-motorized, bolted at ~15% minimum OA). It cannot modulate, "
-                     "actuate, or slip — mechanical OA-damper slip is physically "
-                     "impossible for this unit. Investigate the cooling/CHW side instead."),
+            message=("AHU-07 commissioned design: OA damper is FIXED at ~15% minimum OA "
+                     "(non-motorized) — cannot modulate or slip. Investigate the cooling/CHW side."),
             severity=AlarmSeverity.LOW,
             state=AlarmState.ACTIVE,
             triggered_at=datetime.now()
         ))
     else:
-        # Motorized modulating damper — must include the 'motorized' keyword
-        # in the point names so the design-precondition gate grounds it as enabled.
-        await inject_p("AHU-07", "OA_DMPR_CMD", "Motorized OA Damper Command", 0.15, "fraction")
-        await inject_p("AHU-07", "OA_DMPR", "Motorized OA Damper Position", 0.15, "fraction")
+        await inject_p("AHU-07", "OA_DMPR_CMD", "OA Damper Command", 0.15, "fraction")
+        await inject_p("AHU-07", "OA_DMPR", "OA Damper Position", 0.15, "fraction")
     
     # Zone telemetry
     _zone_temps = {"ZONE-28A": 25.8, "ZONE-28B": 26.1, "ZONE-28C": 25.5}
