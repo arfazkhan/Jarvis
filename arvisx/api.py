@@ -98,6 +98,8 @@ def create_app():
         llm = None
         if os.environ.get("ARVIS_X_LLM", "").strip() in ("1", "true", "True"):
             try:
+                from arvisx.llm_env import load_arvis_env
+                load_arvis_env()
                 from agent_unified.llm import UnifiedLLM
                 llm = UnifiedLLM()
             except Exception:

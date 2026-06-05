@@ -91,6 +91,8 @@ def main() -> int:
         llm = None
         if os.environ.get("ARVIS_X_LLM", "").strip() in ("1", "true", "True"):
             try:
+                from arvisx.llm_env import load_arvis_env
+                load_arvis_env()   # provider keys (K2THINK/BEDROCK) from repo .env
                 from agent_unified.llm import UnifiedLLM
                 llm = UnifiedLLM()
             except Exception as e:
