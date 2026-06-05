@@ -133,6 +133,34 @@ class ServiceHealth:
 
 
 @dataclass
+class Hypothesis:
+    """One competing root-cause hypothesis in the ranked differential."""
+    label: str
+    probability: float
+    rationale: str
+    evidence: List[str] = field(default_factory=list)        # cited asset signals/risks
+    discriminating_test: str = ""                            # what confirms/refutes it
+    recommended_action: str = ""
+
+
+@dataclass
+class Advisory:
+    """Grounded root-cause advisory for one flagged asset. Same discipline as
+    commercial ARVIS: evidence-bound, never confirmed without physical inspection,
+    honest when the signals are thin."""
+    asset_id: str
+    asset_name: str
+    headline: str
+    root_cause: str
+    confidence_band: str                 # Low | Medium | High
+    confirmed: bool                      # almost always False (read-only advisory)
+    hypotheses: List[Hypothesis] = field(default_factory=list)
+    recommended_action: str = ""
+    plain_summary: str = ""
+    source: str = "rules"                # "rules" (offline floor) | "llm+rules"
+
+
+@dataclass
 class CommunityReport:
     generated_at: datetime
     services: List[ServiceHealth]

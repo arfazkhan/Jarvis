@@ -10,6 +10,7 @@ Asset Explorer. This is the residential equivalent of the commercial demo flow.
 """
 from __future__ import annotations
 
+import os
 import sys
 from datetime import datetime
 
@@ -61,11 +62,49 @@ def render(report: CommunityReport) -> str:
     return "\n".join(L)
 
 
+def render_advisory(adv) -> str:
+    L = [f"\n  🔎 ADVISORY — {adv.asset_name}   [{adv.source}]",
+         f"     Root cause : {adv.root_cause}",
+         f"     Confidence : {adv.confidence_band}  |  confirmed={adv.confirmed}",
+         f"     Action     : {adv.recommended_action}"]
+    if adv.hypotheses:
+        L.append("     Ranked differential:")
+        for h in adv.hypotheses:
+            L.append(f"       • p={h.probability:.2f}  {h.label}")
+            if h.discriminating_test:
+                L.append(f"                 test: {h.discriminating_test}")
+    L.append(f"     Summary    : {adv.plain_summary}")
+    return "\n".join(L)
+
+
 def main() -> int:
     healthy = "--healthy" in sys.argv
+    advise = "--advise" in sys.argv
     assets = healthy_community() if healthy else inject_prd_scenario()
     report = build_report(assets, now=datetime.now())
     print(render(report))
+
+    if advise:
+        import asyncio
+        from arvisx.advisory import investigate_asset
+        from arvisx.health import assess_asset
+        llm = None
+        if os.environ.get("ARVIS_X_LLM", "").strip() in ("1", "true", "True"):
+            try:
+                from agent_unified.llm import UnifiedLLM
+                llm = UnifiedLLM()
+            except Exception as e:
+                print(f"[warn] LLM requested but UnifiedLLM init failed: {e}")
+        flagged_ids = {s.worst_asset for s in report.services if s.band.value != "Healthy"}
+        flagged = [a for a in assets if a.name in flagged_ids]
+        print("\n" + "=" * 70 + "\n  GROUNDED ADVISORIES (flagged assets)\n" + "=" * 70)
+
+        async def _run():
+            for a in flagged:
+                _, rks = assess_asset(a, datetime.now())
+                adv = await investigate_asset(a, rks, llm=llm)
+                print(render_advisory(adv))
+        asyncio.run(_run())
     # Machine summary for assertions / API later.
     crit = sum(1 for r in report.risks if r.severity == Severity.CRITICAL)
     warn = sum(1 for r in report.risks if r.severity == Severity.WARNING)
