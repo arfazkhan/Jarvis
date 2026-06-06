@@ -475,6 +475,87 @@ def test_fusion_flows_into_report():
     assert any("High confidence" in r.detail for r in rep.risks)
 
 
+# ── Reasoning layer: cross-asset correlation + NL Q&A ────────────────────
+class _FakeJsonLLM:
+    def __init__(self, payload): self._p = payload
+    async def ask_json(self, **kwargs): return self._p
+
+
+def _flagged():
+    """Two assets, two active risks, for correlation."""
+    rep = build_report(inject_prd_scenario())
+    return inject_prd_scenario(), rep.risks
+
+
+def test_correlate_independent_when_few_risks():
+    from arvisx.reasoning import correlate
+    a = healthy_community()
+    one = [build_report(inject_prd_scenario()).risks[0]]
+    out = asyncio.run(correlate(a, one, llm=None))
+    assert out.independent and out.common_cause is None
+
+
+def test_correlate_no_llm_graceful():
+    from arvisx.reasoning import correlate
+    assets, risks = _flagged()
+    out = asyncio.run(correlate(assets, risks, llm=object()))   # llm present but ARVIS_X_LLM unset
+    assert out.source == "deterministic" and out.independent
+
+
+def test_correlate_links_real_assets_and_drops_hallucinated():
+    from arvisx.reasoning import correlate
+    assets, risks = _flagged()
+    real_id = risks[0].asset_id
+    fake = _FakeJsonLLM({"common_cause": "Upstream power event", "independent": False,
+                         "linked_assets": [real_id, "GHOST-ASSET-999"], "confidence": 0.8,
+                         "rationale": "both lost power"})
+    os.environ["ARVIS_X_LLM"] = "1"
+    try:
+        out = asyncio.run(correlate(assets, risks, llm=fake))
+    finally:
+        os.environ.pop("ARVIS_X_LLM", None)
+    assert out.common_cause == "Upstream power event"
+    assert real_id in out.linked_assets and "GHOST-ASSET-999" not in out.linked_assets  # evidence-bind
+    assert out.source == "llm"
+
+
+def test_correlate_common_cause_without_valid_links_demoted():
+    from arvisx.reasoning import correlate
+    assets, risks = _flagged()
+    fake = _FakeJsonLLM({"common_cause": "Cosmic rays", "independent": False,
+                         "linked_assets": ["NOPE-1", "NOPE-2"], "confidence": 0.9})
+    os.environ["ARVIS_X_LLM"] = "1"
+    try:
+        out = asyncio.run(correlate(assets, risks, llm=fake))
+    finally:
+        os.environ.pop("ARVIS_X_LLM", None)
+    assert out.common_cause is None and out.independent   # ungrounded → demoted
+
+
+def test_ask_grounds_and_filters_citations():
+    from arvisx.reasoning import ask
+    assets, risks = _flagged()
+    real_id = risks[0].asset_id
+    fake = _FakeJsonLLM({"answer": "The booster pump runtime is high.",
+                         "cited": [real_id, "FAKE-1"], "confidence": 0.6})
+    os.environ["ARVIS_X_LLM"] = "1"
+    try:
+        out = asyncio.run(ask("why is water flagged?", assets, risks, llm=fake))
+    finally:
+        os.environ.pop("ARVIS_X_LLM", None)
+    assert real_id in out.cited and "FAKE-1" not in out.cited
+    assert out.confidence == "Medium"
+
+
+def test_api_reason_endpoints_graceful():
+    c = _client()
+    corr = c.post("/api/v1/reason/correlate").json()      # no ARVIS_X_LLM → deterministic
+    assert "independent" in corr
+    a = c.post("/api/v1/ask", json={"question": "status?"}).json()
+    assert "answer" in a
+    assert c.post("/api/v1/ask", json={}).status_code == 400
+
+
 # ── standalone runner ────────────────────────────────────────────────────
 def _main() -> int:
     fns = [g for n, g in sorted(globals().items()) if n.startswith("test_") and callable(g)]

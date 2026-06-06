@@ -107,7 +107,7 @@ class _State:
 
 
 def create_app():
-    from fastapi import FastAPI, HTTPException
+    from fastapi import Body, FastAPI, HTTPException
     from fastapi.middleware.cors import CORSMiddleware
 
     app = FastAPI(title="ArvisX — Residential Operations Intelligence", version="0.1.0-phase1b")
@@ -181,6 +181,37 @@ def create_app():
         if wo is None:
             raise HTTPException(404, f"unknown work order {wo_id}")
         return _jsonable(wo)
+
+    def _llm_for_reasoning():
+        llm = None
+        if os.environ.get("ARVIS_X_LLM", "").strip() in ("1", "true", "True"):
+            try:
+                from arvisx.llm_env import load_arvis_env
+                load_arvis_env()
+                from agent_unified.llm import UnifiedLLM
+                llm = UnifiedLLM()
+            except Exception:
+                llm = None
+        return llm
+
+    @app.post("/api/v1/reason/correlate")
+    async def reason_correlate():
+        """Cross-asset 'thinking': find a common root cause across the active risks."""
+        from arvisx.reasoning import correlate
+        rep = state.report_now()
+        out = await correlate(state.current_assets(), rep.risks, llm=_llm_for_reasoning())
+        return _jsonable(out)
+
+    @app.post("/api/v1/ask")
+    async def ask_endpoint(payload: Dict[str, Any] = Body(...)):
+        """Natural-language Q&A over the live community state."""
+        from arvisx.reasoning import ask
+        q = (payload or {}).get("question", "").strip()
+        if not q:
+            raise HTTPException(400, "provide 'question'")
+        rep = state.report_now()
+        out = await ask(q, state.current_assets(), rep.risks, llm=_llm_for_reasoning())
+        return _jsonable(out)
 
     @app.post("/api/v1/scenario/{name}")
     async def scenario(name: str):
