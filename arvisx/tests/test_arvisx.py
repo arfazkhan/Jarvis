@@ -1048,6 +1048,56 @@ def test_api_signal_quality_endpoint():
     assert "sensor_findings" in sq
 
 
+# ── Phase 14: WhatsApp operational layer (deterministic) ─────────────────
+def test_intent_routing():
+    from arvisx.messaging import route_intent
+    assert route_intent("any issues today?") == "issues"
+    assert route_intent("how is the building doing?") == "status"
+    assert route_intent("why is readiness down?") == "why"
+    assert route_intent("show water status") == "water"
+    assert route_intent("generator status?") == "power"
+    assert route_intent("create a work order") == "create_work_order"
+
+
+def test_answers_are_operational_not_telemetry():
+    from arvisx.messaging import answer
+    rep = build_report(inject_prd_scenario())
+    iss = answer("any issues?", rep)["text"]
+    assert "active issue" in iss.lower() and "[" in iss        # confidence shown
+    assert "current =" not in iss.lower() and "voltage" not in iss.lower()   # no raw telemetry
+    why = answer("why is readiness down?", rep)["text"]
+    assert "community readiness" in why.lower() and "confidence" in why.lower()
+    healthy = answer("any issues?", build_report(healthy_community()))["text"]
+    assert "no active issues" in healthy.lower()
+
+
+def test_alerts_filtered_and_deduped():
+    from arvisx.messaging import pending_alerts
+    rep = build_report(inject_prd_scenario())
+    alerts, sent = pending_alerts(rep, set())
+    # Critical/Warning surface (the 3 warnings); maintenance (generator service) does NOT
+    assert alerts and all("create work order" in a["text"].lower() for a in alerts)
+    assert all(a["severity"] in ("critical", "warning") for a in alerts)
+    assert not any("service due" in a["text"].lower() for a in alerts)   # maintenance → digest only
+    # second poll → no repeats (anti-fatigue dedup)
+    again, _ = pending_alerts(rep, sent)
+    assert again == []
+
+
+def test_api_whatsapp_endpoints_and_role_gate():
+    c = _client()
+    assert "Community Readiness" in c.get("/api/v1/whatsapp/digest").json()["text"]
+    a = c.post("/api/v1/whatsapp/ask", json={"question": "any issues?"}).json()
+    assert a["intent"] == "issues"
+    # action gated by role
+    viewer = c.post("/api/v1/whatsapp/ask", json={"question": "create work order", "role": "viewer"}).json()
+    assert "requires a facility-manager" in viewer["text"]
+    fm = c.post("/api/v1/whatsapp/ask", json={"question": "create work order", "role": "fm"}).json()
+    assert "work order" in fm["text"].lower()
+    al = c.get("/api/v1/whatsapp/alerts").json()
+    assert al["count"] >= 1 and c.get("/api/v1/whatsapp/alerts").json()["count"] == 0   # deduped
+
+
 # ── standalone runner ────────────────────────────────────────────────────
 def _main() -> int:
     fns = [g for n, g in sorted(globals().items()) if n.startswith("test_") and callable(g)]

@@ -62,6 +62,7 @@ class _State:
         self.skillbook = Skillbook(self.db)
         from arvisx.commissioning import CommissioningManager
         self.commissioner = CommissioningManager(self.db)
+        self._sent_alerts: set = set()      # WhatsApp alert dedup across polls
         try:
             self.baselines.load_from(self.db)
             self.wo_store.load_from(self.db)
@@ -419,6 +420,41 @@ def create_app():
                              db=state.db, baselines=state.baselines, skillbook=state.skillbook,
                              max_investigations=cap)
         return {"investigated": len(invs), "investigations": _jsonable(invs)}
+
+    # ── WhatsApp operational layer (Phase 14) — deterministic, no LLM ────
+    _ACTION_ROLES = {"owner", "fm", "facility_manager"}
+
+    @app.get("/api/v1/whatsapp/digest")
+    async def wa_digest():
+        from arvisx.messaging import daily_digest
+        return {"text": daily_digest(state.report_now())}
+
+    @app.post("/api/v1/whatsapp/ask")
+    async def wa_ask(payload: Dict[str, Any] = Body(...)):
+        from arvisx.messaging import answer
+        p = payload or {}
+        q = str(p.get("question", "")).strip()
+        role = str(p.get("role", "viewer")).lower()
+        if not q:
+            raise HTTPException(400, "provide 'question'")
+        res = answer(q, state.report_now())
+        if res.get("action") == "create_work_order":
+            if role not in _ACTION_ROLES:
+                res["text"] = "⛔ Creating work orders requires a facility-manager role. Ask your FM."
+            else:
+                state.sync_workorders()
+                openwos = [w for w in state.wo_store.all() if w.status.value in ("open", "acknowledged", "in_progress")]
+                ids = ", ".join(w.wo_id for w in openwos[:6])
+                res["text"] = f"✅ {len(openwos)} open work order(s): {ids or '(none)'}"
+        return {"intent": res["intent"], "text": res["text"]}
+
+    @app.get("/api/v1/whatsapp/alerts")
+    async def wa_alerts():
+        """New alerts to push (severity>=WARNING + confidence Medium/High, deduped across polls)."""
+        from arvisx.messaging import pending_alerts
+        alerts, sent = pending_alerts(state.report_now(), state._sent_alerts)
+        state._sent_alerts = sent
+        return {"count": len(alerts), "alerts": alerts}
 
     @app.post("/api/v1/scenario/{name}")
     async def scenario(name: str):
