@@ -28,6 +28,8 @@ def route_intent(text: str) -> str:
     t = (text or "").lower()
     if re.search(r"\bcreate\b.*\b(work ?order|ticket|wo)\b|\braise\b.*\bticket\b", t):
         return "create_work_order"
+    if re.search(r"cost|costing|money|spend|expensive|how much|save|budget", t):
+        return "cost"
     if re.search(r"\bwhy\b|reason|dropped|going down|reduced", t):
         return "why"
     if re.search(r"\bwater\b", t):
@@ -65,10 +67,13 @@ def _service_line(report: CommunityReport, st: ServiceType) -> str:
 
 
 # ── the canned answers (deterministic) ───────────────────────────────────
-def answer(text: str, report: CommunityReport) -> Dict[str, Any]:
+def answer(text: str, report: CommunityReport, assets: Optional[list] = None, baselines=None) -> Dict[str, Any]:
     intent = route_intent(text)
     if intent == "status":
         return {"intent": intent, "text": daily_digest(report)}
+    if intent == "cost":
+        from arvisx.economics import community_cost_message
+        return {"intent": intent, "text": community_cost_message(report, assets or [], baselines)}
     if intent == "issues":
         if not report.risks:
             return {"intent": intent, "text": "✅ No active issues. All services nominal."}
@@ -83,7 +88,7 @@ def answer(text: str, report: CommunityReport) -> Dict[str, Any]:
     if intent == "help":
         return {"intent": intent, "text": (
             "I answer:\n• How is the building doing?\n• Any issues?\n• Why is readiness down?\n"
-            "• Show water / power / pool / STP / fire status\n• Create work order")}
+            "• What is this costing us?\n• Show water / power / pool / STP / fire status\n• Create work order")}
     if intent == "create_work_order":
         return {"intent": intent, "text": "", "action": "create_work_order"}
     return {"intent": "unknown", "text": (
@@ -128,15 +133,24 @@ def _alert_signature(r) -> str:
     return f"{r.asset_id}::{re.sub(r'[^a-z# ]', '', stem).strip()}"
 
 
-def format_alert(r) -> str:
+def format_alert(r, asset=None, baselines=None) -> str:
     impact = f"\nPotential impact: {r.detail}" if r.detail else ""
+    money = ""
+    try:
+        from arvisx.economics import estimate, money_line
+        ml = money_line(estimate(r, asset, baselines))
+        money = f"\n{ml}" if ml else ""
+    except Exception:
+        pass
     return (f"{_SEV_EMOJI.get(r.severity, '🚨')} *{OUTCOME_LABEL.get(r.service, r.service.value)} Risk*\n\n"
-            f"{r.message}\nConfidence: {r.confidence}{impact}\n\nCreate work order? Reply: create work order")
+            f"{r.message}\nConfidence: {r.confidence}{money}{impact}\n\nCreate work order? Reply: create work order")
 
 
-def pending_alerts(report: CommunityReport, already_sent: Set[str]) -> Tuple[List[Dict[str, Any]], Set[str]]:
-    """New alerts to push: severity>=WARNING + confidence Medium/High, not previously sent.
-    Returns (alerts, updated_sent_set) — caller persists the set to avoid re-alerting."""
+def pending_alerts(report: CommunityReport, already_sent: Set[str],
+                   assets: Optional[list] = None, baselines=None) -> Tuple[List[Dict[str, Any]], Set[str]]:
+    """New alerts to push: severity>=WARNING, not previously sent. Each enriched with a
+    money line. Returns (alerts, updated_sent_set) — caller persists the set."""
+    by_id = {a.asset_id: a for a in (assets or [])}
     out: List[Dict[str, Any]] = []
     sent = set(already_sent)
     for r in report.risks:
@@ -147,5 +161,5 @@ def pending_alerts(report: CommunityReport, already_sent: Set[str]) -> Tuple[Lis
             continue
         sent.add(sig)
         out.append({"signature": sig, "severity": r.severity.value, "service": r.service.value,
-                    "asset_id": r.asset_id, "text": format_alert(r)})
+                    "asset_id": r.asset_id, "text": format_alert(r, by_id.get(r.asset_id), baselines)})
     return out, sent

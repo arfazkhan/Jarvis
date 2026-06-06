@@ -437,7 +437,8 @@ def create_app():
         role = str(p.get("role", "viewer")).lower()
         if not q:
             raise HTTPException(400, "provide 'question'")
-        res = answer(q, state.report_now())
+        res = answer(q, state.report_now(), state.current_assets(),
+                     state.baselines if state.store is not None else None)
         if res.get("action") == "create_work_order":
             if role not in _ACTION_ROLES:
                 res["text"] = "⛔ Creating work orders requires a facility-manager role. Ask your FM."
@@ -452,9 +453,17 @@ def create_app():
     async def wa_alerts():
         """New alerts to push (severity>=WARNING + confidence Medium/High, deduped across polls)."""
         from arvisx.messaging import pending_alerts
-        alerts, sent = pending_alerts(state.report_now(), state._sent_alerts)
+        bl = state.baselines if state.store is not None else None
+        alerts, sent = pending_alerts(state.report_now(), state._sent_alerts, state.current_assets(), bl)
         state._sent_alerts = sent
         return {"count": len(alerts), "alerts": alerts}
+
+    @app.get("/api/v1/costs")
+    async def costs():
+        """Economic layer — 'what is this costing us?' (waste/month + failure exposure)."""
+        from arvisx.economics import community_cost
+        bl = state.baselines if state.store is not None else None
+        return community_cost(state.report_now(), state.current_assets(), bl)
 
     @app.post("/api/v1/scenario/{name}")
     async def scenario(name: str):

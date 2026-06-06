@@ -1098,6 +1098,57 @@ def test_api_whatsapp_endpoints_and_role_gate():
     assert al["count"] >= 1 and c.get("/api/v1/whatsapp/alerts").json()["count"] == 0   # deduped
 
 
+# ── Phase 15: economic layer ─────────────────────────────────────────────
+def test_energy_waste_estimate():
+    from arvisx.economics import estimate
+    from arvisx.learning import BaselineStore
+    from arvisx.models import Asset, AssetType, Risk, ServiceType, Severity
+    b = BaselineStore()
+    for _ in range(30):
+        b.observe("BP1", "power_kw", 3.0)                  # learned normal 3kW
+    a = Asset("BP1", "Booster Pump 1", AssetType.BOOSTER_PUMP,
+              signals={"power_kw": 4.0, "runtime_today_hours": 10})   # 1kW extra
+    r = Risk("BP1", "Booster Pump 1", ServiceType.WATER, Severity.WARNING,
+             "Booster Pump 1 power creep (3.4σ above its own normal)", "")
+    est = estimate(r, a, b)
+    assert est.kind == "energy_waste"
+    assert est.monthly_waste == round(1.0 * 10 * 30 * est_tariff(), 0)   # grounded: 1kW×10h×30×tariff
+
+
+def est_tariff():
+    from arvisx.economics import TARIFF
+    return TARIFF
+
+
+def test_failure_exposure_range():
+    from arvisx.economics import estimate
+    from arvisx.models import Asset, AssetType, Risk, ServiceType, Severity
+    a = Asset("GEN-01", "Generator 1", AssetType.DIESEL_GENERATOR, signals={})
+    r = Risk("GEN-01", "Generator 1", ServiceType.POWER_BACKUP, Severity.MAINTENANCE,
+             "Generator 1 service due in 12 days", "")
+    est = estimate(r, a, None)
+    assert est.kind == "failure_exposure" and est.exposure_low == 8000 and est.exposure_high == 25000
+
+
+def test_community_cost_and_message():
+    from arvisx.economics import community_cost, community_cost_message
+    rep = build_report(inject_prd_scenario())
+    c = community_cost(rep, inject_prd_scenario())
+    assert c["currency"] and (c["monthly_waste"] > 0 or c["exposure_high"] > 0)
+    msg = community_cost_message(rep, inject_prd_scenario())
+    assert "costing you" in msg.lower() and c["currency"] in msg
+
+
+def test_api_costs_and_money_in_messages():
+    c = _client()
+    cost = c.get("/api/v1/costs").json()
+    assert "monthly_waste" in cost and "exposure_high" in cost
+    ans = c.post("/api/v1/whatsapp/ask", json={"question": "what is this costing us?"}).json()
+    assert ans["intent"] == "cost" and ("costing" in ans["text"].lower() or "cost impact" in ans["text"].lower())
+    al = c.get("/api/v1/whatsapp/alerts").json()
+    assert any("💸" in a["text"] for a in al["alerts"])   # money line on alerts
+
+
 # ── standalone runner ────────────────────────────────────────────────────
 def _main() -> int:
     fns = [g for n, g in sorted(globals().items()) if n.startswith("test_") and callable(g)]
