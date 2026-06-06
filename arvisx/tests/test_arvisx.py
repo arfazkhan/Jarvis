@@ -144,10 +144,10 @@ def _client():
 def test_api_overview_and_risks():
     c = _client()
     ov = c.get("/api/v1/community/overview").json()
-    assert len(ov["services"]) == 5
-    assert {s["service"] for s in ov["services"]} == {"water", "power_backup", "pool", "stp", "fire"}
+    assert len(ov["services"]) == 6                          # + energy (Phase 5b)
+    assert {s["service"] for s in ov["services"]} == {"water", "power_backup", "pool", "stp", "fire", "energy"}
     rk = c.get("/api/v1/community/risks").json()
-    assert rk["count"] == 4
+    assert rk["count"] == 6                                  # 4 asset + 2 ghost
 
 
 def test_api_assets_and_advisory():
@@ -164,9 +164,9 @@ def test_api_assets_and_advisory():
 def test_api_scenario_toggle():
     c = _client()
     assert c.post("/api/v1/scenario/healthy").json()["scenario"] == "healthy"
-    assert c.get("/api/v1/community/risks").json()["count"] == 0
+    assert c.get("/api/v1/community/risks").json()["count"] == 0      # assets + zones all healthy
     assert c.post("/api/v1/scenario/prd").json()["scenario"] == "prd"
-    assert c.get("/api/v1/community/risks").json()["count"] == 4
+    assert c.get("/api/v1/community/risks").json()["count"] == 6      # 4 asset + 2 ghost
 
 
 # ── Phase 2: MQTT ingest (pure — no broker) ──────────────────────────────
@@ -379,6 +379,49 @@ def test_vsensor_abstains_with_no_relevant_signals():
     a = _mk(AssetType.FIRE_PANEL, active_faults=0)          # no power/runtime/starts
     readings, risks = derive_all(a)
     assert readings == [] and risks == []
+
+
+# ── Phase 5b: ghost-floor / occupancy virtual sensors ────────────────────
+def test_occupancy_levels():
+    from arvisx.occupancy import estimate_occupancy
+    from arvisx.models import OccupancyLevel
+    lvl, c = estimate_occupancy(co2_ppm=900, motion_events_15m=6)
+    assert lvl == OccupancyLevel.OCCUPIED and c > 0.5
+    lvl, c = estimate_occupancy(co2_ppm=430, motion_events_15m=0)
+    assert lvl == OccupancyLevel.EMPTY and c > 0.5
+    # neither sensor → abstain
+    lvl, c = estimate_occupancy(co2_ppm=None, motion_events_15m=None)
+    assert lvl == OccupancyLevel.UNKNOWN and c == 0.0
+
+
+def test_ghost_fires_only_when_empty_and_conditioned():
+    from arvisx.occupancy import detect_ghost
+    from arvisx.models import Zone, ZoneKind
+    empty_on = Zone("Z1", "Clubhouse", ZoneKind.AMENITY,
+                    {"co2_ppm": 430, "motion_events_15m": 0, "ac_on": True}, conditioned_load_kw=8.0)
+    g = detect_ghost(empty_on)
+    assert g is not None and g.waste_kw == 8.0 and g.waste_qar_per_day > 0
+    # occupied → no ghost
+    occ = Zone("Z2", "Gym", ZoneKind.AMENITY,
+               {"co2_ppm": 900, "motion_events_15m": 6, "ac_on": True}, conditioned_load_kw=6.0)
+    assert detect_ghost(occ) is None
+    # empty but conditioning OFF → no waste, no ghost
+    empty_off = Zone("Z3", "Hall", ZoneKind.AMENITY,
+                     {"co2_ppm": 430, "motion_events_15m": 0, "ac_on": False}, conditioned_load_kw=5.0)
+    assert detect_ghost(empty_off) is None
+
+
+def test_energy_tile_and_ghost_risks_in_report():
+    from arvisx.simulator import community_zones
+    rep = build_report(inject_prd_scenario(), zones=community_zones("prd"))
+    energy = [s for s in rep.services if s.service.value == "energy"]
+    assert len(energy) == 1 and energy[0].band.value != "Healthy"
+    ghosts = [r for r in rep.risks if r.service.value == "energy"]
+    assert len(ghosts) == 2                                  # clubhouse + parking
+    # healthy zones → no ghost, energy tile healthy
+    rep2 = build_report(inject_prd_scenario(), zones=community_zones("healthy"))
+    assert [r for r in rep2.risks if r.service.value == "energy"] == []
+    assert [s for s in rep2.services if s.service.value == "energy"][0].band.value == "Healthy"
 
 
 # ── standalone runner ────────────────────────────────────────────────────

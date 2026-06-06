@@ -23,7 +23,7 @@ from enum import Enum
 from typing import Any, Dict, List
 
 from arvisx.health import assess_asset, build_report
-from arvisx.simulator import healthy_community, inject_prd_scenario
+from arvisx.simulator import community_zones, healthy_community, inject_prd_scenario
 
 
 def _jsonable(obj: Any) -> Any:
@@ -65,12 +65,13 @@ class _State:
         # Drift learning only on a LIVE stream (MQTT) — a static sim snapshot has no
         # real variation to learn from. Fixed thresholds carry the sim path.
         assets = self.current_assets()
+        zones = community_zones("healthy" if self.scenario == "healthy" else "prd")
         if self.store is not None:
             self.baselines.learn_from_assets(assets)
-            return build_report(assets, baselines=self.baselines, virtual=True)
+            return build_report(assets, baselines=self.baselines, virtual=True, zones=zones)
         # Sim: instantaneous virtual sensors (cycling/duty/turnover) still apply;
         # baseline-dependent ones (power-creep/dry-run) abstain without history.
-        return build_report(assets, virtual=True)
+        return build_report(assets, virtual=True, zones=zones)
 
     def _start_mqtt(self):
         from arvisx.store import AssetStore

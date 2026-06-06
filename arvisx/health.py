@@ -200,7 +200,7 @@ _SEV_ORDER = {Severity.CRITICAL: 0, Severity.WARNING: 1, Severity.MAINTENANCE: 2
 
 
 def build_report(assets: List[Asset], now: Optional[datetime] = None, baselines=None,
-                 virtual: bool = False) -> CommunityReport:
+                 virtual: bool = False, zones=None) -> CommunityReport:
     """Build the community report. If `baselines` (a learning.BaselineStore) is given,
     learned-drift risks are added alongside the fixed-threshold rules. If `virtual` is
     set, PM virtual sensors derive v_* indicators (power-creep, cycling, dry-run, …) and
@@ -234,6 +234,31 @@ def build_report(assets: List[Asset], now: Optional[datetime] = None, baselines=
                     h.alerts.extend(x.message.split(" ", 1)[1] if " " in x.message else x.message for x in r2)
             except Exception:
                 pass
+    # ── Zones: ghost-floor detection → Energy service tile (Phase 5b) ────
+    if zones:
+        try:
+            from arvisx.occupancy import assess_zones
+            energy_score, ghost_risks, _alerts = assess_zones(zones, now)
+            risks.extend(ghost_risks)
+        except Exception:
+            energy_score, ghost_risks = 100.0, []
+    else:
+        energy_score, ghost_risks = None, []
+
     risks.sort(key=lambda r: _SEV_ORDER.get(r.severity, 9))
     services = roll_up_services(healths, risks)
+
+    if energy_score is not None:
+        # Energy tile band is risk-driven, like the others.
+        band = HealthBand.from_score(energy_score)
+        for r in ghost_risks:
+            rb = _SEV_BAND[r.severity]
+            if _BAND_RANK[rb] > _BAND_RANK[band]:
+                band = rb
+        services.append(ServiceHealth(
+            service=ServiceType.ENERGY, score=energy_score, band=band,
+            contributing_assets=len(zones),
+            worst_asset=(ghost_risks[0].asset_name if ghost_risks else None),
+        ))
+
     return CommunityReport(generated_at=now, services=services, risks=risks, assets=healths)

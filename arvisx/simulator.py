@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import List
 
-from arvisx.models import Asset, AssetType
+from arvisx.models import Asset, AssetType, Zone, ZoneKind
 
 
 def healthy_community(now: datetime | None = None) -> List[Asset]:
@@ -55,6 +55,29 @@ def healthy_community(now: datetime | None = None) -> List[Asset]:
         Asset("FIRE-PUMP-01", "Fire Pump 1", AssetType.FIRE_PUMP,
               signals={"next_test_due": d(20)}, next_maintenance_due=d(120)),
     ]
+
+
+def community_zones(scenario: str = "prd") -> List[Zone]:
+    """Conditioned areas watched for ghost operation (Phase 5b). Needs cheap CO2 +
+    motion sensors per zone. 'prd' makes the clubhouse + parking ghost (empty, running)."""
+    occupied = {"co2_ppm": 720.0, "motion_events_15m": 6, "ac_on": True, "light_on": True}
+    empty = {"co2_ppm": 430.0, "motion_events_15m": 0, "ac_on": True, "light_on": True}
+    zones = [
+        Zone("ZONE-GYM", "Gym", ZoneKind.AMENITY, dict(occupied),
+             served_by=["FCU-GYM"], conditioned_load_kw=6.0),
+        Zone("ZONE-CLUB", "Clubhouse", ZoneKind.AMENITY, dict(occupied),
+             served_by=["FCU-CLUB"], conditioned_load_kw=8.0),
+        Zone("ZONE-LOBBY", "Lobby", ZoneKind.COMMON,
+             {"co2_ppm": 520.0, "motion_events_15m": 2, "ac_on": True, "light_on": True},
+             served_by=["FCU-LOBBY"], conditioned_load_kw=4.0),
+        Zone("ZONE-PARK", "Parking Level B2", ZoneKind.COMMON,
+             {"motion_events_15m": 1, "light_on": True}, conditioned_load_kw=3.0),
+    ]
+    if scenario != "healthy":
+        by = {z.zone_id: z for z in zones}
+        by["ZONE-CLUB"].signals = dict(empty)      # empty but AC + lights on → ghost
+        by["ZONE-PARK"].signals = {"motion_events_15m": 0, "light_on": True}  # empty, lit 24/7
+    return zones
 
 
 def inject_prd_scenario(now: datetime | None = None) -> List[Asset]:

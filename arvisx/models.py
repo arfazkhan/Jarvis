@@ -21,6 +21,20 @@ class ServiceType(str, Enum):
     POOL = "pool"
     STP = "stp"
     FIRE = "fire"
+    ENERGY = "energy"          # efficiency / ghost-operation (Phase 5b)
+
+
+class ZoneKind(str, Enum):
+    FLOOR = "floor"
+    COMMON = "common_area"     # corridor, lobby, parking
+    AMENITY = "amenity"        # gym, clubhouse, pool deck, party hall
+
+
+class OccupancyLevel(str, Enum):
+    OCCUPIED = "occupied"
+    LIKELY_EMPTY = "likely_empty"
+    EMPTY = "empty"
+    UNKNOWN = "unknown"        # insufficient sensing → abstain
 
 
 # ── Asset taxonomy (residential, fragmented infrastructure) ──────────────
@@ -96,6 +110,30 @@ class Asset:
     @property
     def service(self) -> ServiceType:
         return ASSET_SERVICE[self.asset_type]
+
+
+@dataclass
+class Zone:
+    """A conditioned area watched for ghost operation (empty but running)."""
+    zone_id: str
+    name: str
+    kind: ZoneKind
+    signals: Dict[str, Any] = field(default_factory=dict)   # co2_ppm, motion_events_15m, ac_on, light_on
+    served_by: List[str] = field(default_factory=list)      # equipment conditioning it
+    conditioned_load_kw: float = 0.0                         # for the waste estimate
+    always_on: bool = False                                  # conditioned on a fixed schedule
+    tariff_qar_per_kwh: float = 0.40
+
+
+@dataclass
+class GhostAlert:
+    zone_id: str
+    zone_name: str
+    occupancy: "OccupancyLevel"
+    confidence: float
+    waste_kw: float
+    waste_qar_per_day: float
+    note: str
 
 
 @dataclass
