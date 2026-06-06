@@ -89,10 +89,14 @@ def assess_zones(zones: List[Zone], now: Optional[datetime] = None) -> Tuple[flo
             continue
         alerts.append(g)
         sev = Severity.WARNING if g.waste_qar_per_day >= 20 else Severity.MAINTENANCE
+        band = "High" if g.confidence >= 0.75 else "Medium" if g.confidence >= 0.6 else "Low"
         risks.append(Risk(
             asset_id=z.zone_id, asset_name=z.name, service=ServiceType.ENERGY, severity=sev,
-            message=f"{z.name} ghost operation — empty but conditioned",
+            message=f"{z.name}: energy waste — empty but conditioned",
             detail=g.note + " Apply an occupancy-based setback / schedule.",
+            confidence=band,
+            evidence=[f"{g.occupancy.value} (occupancy {g.confidence:.0%})",
+                      "conditioning active", f"~QAR {g.waste_qar_per_day:.0f}/day wasted"],
         ))
     score = max(0.0, 100.0 - 18.0 * len(alerts))
     return round(score, 1), risks, alerts

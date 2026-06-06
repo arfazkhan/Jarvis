@@ -125,5 +125,7 @@ def drift_risks(asset: Asset, baselines: BaselineStore, now: Optional[datetime] 
             f"{asset.name} {k} drifting from its learned normal",
             f"{k}={v} is {abs(z):.1f}σ {direction} this asset's own baseline — early deviation, "
             f"not yet a threshold breach. Trend it and inspect before it escalates.",
+            confidence="Medium",   # learned-baseline statistical signal (stronger than a raw threshold)
+            evidence=[f"{k}={v}", f"{abs(z):.1f}σ vs learned baseline"],
         ))
     return out

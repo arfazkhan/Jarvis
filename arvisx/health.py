@@ -18,7 +18,8 @@ from typing import Dict, List, Optional, Tuple
 
 from arvisx.models import (
     Asset, AssetType, AssetHealth, CommunityReport, HealthBand, Risk,
-    ServiceHealth, ServiceType, Severity, ASSET_SERVICE,
+    ServiceHealth, ServiceType, Severity, ASSET_SERVICE, OUTCOME_LABEL,
+    SERVICE_WEIGHT, confidence_band,
 )
 
 
@@ -44,8 +45,10 @@ def assess_asset(asset: Asset, now: datetime) -> Tuple[AssetHealth, List[Risk]]:
     risks: List[Risk] = []
     s = asset.signals or {}
 
-    def _risk(sev: Severity, msg: str, detail: str = ""):
-        risks.append(Risk(asset.asset_id, asset.name, asset.service, sev, msg, detail))
+    def _risk(sev: Severity, msg: str, detail: str = "", evidence=None):
+        ev = evidence if evidence else ([detail] if detail else [msg])
+        risks.append(Risk(asset.asset_id, asset.name, asset.service, sev, msg, detail,
+                          confidence=confidence_band(len(ev)), evidence=ev))
 
     # Offline / no data → can't assert health (abstain, don't fabricate).
     if not asset.online:
@@ -192,6 +195,7 @@ def roll_up_services(asset_healths: List[AssetHealth], risks: List[Risk]) -> Lis
             service=st, score=svc_score, band=band,
             contributing_assets=len(members),
             worst_asset=worst.name if (worst.score < 80 or risks_by_service[st]) else None,
+            outcome=OUTCOME_LABEL.get(st, st.value),
         ))
     return out
 
@@ -268,6 +272,20 @@ def build_report(assets: List[Asset], now: Optional[datetime] = None, baselines=
             service=ServiceType.ENERGY, score=energy_score, band=band,
             contributing_assets=len(zones),
             worst_asset=(ghost_risks[0].asset_name if ghost_risks else None),
+            outcome=OUTCOME_LABEL.get(ServiceType.ENERGY, "energy"),
         ))
 
-    return CommunityReport(generated_at=now, services=services, risks=risks, assets=healths)
+    # ── Community Readiness — the headline parent score ──────────────────
+    if services:
+        _w = sum(SERVICE_WEIGHT.get(s.service, 1.0) for s in services)
+        readiness = round(sum(s.score * SERVICE_WEIGHT.get(s.service, 1.0) for s in services) / _w, 1)
+    else:
+        readiness = 100.0
+    rb = HealthBand.from_score(readiness)
+    # A critical essential (water/fire down) caps readiness presentation at Attention+.
+    for s in services:
+        if s.band == HealthBand.CRITICAL and SERVICE_WEIGHT.get(s.service, 1.0) >= 1.5:
+            rb = HealthBand.CRITICAL
+
+    return CommunityReport(generated_at=now, services=services, risks=risks, assets=healths,
+                           readiness=readiness, readiness_band=rb.value)

@@ -169,6 +169,7 @@ def assess_fusion(assets: List[Asset], baselines=None, now: Optional[datetime] =
                 severity=f.severity, message=f"{f.asset_name}: {f.conclusion}",
                 detail=(f"[{f.confidence_band} confidence — {len(f.modalities)} independent signals: "
                         f"{', '.join(f.modalities)}] " + " · ".join(f.evidence) + f". {f.action}"),
+                confidence=f.confidence_band, evidence=f.evidence,
             ))
     return risks, findings
 

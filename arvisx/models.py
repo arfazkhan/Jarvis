@@ -140,6 +140,27 @@ class GhostAlert:
     note: str
 
 
+# Outcome language — committees think in outcomes, not 'health'.
+OUTCOME_LABEL = {
+    ServiceType.WATER: "Water Availability",
+    ServiceType.POWER_BACKUP: "Backup Readiness",
+    ServiceType.POOL: "Pool Availability",
+    ServiceType.STP: "STP Compliance",
+    ServiceType.FIRE: "Fire Readiness",
+    ServiceType.ENERGY: "Energy & Waste",
+}
+# Readiness weighting — essentials/safety count more toward the parent score.
+SERVICE_WEIGHT = {
+    ServiceType.WATER: 1.5, ServiceType.FIRE: 1.5, ServiceType.POWER_BACKUP: 1.2,
+    ServiceType.STP: 1.0, ServiceType.POOL: 0.8, ServiceType.ENERGY: 0.6,
+}
+
+
+def confidence_band(n_sources: int) -> str:
+    """Every insight carries confidence = number of independent evidence sources."""
+    return "High" if n_sources >= 3 else "Medium" if n_sources == 2 else "Low"
+
+
 @dataclass
 class Risk:
     """An active risk surfaced to the dashboard (the 'Active Risks' list)."""
@@ -149,6 +170,8 @@ class Risk:
     severity: Severity
     message: str
     detail: str = ""
+    confidence: str = "Low"                 # Low | Medium | High (from # evidence sources)
+    evidence: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -172,6 +195,7 @@ class ServiceHealth:
     band: HealthBand
     contributing_assets: int
     worst_asset: Optional[str] = None
+    outcome: str = ""                       # operational-outcome label (e.g. "Water Availability")
 
 
 @dataclass
@@ -246,3 +270,5 @@ class CommunityReport:
     services: List[ServiceHealth]
     risks: List[Risk]
     assets: List[AssetHealth]
+    readiness: float = 0.0                   # Community Readiness — the headline parent score
+    readiness_band: str = "Healthy"

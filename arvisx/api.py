@@ -138,6 +138,7 @@ def create_app():
     async def overview():
         rep = state.report_now()
         return {"scenario": state.scenario, "generated_at": rep.generated_at.isoformat(),
+                "community_readiness": rep.readiness, "readiness_band": rep.readiness_band,
                 "services": _jsonable(rep.services)}
 
     @app.get("/api/v1/community/risks")

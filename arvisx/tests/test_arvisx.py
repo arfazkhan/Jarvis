@@ -136,6 +136,8 @@ def test_llm_merge_sets_source_and_leader():
 
 # ── Phase 1b: dashboard API ──────────────────────────────────────────────
 def _client():
+    import tempfile, os as _os
+    _os.environ["ARVISX_DB"] = _os.path.join(tempfile.mkdtemp(), "c.db")   # isolated per client
     from fastapi.testclient import TestClient
     from arvisx.api import create_app
     return TestClient(create_app())
@@ -645,6 +647,49 @@ def test_api_memory_endpoints():
         assert len(hist["events"]) >= 1
     finally:
         _os.environ.pop("ARVISX_DB", None)
+
+
+# ── Phase 8: outcome framing + readiness + confidence ────────────────────
+def test_community_readiness_headline():
+    rep = build_report(inject_prd_scenario())
+    assert 0 < rep.readiness <= 100
+    assert rep.readiness_band in ("Healthy", "Attention Required", "Critical")
+    # healthy community → ~100
+    assert build_report(healthy_community()).readiness >= 99
+
+
+def test_service_outcome_labels():
+    rep = build_report(inject_prd_scenario())
+    labels = {s.service.value: s.outcome for s in rep.services}
+    assert labels["water"] == "Water Availability"
+    assert labels["power_backup"] == "Backup Readiness"
+    assert labels["fire"] == "Fire Readiness"
+    assert labels["stp"] == "STP Compliance"
+
+
+def test_every_risk_carries_confidence_and_evidence():
+    rep = build_report(inject_prd_scenario())
+    assert rep.risks
+    for r in rep.risks:
+        assert r.confidence in ("Low", "Medium", "High")
+        assert r.evidence and isinstance(r.evidence, list)
+
+
+def test_confidence_scales_with_evidence_sources():
+    from arvisx.fusion import assess_fusion
+    from arvisx.models import Asset, AssetType
+    # fusion cooling fault with 3+ modalities → High; single-signal threshold → Low
+    a = Asset("AC-9", "AC", AssetType.AC_UNIT,
+              signals={"current_a": 7.0, "room_temp_c": 30.0, "room_setpoint_c": 23.0,
+                       "motion_events_15m": 5, "runtime_today_hours": 2.0})
+    frisks, _ = assess_fusion([a])
+    assert frisks and frisks[0].confidence == "High" and len(frisks[0].evidence) >= 3
+    # a plain tank-low threshold risk → Low (one source)
+    from arvisx.health import assess_asset
+    from datetime import datetime
+    tank = Asset("T9", "Tank", AssetType.OVERHEAD_TANK, signals={"tank_level_pct": 10.0})
+    _, risks = assess_asset(tank, datetime.now())
+    assert any(r.confidence == "Low" for r in risks)
 
 
 # ── standalone runner ────────────────────────────────────────────────────

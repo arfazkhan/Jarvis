@@ -32,12 +32,16 @@ def render(report: CommunityReport) -> str:
     L.append(f"  generated {report.generated_at:%Y-%m-%d %H:%M}")
     L.append("=" * 70)
 
-    # ── Community Overview (service tiles) ──────────────────────────────
-    L.append("\n  COMMUNITY OVERVIEW")
+    # ── Community Readiness — the headline ──────────────────────────────
+    _ri = _BAND_ICON.get(report.readiness_band, "·")
+    L.append(f"\n  {_ri}  COMMUNITY READINESS   {report.readiness:.0f}%   ({report.readiness_band})")
+
+    # ── Service outcomes ────────────────────────────────────────────────
+    L.append("\n  SERVICE OUTCOMES")
     for s in report.services:
         icon = _BAND_ICON.get(s.band.value, "·")
         worst = f"  (weakest: {s.worst_asset})" if s.worst_asset else ""
-        L.append(f"    {icon}  {_SVC_LABEL.get(s.service.value, s.service.value):<16} "
+        L.append(f"    {icon}  {(s.outcome or s.service.value):<20} "
                  f"{s.band.value:<20} score {s.score:.0f}{worst}")
 
     # ── Active Risks ────────────────────────────────────────────────────
@@ -45,9 +49,9 @@ def render(report: CommunityReport) -> str:
     if not report.risks:
         L.append("    none — all systems nominal")
     for r in report.risks:
-        L.append(f"    {_SEV_ICON.get(r.severity, ''):<14} {r.message}")
-        if r.detail:
-            L.append(f"                   ↳ {r.detail}")
+        L.append(f"    {_SEV_ICON.get(r.severity, ''):<14} {r.message}   [confidence: {r.confidence}]")
+        if r.evidence:
+            L.append(f"                   evidence: {' · '.join('✓ ' + e for e in r.evidence)}")
 
     # ── Asset Explorer ──────────────────────────────────────────────────
     L.append("\n  ASSET EXPLORER")

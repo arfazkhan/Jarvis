@@ -45,7 +45,8 @@ class VirtualSensor:
     def evaluate(self, asset: Asset, baselines, now) -> Tuple[Optional[VirtualReading], Optional[Risk]]:
         return None, None
     def _risk(self, asset, sev, msg, detail) -> Risk:
-        return Risk(asset.asset_id, asset.name, asset.service, sev, msg, detail)
+        return Risk(asset.asset_id, asset.name, asset.service, sev, msg, detail,
+                    confidence="Low", evidence=[detail or msg])   # one derived indicator
 
 
 class ShortCycling(VirtualSensor):
