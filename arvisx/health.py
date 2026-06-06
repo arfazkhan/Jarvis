@@ -204,7 +204,7 @@ _SEV_ORDER = {Severity.CRITICAL: 0, Severity.WARNING: 1, Severity.MAINTENANCE: 2
 
 
 def build_report(assets: List[Asset], now: Optional[datetime] = None, baselines=None,
-                 virtual: bool = False, zones=None, fusion: bool = False) -> CommunityReport:
+                 virtual: bool = False, zones=None, fusion: bool = False, water: bool = False) -> CommunityReport:
     """Build the community report. If `baselines` (a learning.BaselineStore) is given,
     learned-drift risks are added alongside the fixed-threshold rules. If `virtual` is
     set, PM virtual sensors derive v_* indicators (power-creep, cycling, dry-run, …) and
@@ -238,6 +238,14 @@ def build_report(assets: List[Asset], now: Optional[datetime] = None, baselines=
                     h.alerts.extend(x.message.split(" ", 1)[1] if " " in x.message else x.message for x in r2)
             except Exception:
                 pass
+    # ── Water Availability Engine (Phase 9) — the hero ───────────────────
+    if water:
+        try:
+            from arvisx.water import assess_water
+            risks.extend(assess_water(assets, baselines, now).risks)
+        except Exception:
+            pass
+
     # ── Fusion: cross-signal inference (Phase 6) ─────────────────────────
     if fusion:
         try:

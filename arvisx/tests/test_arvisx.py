@@ -692,6 +692,76 @@ def test_confidence_scales_with_evidence_sources():
     assert any(r.confidence == "Low" for r in risks)
 
 
+# ── Phase 9: Water Availability Engine ───────────────────────────────────
+def test_water_healthy():
+    from arvisx.water import assess_water
+    w = assess_water(inject_prd_scenario())          # tanks 78%/64%, pumps ok
+    assert w.score >= 80 and w.band == "Healthy"
+    assert w.can_refill and w.hours_remaining and w.hours_remaining > 12
+    assert not any(r.severity.value == "critical" for r in w.risks)
+
+
+def test_water_shortage_blocked_refill():
+    from arvisx.water import assess_water
+    from arvisx.models import Asset, AssetType
+    short = [Asset("UG-TANK-01", "UG Tank", AssetType.UNDERGROUND_TANK,
+                   signals={"tank_level_pct": 8, "tank_capacity_l": 50000}),
+             Asset("XFER-PUMP-01", "Transfer Pump", AssetType.TRANSFER_PUMP, signals={"fault": True})]
+    w = assess_water(short)
+    assert w.band == "Critical" and w.can_refill is False
+    assert w.hours_remaining is not None and w.hours_remaining < 12
+    assert any("refill blocked" in r.message.lower() for r in w.risks)
+
+
+def test_water_draw_from_meter_signal():
+    from arvisx.water import assess_water
+    from arvisx.models import Asset, AssetType
+    a = [Asset("OH-TANK-01", "OH", AssetType.OVERHEAD_TANK,
+               signals={"tank_level_pct": 50, "tank_capacity_l": 20000, "draw_lph": 2000})]
+    w = assess_water(a)                              # 10000 L / 2000 = 5h
+    assert abs(w.hours_remaining - 5.0) < 0.1 and w.draw_lph == 2000.0
+
+
+def test_water_flows_into_report():
+    from arvisx.models import Asset, AssetType
+    short = [Asset("UG-TANK-01", "UG Tank", AssetType.UNDERGROUND_TANK,
+                   signals={"tank_level_pct": 6, "tank_capacity_l": 50000}),
+             Asset("XFER-PUMP-01", "Transfer Pump", AssetType.TRANSFER_PUMP, signals={"fault": True})]
+    rep = build_report(short, water=True)
+    assert any("water availability" in r.message.lower() for r in rep.risks)
+
+
+# ── Phase 10: Asset Dependency Graph ─────────────────────────────────────
+def test_impact_redundancy_reasoning():
+    from arvisx.topology import impact_analysis
+    rep = build_report(inject_prd_scenario())
+    cascades = {c.asset_id: c for c in impact_analysis(inject_prd_scenario(), rep.risks)}
+    # Fire pump = single suppression → major/critical, no standby
+    fp = cascades["FIRE-PUMP-01"]
+    assert fp.impact in ("major", "critical") and fp.redundancy == "single"
+    # Booster pump = parallel distribution → only partial (redundancy absorbs)
+    bp = cascades["BOOST-PUMP-01"]
+    assert bp.impact == "partial" and bp.redundancy == "parallel"
+    assert fp.readiness_delta > bp.readiness_delta   # essential single hits readiness harder
+
+
+def test_service_graph_shape():
+    from arvisx.topology import service_graph
+    g = service_graph()
+    roles = {n["role"] for n in g["water"]}
+    assert {"source", "transfer", "storage", "distribution"} <= roles
+
+
+def test_api_water_topology_impact():
+    c = _client()
+    w = c.get("/api/v1/water").json()
+    assert "score" in w and "hours_remaining" in w and "forecast" in w
+    g = c.get("/api/v1/topology").json()["graph"]
+    assert "water" in g and "fire" in g
+    imp = c.post("/api/v1/scenario/prd") and c.get("/api/v1/impact").json()["impacts"]
+    assert isinstance(imp, list) and any(i["service"] == "fire" for i in imp)
+
+
 # ── standalone runner ────────────────────────────────────────────────────
 def _main() -> int:
     fns = [g for n, g in sorted(globals().items()) if n.startswith("test_") and callable(g)]

@@ -22,9 +22,9 @@ def healthy_community(now: datetime | None = None) -> List[Asset]:
     return [
         # ── Water ────────────────────────────────────────────────────────
         Asset("UG-TANK-01", "Underground Tank 1", AssetType.UNDERGROUND_TANK,
-              signals={"tank_level_pct": 78.0}, next_maintenance_due=d(95)),
+              signals={"tank_level_pct": 78.0, "tank_capacity_l": 50000.0}, next_maintenance_due=d(95)),
         Asset("OH-TANK-01", "Overhead Tank 1", AssetType.OVERHEAD_TANK,
-              signals={"tank_level_pct": 64.0}, next_maintenance_due=d(110)),
+              signals={"tank_level_pct": 64.0, "tank_capacity_l": 20000.0}, next_maintenance_due=d(110)),
         Asset("XFER-PUMP-01", "Transfer Pump 1", AssetType.TRANSFER_PUMP,
               signals={"power_kw": 5.4, "starts_today": 6}, runtime_hours=4200,
               runtime_threshold_hours=8000, next_maintenance_due=d(60)),

@@ -90,10 +90,11 @@ class _State:
                 self.baselines.save_to(self.db)        # persist learned normals
             except Exception:
                 pass
-            return build_report(assets, baselines=self.baselines, virtual=True, zones=zones, fusion=True)
+            return build_report(assets, baselines=self.baselines, virtual=True, zones=zones,
+                                fusion=True, water=True)
         # Sim: instantaneous virtual sensors (cycling/duty/turnover) still apply;
         # baseline-dependent ones (power-creep/dry-run) abstain without history.
-        return build_report(assets, virtual=True, zones=zones, fusion=True)
+        return build_report(assets, virtual=True, zones=zones, fusion=True, water=True)
 
     def _start_mqtt(self):
         from arvisx.store import AssetStore
@@ -202,6 +203,26 @@ def create_app():
     @app.get("/api/v1/skillbook")
     async def skillbook_list():
         return {"skills": state.skillbook.all()}
+
+    @app.get("/api/v1/water")
+    async def water():
+        """Water Availability Engine — the hero screen: how much water, for how long, refill."""
+        from arvisx.water import assess_water
+        bl = state.baselines if state.store is not None else None
+        return _jsonable(assess_water(state.current_assets(), bl))
+
+    @app.get("/api/v1/topology")
+    async def topology():
+        """The asset dependency graph (service → assets in roles)."""
+        from arvisx.topology import service_graph
+        return {"graph": service_graph()}
+
+    @app.get("/api/v1/impact")
+    async def impact():
+        """Cascade: current asset risks → service impact → Community Readiness impact."""
+        from arvisx.topology import impact_analysis
+        rep = state.report_now()
+        return {"impacts": _jsonable(impact_analysis(state.current_assets(), rep.risks))}
 
     @app.post("/api/v1/workorders/sync")
     async def wo_sync():
