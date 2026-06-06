@@ -51,6 +51,8 @@ class AssetType(str, Enum):
     POOL_DOSING = "pool_dosing"
     FIRE_PANEL = "fire_panel"
     FIRE_PUMP = "fire_pump"
+    AC_UNIT = "ac_unit"            # split/package AC (Phase 6 — fusion)
+    FCU = "fan_coil_unit"
 
 
 # Which service each asset type rolls up into.
@@ -67,6 +69,8 @@ ASSET_SERVICE: Dict[AssetType, ServiceType] = {
     AssetType.POOL_DOSING: ServiceType.POOL,
     AssetType.FIRE_PANEL: ServiceType.FIRE,
     AssetType.FIRE_PUMP: ServiceType.FIRE,
+    AssetType.AC_UNIT: ServiceType.ENERGY,      # cooling effectiveness / comfort
+    AssetType.FCU: ServiceType.ENERGY,
 }
 
 

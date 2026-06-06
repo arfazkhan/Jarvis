@@ -424,6 +424,56 @@ def test_energy_tile_and_ghost_risks_in_report():
     assert [s for s in rep2.services if s.service.value == "energy"][0].band.value == "Healthy"
 
 
+# ── Phase 6: environmental sensing + sensor fusion ───────────────────────
+def _ac(**signals):
+    from arvisx.models import Asset, AssetType
+    return Asset("AC-1", "Conf Room AC", AssetType.AC_UNIT, signals=signals)
+
+
+def test_fusion_cooling_fault_confidence_scales():
+    from arvisx.fusion import assess_fusion
+    # 2 modalities (electrical + thermal) → Medium
+    _, f2 = assess_fusion([_ac(current_a=7.0, room_temp_c=29.0, room_setpoint_c=23.0)])
+    assert len(f2) == 1 and f2[0].confidence_band == "Medium"
+    assert set(f2[0].modalities) == {"electrical", "thermal"}
+    # + presence + runtime → High
+    _, f4 = assess_fusion([_ac(current_a=7.0, room_temp_c=29.0, room_setpoint_c=23.0,
+                               motion_events_15m=4, runtime_today_hours=2.0)])
+    assert f4[0].confidence_band == "High" and len(f4[0].modalities) >= 3
+    assert "cooling effectiveness" in f4[0].conclusion.lower()
+
+
+def test_fusion_no_fire_when_cooling_ok():
+    from arvisx.fusion import assess_fusion
+    _, f = assess_fusion([_ac(current_a=7.0, room_temp_c=23.5, room_setpoint_c=23.0)])
+    assert f == []                                  # reaching setpoint → not a fault
+
+
+def test_fusion_single_weak_signal_is_low():
+    from arvisx.fusion import assess_fusion
+    from arvisx.models import Asset, AssetType
+    tank = Asset("T1", "Tank", AssetType.UNDERGROUND_TANK, signals={"humidity_pct": 92.0})
+    _, f = assess_fusion([tank])
+    assert len(f) == 1 and f[0].confidence_band == "Low"     # one modality → low, 'confirm'
+
+
+def test_fusion_pump_stress_thermal():
+    from arvisx.fusion import assess_fusion
+    from arvisx.models import Asset, AssetType
+    pump = Asset("P1", "STP Pump", AssetType.STP_PUMP, signals={"current_a": 12.0, "room_temp_c": 50.0})
+    _, f = assess_fusion([pump])
+    stress = [x for x in f if "stress" in x.conclusion.lower()]
+    assert stress and stress[0].confidence_band == "Medium"
+    assert "thermal" in stress[0].modalities and "electrical" in stress[0].modalities
+
+
+def test_fusion_flows_into_report():
+    a = _ac(current_a=7.0, room_temp_c=30.0, room_setpoint_c=23.0, motion_events_15m=5)
+    rep = build_report([a], fusion=True)
+    assert any("cooling effectiveness" in r.message.lower() for r in rep.risks)
+    assert any("High confidence" in r.detail for r in rep.risks)
+
+
 # ── standalone runner ────────────────────────────────────────────────────
 def _main() -> int:
     fns = [g for n, g in sorted(globals().items()) if n.startswith("test_") and callable(g)]
