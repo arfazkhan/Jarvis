@@ -266,6 +266,65 @@ def test_api_workorders():
     assert c.get("/api/v1/workorders/NOPE").status_code == 404
 
 
+# ── Phase 4: pattern learning + drift ────────────────────────────────────
+def _feed(store, asset_id, signal, values):
+    for v in values:
+        store.observe(asset_id, signal, v)
+
+
+def test_drift_cold_start_abstains():
+    from arvisx.learning import BaselineStore
+    b = BaselineStore()
+    _feed(b, "P1", "power_kw", [5.0] * 5)          # < MIN_SAMPLES
+    assert b.drift_z("P1", "power_kw") is None       # not enough history → abstain
+
+
+def test_drift_stable_no_fire():
+    from arvisx.learning import BaselineStore, DRIFT_Z
+    b = BaselineStore()
+    _feed(b, "P1", "power_kw", [5.0 + (i % 3 - 1) * 0.1 for i in range(40)])  # ~5 ± noise
+    z = b.drift_z("P1", "power_kw")
+    assert z is not None and abs(z) < DRIFT_Z
+
+
+def test_drift_sustained_fires():
+    from arvisx.learning import BaselineStore, DRIFT_Z
+    b = BaselineStore()
+    _feed(b, "P1", "power_kw", [5.0 + (i % 3 - 1) * 0.1 for i in range(35)])  # learned normal ~5
+    _feed(b, "P1", "power_kw", [7.5] * 5)                                     # sustained rise
+    z = b.drift_z("P1", "power_kw")
+    assert z is not None and z >= DRIFT_Z            # drifting ABOVE its own normal
+
+
+def test_drift_single_spike_does_not_fire():
+    from arvisx.learning import BaselineStore, DRIFT_Z
+    b = BaselineStore()
+    _feed(b, "P1", "power_kw", [5.0 + (i % 3 - 1) * 0.1 for i in range(34)])
+    _feed(b, "P1", "power_kw", [20.0])               # one spike, latest
+    z = b.drift_z("P1", "power_kw")                  # recent-window median resists a spike
+    assert z is None or abs(z) < DRIFT_Z
+
+
+def test_drift_skips_cumulative_runtime():
+    from arvisx.learning import BaselineStore
+    b = BaselineStore()
+    _feed(b, "P1", "runtime_hours", list(range(40)))   # monotonic — excluded
+    assert b.drift_z("P1", "runtime_hours") is None
+
+
+def test_drift_flows_into_report():
+    from arvisx.learning import BaselineStore
+    from arvisx.models import Asset, AssetType
+    b = BaselineStore()
+    a = Asset("XFER-PUMP-01", "Transfer Pump 1", AssetType.TRANSFER_PUMP,
+              signals={"power_kw": 9.0}, next_maintenance_due=None)
+    # learn a normal ~5kW, then the asset now reads ~9kW sustained
+    _feed(b, "XFER-PUMP-01", "power_kw", [5.0 + (i % 3 - 1) * 0.1 for i in range(35)])
+    _feed(b, "XFER-PUMP-01", "power_kw", [9.0] * 5)
+    rep = build_report([a], baselines=b)
+    assert any("drifting from its learned normal" in r.message for r in rep.risks)
+
+
 # ── standalone runner ────────────────────────────────────────────────────
 def _main() -> int:
     fns = [g for n, g in sorted(globals().items()) if n.startswith("test_") and callable(g)]

@@ -199,7 +199,10 @@ def roll_up_services(asset_healths: List[AssetHealth], risks: List[Risk]) -> Lis
 _SEV_ORDER = {Severity.CRITICAL: 0, Severity.WARNING: 1, Severity.MAINTENANCE: 2, Severity.INFO: 3}
 
 
-def build_report(assets: List[Asset], now: Optional[datetime] = None) -> CommunityReport:
+def build_report(assets: List[Asset], now: Optional[datetime] = None, baselines=None) -> CommunityReport:
+    """Build the community report. If `baselines` (a learning.BaselineStore) is given,
+    learned-drift risks are added alongside the fixed-threshold rules — the fixed rules
+    stay the cold-start floor; drift adds early-degradation detection per asset."""
     now = now or datetime.now()
     healths: List[AssetHealth] = []
     risks: List[Risk] = []
@@ -207,6 +210,15 @@ def build_report(assets: List[Asset], now: Optional[datetime] = None) -> Communi
         h, r = assess_asset(a, now)
         healths.append(h)
         risks.extend(r)
+        if baselines is not None:
+            try:
+                from arvisx.learning import drift_risks
+                r2 = drift_risks(a, baselines, now)
+                risks.extend(r2)
+                if r2:  # reflect drift in the asset's alerts/score-band view
+                    h.alerts.extend(x.message.split(" ", 1)[1] if " " in x.message else x.message for x in r2)
+            except Exception:
+                pass
     risks.sort(key=lambda r: _SEV_ORDER.get(r.severity, 9))
     services = roll_up_services(healths, risks)
     return CommunityReport(generated_at=now, services=services, risks=risks, assets=healths)

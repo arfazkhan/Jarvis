@@ -46,10 +46,12 @@ class _State:
     a live AssetStore fed by the MQTT ingest adapter (broker on ARVISX_MQTT_BROKER)."""
     def __init__(self):
         from arvisx.workorders import WorkOrderStore
+        from arvisx.learning import BaselineStore
         self.scenario = "prd"
         self.store = None        # set when MQTT source is active
         self._ingest = None
         self.wo_store = WorkOrderStore()
+        self.baselines = BaselineStore()
         if os.environ.get("ARVISX_SOURCE", "sim").lower() == "mqtt":
             self._start_mqtt()
         else:
@@ -58,6 +60,15 @@ class _State:
     def sync_workorders(self):
         from arvisx.workorders import sync_workorders
         return sync_workorders(self.current_assets(), self.wo_store)
+
+    def report_now(self):
+        # Drift learning only on a LIVE stream (MQTT) — a static sim snapshot has no
+        # real variation to learn from. Fixed thresholds carry the sim path.
+        assets = self.current_assets()
+        if self.store is not None:
+            self.baselines.learn_from_assets(assets)
+            return build_report(assets, baselines=self.baselines)
+        return build_report(assets)
 
     def _start_mqtt(self):
         from arvisx.store import AssetStore
@@ -100,23 +111,23 @@ def create_app():
 
     @app.get("/api/v1/community/overview")
     async def overview():
-        rep = build_report(state.current_assets())
+        rep = state.report_now()
         return {"scenario": state.scenario, "generated_at": rep.generated_at.isoformat(),
                 "services": _jsonable(rep.services)}
 
     @app.get("/api/v1/community/risks")
     async def risks():
-        rep = build_report(state.current_assets())
+        rep = state.report_now()
         return {"count": len(rep.risks), "risks": _jsonable(rep.risks)}
 
     @app.get("/api/v1/community/assets")
     async def assets():
-        rep = build_report(state.current_assets())
+        rep = state.report_now()
         return {"count": len(rep.assets), "assets": _jsonable(rep.assets)}
 
     @app.get("/api/v1/community/report")
     async def report():
-        return _jsonable(build_report(state.current_assets()))
+        return _jsonable(state.report_now())
 
     @app.get("/api/v1/asset/{asset_id}/advisory")
     async def advisory(asset_id: str):
