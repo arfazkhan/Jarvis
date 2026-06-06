@@ -254,7 +254,31 @@ def create_app():
 
     @app.post("/api/v1/commission/building/{bid}/transition")
     async def commission_transition(bid: str, payload: Dict[str, Any] = Body(...)):
-        return _commission_call(lambda: state.commissioner.transition(bid, (payload or {}).get("state", "")))
+        p = payload or {}
+        return _commission_call(lambda: state.commissioner.transition(bid, p.get("state", ""), bool(p.get("force"))))
+
+    @app.post("/api/v1/commission/building/{bid}/apply-template")
+    async def commission_template(bid: str, payload: Dict[str, Any] = Body(...)):
+        return _commission_call(lambda: state.commissioner.apply_template(bid, (payload or {}).get("service", "")))
+
+    @app.post("/api/v1/commission/discover")
+    async def commission_discover(payload: Dict[str, Any] = Body(...)):
+        """Auto-suggest assets + signal maps from observed MQTT topics (technician confirms)."""
+        from arvisx.discovery_assist import suggest_from_topics
+        return suggest_from_topics((payload or {}).get("topics", []))
+
+    @app.get("/api/v1/commission/building/{bid}/learning")
+    async def commission_learning(bid: str):
+        from arvisx.commissioning import CommissioningError
+        try:
+            return state.commissioner.learning_progress(bid)
+        except CommissioningError as e:
+            raise HTTPException(404, str(e))
+
+    @app.post("/api/v1/commission/building/{bid}/validations/{val_id}/answer")
+    async def commission_validate(bid: str, val_id: str, payload: Dict[str, Any] = Body(...)):
+        return _commission_call(lambda: state.commissioner.answer_validation(
+            bid, val_id, bool((payload or {}).get("is_normal"))))
 
     @app.get("/api/v1/water")
     async def water():

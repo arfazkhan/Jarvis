@@ -43,17 +43,23 @@ class BuildingConfig:
     assets: List[Dict[str, Any]] = field(default_factory=list)  # {id,type,name,location,service?}
     signal_maps: List[Dict[str, Any]] = field(default_factory=list)  # {source,asset_id,signal}
     dependencies: Dict[str, List[Dict[str, str]]] = field(default_factory=dict)  # service → [{asset_type/asset_id,role,redundancy}]
+    learning_started_at: Optional[str] = None
+    learning_days: int = 14
+    validations: List[Dict[str, Any]] = field(default_factory=list)  # operator baseline tuning
 
     def to_dict(self) -> Dict[str, Any]:
         return {"building_id": self.building_id, "name": self.name, "state": self.state,
                 "services": self.services, "assets": self.assets, "signal_maps": self.signal_maps,
-                "dependencies": self.dependencies}
+                "dependencies": self.dependencies, "learning_started_at": self.learning_started_at,
+                "learning_days": self.learning_days, "validations": self.validations}
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "BuildingConfig":
         return cls(building_id=d["building_id"], name=d.get("name", ""), state=d.get("state", "draft"),
                    services=d.get("services", []), assets=d.get("assets", []),
-                   signal_maps=d.get("signal_maps", []), dependencies=d.get("dependencies", {}))
+                   signal_maps=d.get("signal_maps", []), dependencies=d.get("dependencies", {}),
+                   learning_started_at=d.get("learning_started_at"), learning_days=d.get("learning_days", 14),
+                   validations=d.get("validations", []))
 
 
 class CommissioningError(Exception):
@@ -117,6 +123,55 @@ class CommissioningManager:
         self._save(b)
         return b
 
+    def apply_template(self, building_id: str, service: str) -> BuildingConfig:
+        """Half-day enabler: auto-load a service's standard assets + dependency graph
+        (the technician then confirms/edits, instead of typing everything)."""
+        from arvisx.templates import template_for
+        t = template_for(service)
+        b = self._require(building_id)
+        if service not in b.services:
+            b.services.append(service)
+        ids = {a.get("id") for a in b.assets}
+        for a in t.get("assets", []):
+            if a["id"] not in ids:
+                b.assets.append(dict(a))
+        for svc, nodes in t.get("dependencies", {}).items():
+            b.dependencies.setdefault(svc, nodes)
+        self._save(b)
+        return b
+
+    # ── Learning mode + validation (baseline tuning) ─────────────────────
+    def learning_progress(self, building_id: str, now: Optional["object"] = None) -> Dict[str, Any]:
+        from datetime import datetime
+        b = self._require(building_id)
+        now = now or datetime.now()
+        if not b.learning_started_at:
+            return {"state": b.state, "in_learning": b.state == CommissioningState.LEARNING.value,
+                    "days_elapsed": 0, "days_total": b.learning_days, "ready": False}
+        elapsed = (now - datetime.fromisoformat(b.learning_started_at)).total_seconds() / 86400.0
+        return {"state": b.state, "in_learning": b.state == CommissioningState.LEARNING.value,
+                "days_elapsed": round(elapsed, 2), "days_total": b.learning_days,
+                "ready": elapsed >= b.learning_days,
+                "pending_validations": sum(1 for v in b.validations if v.get("answer") is None)}
+
+    def add_validation(self, building_id: str, asset_id: str, signal: str, observed,
+                       question: str) -> BuildingConfig:
+        b = self._require(building_id)
+        import uuid as _u
+        b.validations.append({"id": f"V-{_u.uuid4().hex[:6]}", "asset_id": asset_id, "signal": signal,
+                              "observed": observed, "question": question, "answer": None})
+        self._save(b)
+        return b
+
+    def answer_validation(self, building_id: str, val_id: str, is_normal: bool) -> BuildingConfig:
+        b = self._require(building_id)
+        v = next((x for x in b.validations if x["id"] == val_id), None)
+        if v is None:
+            raise CommissioningError(f"unknown validation {val_id}")
+        v["answer"] = "normal" if is_normal else "abnormal"   # tunes the building fingerprint
+        self._save(b)
+        return b
+
     # ── gated state machine ──────────────────────────────────────────────
     def _can_enter(self, b: BuildingConfig, target: CommissioningState) -> Optional[str]:
         reqs = {
@@ -133,7 +188,8 @@ class CommissioningManager:
                 return msg
         return None
 
-    def transition(self, building_id: str, target: str) -> BuildingConfig:
+    def transition(self, building_id: str, target: str, force: bool = False) -> BuildingConfig:
+        from datetime import datetime
         b = self._require(building_id)
         try:
             tgt = CommissioningState(target)
@@ -145,6 +201,17 @@ class CommissioningManager:
         why = self._can_enter(b, tgt)
         if why:
             raise CommissioningError(why)
+        # Learning-mode gate: don't go live until the baseline window has elapsed.
+        if tgt == CommissioningState.OPERATIONAL and not force:
+            if not b.learning_started_at:
+                raise CommissioningError("learning has not started")
+            elapsed = (datetime.now() - datetime.fromisoformat(b.learning_started_at)).total_seconds() / 86400.0
+            if elapsed < b.learning_days:
+                raise CommissioningError(
+                    f"still learning — {elapsed:.1f}/{b.learning_days} days observed "
+                    f"(alerts stay suppressed; pass force=true to override)")
+        if tgt == CommissioningState.LEARNING:
+            b.learning_started_at = datetime.now().isoformat()
         b.state = tgt.value
         self._save(b)
         return b

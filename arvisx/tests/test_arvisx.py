@@ -778,7 +778,7 @@ def test_commissioning_full_flow():
     m.set_dependencies(b.building_id, "water",
                        [{"asset_id": "XFER-A", "role": "transfer", "redundancy": "single"}])
     m.transition(b.building_id, "learning")
-    final = m.transition(b.building_id, "operational")
+    final = m.transition(b.building_id, "operational", force=True)   # skip the 14-day wait in test
     assert final.state == "operational"
     # persisted + reloads identically
     again = m.get(b.building_id)
@@ -814,6 +814,74 @@ def test_api_commissioning_wizard():
     assert c.post(f"/api/v1/commission/building/{bid}/transition", json={"state": "operational"}).status_code == 400
     assert any(x["building_id"] == bid for x in c.get("/api/v1/commission/buildings").json()["buildings"])
     assert c.get(f"/api/v1/commission/building/NOPE").status_code == 404
+
+
+# ── Phase 11b: templates, learning gate, validation, discovery assist ────
+def test_apply_template_loads_assets_and_deps():
+    from arvisx.commissioning import CommissioningManager
+    m = CommissioningManager(_tmpdb())
+    b = m.create_building("T")
+    b = m.apply_template(b.building_id, "water")
+    ids = {a["id"] for a in b.assets}
+    assert {"UGT-01", "XFER-A", "OHT-A", "BOOST-01"} <= ids        # standard water assets loaded
+    assert "water" in b.services and b.dependencies["water"]        # + dependency graph
+    assert any(a["type"] == "underground_tank" for a in b.assets)
+
+
+def test_learning_gate_blocks_premature_golive():
+    from arvisx.commissioning import CommissioningManager, CommissioningError
+    from datetime import datetime, timedelta
+    m = CommissioningManager(_tmpdb())
+    b = m.create_building("L"); m.apply_template(b.building_id, "water")
+    m.set_services(b.building_id, ["water"])
+    for s in ("assets", "signals"):
+        if s == "signals":
+            m.add_signal_map(b.building_id, "arvisx/UGT-01/level", "UGT-01", "tank_level_pct")
+        m.transition(b.building_id, s)
+    m.transition(b.building_id, "dependencies")
+    m.transition(b.building_id, "learning")          # learning_started_at set
+    import pytest
+    with pytest.raises(CommissioningError):          # day 0 → still learning → blocked
+        m.transition(b.building_id, "operational")
+    prog = m.learning_progress(b.building_id)
+    assert prog["in_learning"] and not prog["ready"] and prog["days_total"] == 14
+    # force override OR elapsed time goes live
+    m.transition(b.building_id, "operational", force=True)
+    assert m.get(b.building_id).state == "operational"
+
+
+def test_validation_loop_records_answer():
+    from arvisx.commissioning import CommissioningManager
+    m = CommissioningManager(_tmpdb())
+    b = m.create_building("V")
+    m.add_validation(b.building_id, "PUMP-A", "runtime_today_hours", 12.0,
+                     "Pump A ran 12h yesterday — is this normal?")
+    vid = m.get(b.building_id).validations[0]["id"]
+    m.answer_validation(b.building_id, vid, is_normal=False)
+    v = m.get(b.building_id).validations[0]
+    assert v["answer"] == "abnormal"
+
+
+def test_discovery_assist_suggests_from_topics():
+    from arvisx.discovery_assist import suggest_from_topics
+    s = suggest_from_topics(["arvisx/UGT-01/tank_level_pct", "arvisx/XFER-A/current_a",
+                             "arvisx/GEN-01/fuel_level_pct", "junk/x"])
+    by_id = {a["id"]: a for a in s["assets"]}
+    assert by_id["UGT-01"]["type"] == "underground_tank"
+    assert by_id["XFER-A"]["type"] == "transfer_pump"
+    assert by_id["GEN-01"]["type"] == "diesel_generator"
+    assert any(m["signal"] == "tank_level_pct" for m in s["signal_maps"])
+    assert "junk/x" in s["unmapped_topics"]
+
+
+def test_api_11b_template_and_discover():
+    c = _client()
+    b = c.post("/api/v1/commission/building", json={"name": "Z"}).json()
+    bid = b["building_id"]
+    t = c.post(f"/api/v1/commission/building/{bid}/apply-template", json={"service": "water"}).json()
+    assert len(t["assets"]) >= 4 and "water" in t["services"]
+    sug = c.post("/api/v1/commission/discover", json={"topics": ["arvisx/OHT-A/tank_level_pct"]}).json()
+    assert sug["assets"][0]["id"] == "OHT-A"
 
 
 # ── standalone runner ────────────────────────────────────────────────────
