@@ -359,6 +359,32 @@ def create_app():
         out = await ask(q, state.current_assets(), rep.risks, llm=_llm_for_reasoning())
         return _jsonable(out)
 
+    @app.post("/api/v1/investigate/{asset_id}")
+    async def investigate_endpoint(asset_id: str):
+        """Agentic multi-step investigation of an asset's active risk (tool-using loop)."""
+        from arvisx.agent import investigate
+        a = state.asset(asset_id)
+        if a is None:
+            raise HTTPException(404, f"unknown asset {asset_id}")
+        rep = state.report_now()
+        rk = next((r for r in rep.risks if r.asset_id == asset_id), None)
+        if rk is None:
+            return {"asset_id": asset_id, "status": "no active risk to investigate"}
+        inv = await investigate(a, rk, state.current_assets(), rep.risks, llm=_llm_for_reasoning(),
+                                db=state.db, baselines=state.baselines, skillbook=state.skillbook)
+        return _jsonable(inv)
+
+    @app.post("/api/v1/monitor")
+    async def monitor_endpoint(payload: Dict[str, Any] = Body(default={})):
+        """Proactive sweep: autonomously prioritize + investigate the top risks by tier."""
+        from arvisx.agent import monitor
+        rep = state.report_now()
+        cap = int((payload or {}).get("max_investigations", 3))
+        invs = await monitor(state.current_assets(), rep.risks, llm=_llm_for_reasoning(),
+                             db=state.db, baselines=state.baselines, skillbook=state.skillbook,
+                             max_investigations=cap)
+        return {"investigated": len(invs), "investigations": _jsonable(invs)}
+
     @app.post("/api/v1/scenario/{name}")
     async def scenario(name: str):
         state.set_scenario(name)

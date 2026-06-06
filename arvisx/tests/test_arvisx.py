@@ -884,6 +884,87 @@ def test_api_11b_template_and_discover():
     assert sug["assets"][0]["id"] == "OHT-A"
 
 
+# ── Phase 12: agentic investigation + proactive monitor ──────────────────
+class _SeqLLM:
+    """Scripted multi-turn LLM for the agent loop (pops one response per ask_json)."""
+    def __init__(self, responses): self._q = list(responses)
+    async def ask_json(self, **kwargs):
+        return self._q.pop(0) if self._q else {"final": {"root_cause": "out of script", "confidence": 0.3}}
+
+
+def _risk_for(asset_id):
+    assets = inject_prd_scenario()
+    rep = build_report(assets)
+    return assets, rep.risks, next(r for r in rep.risks if r.asset_id == asset_id)
+
+
+def test_agent_multistep_tool_use():
+    from arvisx.agent import investigate
+    from arvisx.learning import BaselineStore
+    assets, risks, risk = _risk_for("BOOST-PUMP-01")
+    a = next(x for x in assets if x.asset_id == "BOOST-PUMP-01")
+    fake = _SeqLLM([
+        {"thought": "history?", "tool": "get_fault_history", "args": {"asset_id": "BOOST-PUMP-01"}},
+        {"thought": "impact?", "tool": "check_dependency_impact", "args": {"asset_id": "BOOST-PUMP-01"}},
+        {"thought": "conclude", "final": {"root_cause": "Bearing wear at high duty",
+         "recommended_action": "Inspect bearings", "confidence": 0.6, "evidence": ["water partial impact"]}},
+    ])
+    os.environ["ARVIS_X_LLM"] = "1"
+    try:
+        inv = asyncio.run(investigate(a, risk, assets, risks, llm=fake, db=_tmpdb(), baselines=BaselineStore()))
+    finally:
+        os.environ.pop("ARVIS_X_LLM", None)
+    assert inv.source == "agent" and inv.confirmed is False
+    assert inv.root_cause == "Bearing wear at high duty"
+    tools = {s["tool"] for s in inv.steps}
+    assert "get_fault_history" in tools and "check_dependency_impact" in tools   # it gathered evidence itself
+
+
+def test_agent_no_llm_falls_back_to_rules():
+    from arvisx.agent import investigate
+    assets, risks, risk = _risk_for("BOOST-PUMP-01")
+    a = next(x for x in assets if x.asset_id == "BOOST-PUMP-01")
+    inv = asyncio.run(investigate(a, risk, assets, risks, llm=None))
+    assert inv.source == "rules" and inv.steps == [] and "wear" in inv.root_cause.lower()
+
+
+def test_agent_budget_grounds_out():
+    from arvisx.agent import investigate
+    from arvisx.learning import BaselineStore
+    assets, risks, risk = _risk_for("BOOST-PUMP-01")
+    a = next(x for x in assets if x.asset_id == "BOOST-PUMP-01")
+    fake = _SeqLLM([{"tool": "get_asset_state", "args": {"asset_id": "BOOST-PUMP-01"}}] * 10)  # never finalizes
+    os.environ["ARVIS_X_LLM"] = "1"
+    try:
+        inv = asyncio.run(investigate(a, risk, assets, risks, llm=fake, db=_tmpdb(),
+                                      baselines=BaselineStore(), max_steps=3))
+    finally:
+        os.environ.pop("ARVIS_X_LLM", None)
+    assert len(inv.steps) == 3 and "rules" in inv.source     # budget hit → grounded out, trace kept
+
+
+def test_monitor_prioritizes_caps_and_tiers():
+    from arvisx.agent import monitor
+    assets, risks, _ = _risk_for("BOOST-PUMP-01")
+    invs = asyncio.run(monitor(assets, risks, llm=None, max_investigations=2))   # no LLM → rules
+    assert len(invs) == 2 and all(i.source == "rules" for i in invs)
+    # critical risk ranks first
+    from arvisx.models import Asset, AssetType, Risk, ServiceType, Severity
+    crit_assets = assets + [Asset("GEN-01b", "Gen X", AssetType.DIESEL_GENERATOR, signals={"fault": True})]
+    crit = [Risk("GEN-01b", "Gen X", ServiceType.POWER_BACKUP, Severity.CRITICAL, "Gen X fault", "")] + risks
+    invs2 = asyncio.run(monitor(crit_assets, crit, llm=None, max_investigations=1))
+    assert invs2[0].asset_id == "GEN-01b"                    # critical investigated first
+
+
+def test_api_investigate_and_monitor():
+    c = _client()
+    m = c.post("/api/v1/monitor", json={"max_investigations": 2}).json()
+    assert m["investigated"] >= 1 and "investigations" in m
+    inv = c.post("/api/v1/investigate/BOOST-PUMP-01").json()
+    assert inv.get("asset_id") == "BOOST-PUMP-01"
+    assert c.post("/api/v1/investigate/NOPE").status_code == 404
+
+
 # ── standalone runner ────────────────────────────────────────────────────
 def _main() -> int:
     fns = [g for n, g in sorted(globals().items()) if n.startswith("test_") and callable(g)]
