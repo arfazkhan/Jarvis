@@ -169,6 +169,52 @@ def test_api_scenario_toggle():
     assert c.get("/api/v1/community/risks").json()["count"] == 4
 
 
+# ── Phase 2: MQTT ingest (pure — no broker) ──────────────────────────────
+def test_topic_parse_coercion():
+    from arvisx.ingest.topics import parse
+    assert parse("arvisx/GEN-01/fuel_level_pct", "18.5") == [("GEN-01", "fuel_level_pct", 18.5)]
+    assert parse("arvisx/GEN-01/fault", "true") == [("GEN-01", "fault", True)]
+    assert parse("arvisx/GEN-01/runtime_hours", "910") == [("GEN-01", "runtime_hours", 910)]
+    # ISO datetime signal
+    r = parse("arvisx/FIRE-PUMP-01/next_test_due", "2026-06-01T00:00:00")
+    assert r[0][0] == "FIRE-PUMP-01" and isinstance(r[0][2], datetime)
+    # out-of-prefix and malformed → []
+    assert parse("other/X/y", "1") == []
+    assert parse("arvisx", "") == []
+    # JSON-object payload on the asset topic → multiple readings
+    multi = parse("arvisx/GEN-01", '{"fuel_level_pct": 30, "fault": false}')
+    assert ("GEN-01", "fuel_level_pct", 30) in multi and ("GEN-01", "fault", False) in multi
+
+
+def test_store_apply_reading():
+    from arvisx.store import AssetStore
+    store = AssetStore.from_fleet_definition(healthy_community())
+    assert store.apply_reading("BOOST-PUMP-01", "runtime_hours", 8600) is True
+    assert store.apply_reading("BOOST-PUMP-01", "power_kw", 4.2) is True
+    assert store.apply_reading("GHOST-99", "x", 1) is False        # unknown asset rejected
+    a = store.asset("BOOST-PUMP-01")
+    assert a.runtime_hours == 8600 and a.signals["power_kw"] == 4.2
+
+
+def test_mqtt_loopback_drives_risks():
+    """Full ingest path with NO broker: mock publisher messages → handle_message →
+    store → build_report. PRD telemetry (booster runtime, pool runtime, fire test)
+    must surface as risks on a healthy-seeded fleet."""
+    from arvisx.store import AssetStore
+    from arvisx.ingest.mqtt_adapter import handle_message
+    from arvisx.ingest.mock_publisher import scenario_messages
+    store = AssetStore.from_fleet_definition(healthy_community())
+    assert build_report(store.snapshot()).risks == []              # healthy before ingest
+    for topic, payload in scenario_messages("prd"):
+        handle_message(store, topic, payload)
+    assert store.update_count > 0
+    rep = build_report(store.snapshot())
+    msgs = " ".join(r.message.lower() for r in rep.risks)
+    assert "runtime above threshold" in msgs        # booster runtime telemetry
+    assert "below normal" in msgs                    # pool filtration telemetry
+    assert "test overdue" in msgs                    # fire pump iso-date telemetry
+
+
 # ── standalone runner ────────────────────────────────────────────────────
 def _main() -> int:
     fns = [g for n, g in sorted(globals().items()) if n.startswith("test_") and callable(g)]

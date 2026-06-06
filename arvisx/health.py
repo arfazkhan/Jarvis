@@ -22,8 +22,17 @@ from arvisx.models import (
 )
 
 
-def _days_until(dt: Optional[datetime], now: datetime) -> Optional[int]:
+def _days_until(dt, now: datetime) -> Optional[int]:
     if dt is None:
+        return None
+    # Defensive: a signal may arrive as an ISO string (e.g. via MQTT) rather than
+    # a datetime — parse it; give up quietly if it isn't a date.
+    if isinstance(dt, str):
+        try:
+            dt = datetime.fromisoformat(dt)
+        except ValueError:
+            return None
+    if not isinstance(dt, datetime):
         return None
     return (dt - now).days
 

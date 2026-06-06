@@ -42,12 +42,36 @@ def _jsonable(obj: Any) -> Any:
 
 
 class _State:
-    """In-memory community for the prototype (stands in for live ingest)."""
+    """Community state. Default = in-memory simulator. With ARVISX_SOURCE=mqtt it is
+    a live AssetStore fed by the MQTT ingest adapter (broker on ARVISX_MQTT_BROKER)."""
     def __init__(self):
-        self.assets = inject_prd_scenario()
         self.scenario = "prd"
+        self.store = None        # set when MQTT source is active
+        self._ingest = None
+        if os.environ.get("ARVISX_SOURCE", "sim").lower() == "mqtt":
+            self._start_mqtt()
+        else:
+            self.assets = inject_prd_scenario()
+
+    def _start_mqtt(self):
+        from arvisx.store import AssetStore
+        from arvisx.ingest.mqtt_adapter import MqttIngest
+        # Seed the fleet definition (ids/types/thresholds/maintenance = commissioning);
+        # live telemetry then arrives over MQTT and overrides the signals.
+        self.store = AssetStore.from_fleet_definition(healthy_community())
+        self.assets = self.store.snapshot()
+        self.scenario = "mqtt-live"
+        broker = os.environ.get("ARVISX_MQTT_BROKER", "localhost")
+        port = int(os.environ.get("ARVISX_MQTT_PORT", "1883"))
+        self._ingest = MqttIngest(self.store, broker=broker, port=port)
+        self._ingest.start(loop=False)   # background network loop
+
+    def current_assets(self):
+        return self.store.snapshot() if self.store is not None else self.assets
 
     def set_scenario(self, name: str):
+        if self.store is not None:
+            return  # live MQTT source — scenarios don't apply
         if name == "healthy":
             self.assets = healthy_community()
         else:
@@ -56,7 +80,7 @@ class _State:
         self.scenario = name
 
     def asset(self, asset_id: str):
-        return next((a for a in self.assets if a.asset_id == asset_id), None)
+        return next((a for a in self.current_assets() if a.asset_id == asset_id), None)
 
 
 def create_app():
@@ -70,23 +94,23 @@ def create_app():
 
     @app.get("/api/v1/community/overview")
     async def overview():
-        rep = build_report(state.assets)
+        rep = build_report(state.current_assets())
         return {"scenario": state.scenario, "generated_at": rep.generated_at.isoformat(),
                 "services": _jsonable(rep.services)}
 
     @app.get("/api/v1/community/risks")
     async def risks():
-        rep = build_report(state.assets)
+        rep = build_report(state.current_assets())
         return {"count": len(rep.risks), "risks": _jsonable(rep.risks)}
 
     @app.get("/api/v1/community/assets")
     async def assets():
-        rep = build_report(state.assets)
+        rep = build_report(state.current_assets())
         return {"count": len(rep.assets), "assets": _jsonable(rep.assets)}
 
     @app.get("/api/v1/community/report")
     async def report():
-        return _jsonable(build_report(state.assets))
+        return _jsonable(build_report(state.current_assets()))
 
     @app.get("/api/v1/asset/{asset_id}/advisory")
     async def advisory(asset_id: str):
@@ -110,7 +134,7 @@ def create_app():
     @app.post("/api/v1/scenario/{name}")
     async def scenario(name: str):
         state.set_scenario(name)
-        return {"status": "ok", "scenario": state.scenario, "assets": len(state.assets)}
+        return {"status": "ok", "scenario": state.scenario, "assets": len(state.current_assets())}
 
     @app.get("/")
     async def root():

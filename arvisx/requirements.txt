@@ -1,0 +1,4 @@
+# ArvisX extra deps (beyond the commercial ARVIS stack it reuses).
+paho-mqtt>=2.0      # MQTT ingest (Phase 2)
+python-dotenv>=1.0  # load repo .env for UnifiedLLM creds (Phase 1c)
+# fastapi + uvicorn come from the commercial stack.
