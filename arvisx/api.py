@@ -57,6 +57,8 @@ class _State:
         # Phase 7: institutional memory — warm-start from the SQLite store.
         self.db = ArvisxDb(os.environ.get("ARVISX_DB") or None)
         self.skillbook = Skillbook(self.db)
+        from arvisx.commissioning import CommissioningManager
+        self.commissioner = CommissioningManager(self.db)
         try:
             self.baselines.load_from(self.db)
             self.wo_store.load_from(self.db)
@@ -203,6 +205,56 @@ def create_app():
     @app.get("/api/v1/skillbook")
     async def skillbook_list():
         return {"skills": state.skillbook.all()}
+
+    # ── Commissioning wizard (Phase 11a) ────────────────────────────────
+    def _commission_call(fn):
+        from arvisx.commissioning import CommissioningError
+        try:
+            return _jsonable(fn().to_dict())
+        except CommissioningError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/v1/commission/building")
+    async def commission_create(payload: Dict[str, Any] = Body(...)):
+        name = (payload or {}).get("name", "").strip()
+        if not name:
+            raise HTTPException(400, "provide 'name'")
+        return _jsonable(state.commissioner.create_building(name).to_dict())
+
+    @app.get("/api/v1/commission/buildings")
+    async def commission_list():
+        return {"buildings": state.commissioner.list()}
+
+    @app.get("/api/v1/commission/building/{bid}")
+    async def commission_get(bid: str):
+        b = state.commissioner.get(bid)
+        if b is None:
+            raise HTTPException(404, f"unknown building {bid}")
+        return _jsonable(b.to_dict())
+
+    @app.post("/api/v1/commission/building/{bid}/services")
+    async def commission_services(bid: str, payload: Dict[str, Any] = Body(...)):
+        return _commission_call(lambda: state.commissioner.set_services(bid, (payload or {}).get("services", [])))
+
+    @app.post("/api/v1/commission/building/{bid}/assets")
+    async def commission_asset(bid: str, payload: Dict[str, Any] = Body(...)):
+        return _commission_call(lambda: state.commissioner.add_asset(bid, (payload or {}).get("asset", {})))
+
+    @app.post("/api/v1/commission/building/{bid}/signals")
+    async def commission_signal(bid: str, payload: Dict[str, Any] = Body(...)):
+        p = payload or {}
+        return _commission_call(lambda: state.commissioner.add_signal_map(
+            bid, p.get("source", ""), p.get("asset_id", ""), p.get("signal", "")))
+
+    @app.post("/api/v1/commission/building/{bid}/dependencies")
+    async def commission_deps(bid: str, payload: Dict[str, Any] = Body(...)):
+        p = payload or {}
+        return _commission_call(lambda: state.commissioner.set_dependencies(
+            bid, p.get("service", ""), p.get("nodes", [])))
+
+    @app.post("/api/v1/commission/building/{bid}/transition")
+    async def commission_transition(bid: str, payload: Dict[str, Any] = Body(...)):
+        return _commission_call(lambda: state.commissioner.transition(bid, (payload or {}).get("state", "")))
 
     @app.get("/api/v1/water")
     async def water():

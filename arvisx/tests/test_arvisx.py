@@ -762,6 +762,60 @@ def test_api_water_topology_impact():
     assert isinstance(imp, list) and any(i["service"] == "fire" for i in imp)
 
 
+# ── Phase 11a: commissioning (per-building config + gated state machine) ──
+def test_commissioning_full_flow():
+    from arvisx.commissioning import CommissioningManager, CommissioningState
+    m = CommissioningManager(_tmpdb())
+    b = m.create_building("Marina Residences")
+    assert b.state == "draft" and b.building_id.startswith("BLD-")
+    m.set_services(b.building_id, ["water", "power_backup"])
+    m.transition(b.building_id, "assets")
+    m.add_asset(b.building_id, {"id": "OHT-A", "type": "overhead_tank", "name": "Overhead Tank A"})
+    m.add_asset(b.building_id, {"id": "XFER-A", "type": "transfer_pump", "name": "Transfer Pump A"})
+    m.transition(b.building_id, "signals")
+    m.add_signal_map(b.building_id, "arvisx/OHT-A/level", "OHT-A", "tank_level_pct")
+    m.transition(b.building_id, "dependencies")
+    m.set_dependencies(b.building_id, "water",
+                       [{"asset_id": "XFER-A", "role": "transfer", "redundancy": "single"}])
+    m.transition(b.building_id, "learning")
+    final = m.transition(b.building_id, "operational")
+    assert final.state == "operational"
+    # persisted + reloads identically
+    again = m.get(b.building_id)
+    assert again.state == "operational" and len(again.assets) == 2 and again.dependencies["water"]
+
+
+def test_commissioning_gates_block_skips():
+    from arvisx.commissioning import CommissioningManager, CommissioningError
+    m = CommissioningManager(_tmpdb())
+    b = m.create_building("X")
+    # can't enter ASSETS without a service
+    import pytest
+    with pytest.raises(CommissioningError):
+        m.transition(b.building_id, "assets")
+    # can't jump straight to operational
+    m.set_services(b.building_id, ["water"])
+    with pytest.raises(CommissioningError):
+        m.transition(b.building_id, "operational")
+    # signal to a non-existent asset rejected
+    m.transition(b.building_id, "assets")
+    with pytest.raises(CommissioningError):
+        m.add_signal_map(b.building_id, "s", "NOPE", "x")
+
+
+def test_api_commissioning_wizard():
+    c = _client()
+    b = c.post("/api/v1/commission/building", json={"name": "Tower 5"}).json()
+    bid = b["building_id"]
+    assert c.post(f"/api/v1/commission/building/{bid}/services", json={"services": ["water"]}).json()["services"] == ["water"]
+    assert c.post(f"/api/v1/commission/building/{bid}/transition", json={"state": "assets"}).json()["state"] == "assets"
+    c.post(f"/api/v1/commission/building/{bid}/assets", json={"asset": {"id": "T1", "type": "overhead_tank", "name": "T1"}})
+    # gated: can't go operational mid-flow
+    assert c.post(f"/api/v1/commission/building/{bid}/transition", json={"state": "operational"}).status_code == 400
+    assert any(x["building_id"] == bid for x in c.get("/api/v1/commission/buildings").json()["buildings"])
+    assert c.get(f"/api/v1/commission/building/NOPE").status_code == 404
+
+
 # ── standalone runner ────────────────────────────────────────────────────
 def _main() -> int:
     fns = [g for n, g in sorted(globals().items()) if n.startswith("test_") and callable(g)]

@@ -51,7 +51,26 @@ class ArvisxDb:
                 building_id TEXT, scope TEXT, symptom TEXT, cause TEXT, action TEXT,
                 confidence REAL, times_seen INTEGER, confirmed INTEGER, last_seen TEXT, source TEXT,
                 PRIMARY KEY (building_id, scope, symptom));
+            CREATE TABLE IF NOT EXISTS buildings (
+                building_id TEXT PRIMARY KEY, name TEXT, state TEXT, data TEXT, updated_at TEXT);
             """)
+
+    # ── Building commissioning config ────────────────────────────────────
+    def save_building(self, building_id: str, name: str, state: str, data: Dict[str, Any]):
+        with self._lock, self._conn() as c:
+            c.execute("INSERT OR REPLACE INTO buildings (building_id, name, state, data, updated_at)"
+                      " VALUES (?,?,?,?,?)",
+                      (building_id, name, state, json.dumps(data, default=str), datetime.now().isoformat()))
+
+    def load_building(self, building_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT data FROM buildings WHERE building_id=?", (building_id,)).fetchone()
+            return json.loads(r["data"]) if r else None
+
+    def list_buildings(self) -> List[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            rows = c.execute("SELECT building_id, name, state FROM buildings ORDER BY building_id").fetchall()
+            return [dict(r) for r in rows]
 
     # ── Events / fault history ───────────────────────────────────────────
     def log_event(self, asset_id: str, asset_name: str, service: str, severity: str,
