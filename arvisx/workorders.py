@@ -70,11 +70,14 @@ class WorkOrderStore:
             return wo
 
 
-def sync_workorders(assets: List[Asset], store: WorkOrderStore, now: Optional[datetime] = None) -> Dict[str, int]:
+def sync_workorders(assets: List[Asset], store: WorkOrderStore, now: Optional[datetime] = None,
+                    zones=None, baselines=None, virtual: bool = False, fusion: bool = False) -> Dict[str, int]:
     """Reconcile work orders against the current risks: open new, refresh existing,
-    reopen recurrences, auto-close cleared ones. Returns a counts summary."""
+    reopen recurrences, auto-close cleared ones. Covers ALL risk sources — asset rules,
+    drift, virtual sensors, ghost (zones), and fusion — when those flags/inputs are passed.
+    Returns a counts summary."""
     now = now or datetime.now()
-    rep = build_report(assets, now)
+    rep = build_report(assets, now, baselines=baselines, virtual=virtual, zones=zones, fusion=fusion)
     by_id = {a.asset_id: a for a in assets}
     counts = {"opened": 0, "reopened": 0, "refreshed": 0, "auto_closed": 0}
     active_sigs = set()
@@ -86,14 +89,16 @@ def sync_workorders(assets: List[Asset], store: WorkOrderStore, now: Optional[da
             wo = store._by_sig.get(sig)
             if wo is None:
                 asset = by_id.get(risk.asset_id)
+                # Asset risks → rules-floor advisory; ghost/fusion risks (zone or
+                # already-grounded) carry their own cause+action in the risk detail.
                 adv = _rules_floor(asset, [risk]) if asset else None
                 wid = store._next_id()
                 store._by_sig[sig] = WorkOrder(
                     wo_id=wid, asset_id=risk.asset_id, asset_name=risk.asset_name,
                     service=risk.service, title=risk.message, priority=_PRIORITY[risk.severity],
                     severity=risk.severity,
-                    cause=(adv.root_cause if adv else risk.detail or risk.message),
-                    recommended_action=(adv.recommended_action if adv else "Inspect the asset."),
+                    cause=(adv.root_cause if adv else risk.message),
+                    recommended_action=(adv.recommended_action if adv else (risk.detail or "Inspect.")),
                     status=WorkOrderStatus.OPEN, signature=sig,
                     created_at=now, updated_at=now, last_seen_at=now,
                     history=[{"ts": now.isoformat(), "event": "opened", "by": "arvisx"}],

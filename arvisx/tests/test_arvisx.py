@@ -257,7 +257,8 @@ def test_workorders_reopen_on_recurrence():
 def test_api_workorders():
     c = _client()
     lst = c.get("/api/v1/workorders").json()
-    assert lst["count"] == 4
+    assert lst["count"] == 6                       # 4 asset + 2 ghost (energy)
+    assert any(w["service"] == "energy" for w in lst["work_orders"])   # ghost → ticket
     wid = lst["work_orders"][0]["wo_id"]
     # status transition
     upd = c.post(f"/api/v1/workorders/{wid}/status/in_progress").json()

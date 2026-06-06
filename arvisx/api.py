@@ -59,7 +59,10 @@ class _State:
 
     def sync_workorders(self):
         from arvisx.workorders import sync_workorders
-        return sync_workorders(self.current_assets(), self.wo_store)
+        zones = community_zones("healthy" if self.scenario == "healthy" else "prd")
+        return sync_workorders(self.current_assets(), self.wo_store, zones=zones,
+                               baselines=(self.baselines if self.store is not None else None),
+                               virtual=True, fusion=True)
 
     def report_now(self):
         # Drift learning only on a LIVE stream (MQTT) — a static sim snapshot has no
