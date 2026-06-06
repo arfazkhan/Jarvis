@@ -23,6 +23,8 @@ class AssetStore:
         self._lock = threading.Lock()
         self.last_update: Optional[datetime] = None
         self._updates = 0
+        self._ts: Dict[tuple, datetime] = {}            # (asset_id, signal) → last good update
+        self.quarantined: List[Dict[str, object]] = []  # rejected bad readings (sensor faults)
 
     @classmethod
     def from_fleet_definition(cls, assets: List[Asset]) -> "AssetStore":
@@ -31,6 +33,19 @@ class AssetStore:
     def apply_reading(self, asset_id: str, key: str, value) -> bool:
         """Apply one signal reading. Returns False for an unknown asset (the fleet
         must be commissioned first — we don't invent assets from stray topics)."""
+        # Signal-quality gate: impossible/garbage values are QUARANTINED, not stored —
+        # a glitchy sensor must not overwrite a good value or trigger a false equipment
+        # alarm. The bad reading is recorded so the report can flag the SENSOR.
+        from arvisx.signal_quality import check_value
+        if key not in ("online",):
+            flag, reason = check_value(key, value)
+            if flag == "bad":
+                with self._lock:
+                    if self._assets.get(asset_id) is None:
+                        return False
+                    self.quarantined.append({"asset_id": asset_id, "signal": key, "value": value,
+                                             "reason": reason, "ts": datetime.now().isoformat()})
+                return False
         with self._lock:
             a = self._assets.get(asset_id)
             if a is None:
@@ -44,9 +59,19 @@ class AssetStore:
                 a.online = bool(value)
             else:
                 a.signals[key] = value
+            self._ts[(asset_id, key)] = datetime.now()
             self.last_update = datetime.now()
             self._updates += 1
             return True
+
+    def stale_signals(self, max_age_s: float = 900.0, now: Optional[datetime] = None) -> List[tuple]:
+        """(asset_id, signal, age_s) for signals not updated within max_age_s — a frozen
+        live value looks current otherwise."""
+        now = now or datetime.now()
+        with self._lock:
+            return [(aid, sig, round((now - ts).total_seconds(), 1))
+                    for (aid, sig), ts in self._ts.items()
+                    if (now - ts).total_seconds() > max_age_s]
 
     def snapshot(self) -> List[Asset]:
         with self._lock:

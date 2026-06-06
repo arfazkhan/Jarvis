@@ -96,10 +96,10 @@ class _State:
             except Exception:
                 pass
             return build_report(assets, baselines=self.baselines, virtual=True, zones=zones,
-                                fusion=True, water=True)
+                                fusion=True, water=True, signal_quality=True)
         # Sim: instantaneous virtual sensors (cycling/duty/turnover) still apply;
         # baseline-dependent ones (power-creep/dry-run) abstain without history.
-        return build_report(assets, virtual=True, zones=zones, fusion=True, water=True)
+        return build_report(assets, virtual=True, zones=zones, fusion=True, water=True, signal_quality=True)
 
     def _start_mqtt(self):
         from arvisx.store import AssetStore
@@ -303,6 +303,17 @@ def create_app():
     async def commission_validate(bid: str, val_id: str, payload: Dict[str, Any] = Body(...)):
         return _commission_call(lambda: state.commissioner.answer_validation(
             bid, val_id, bool((payload or {}).get("is_normal"))))
+
+    @app.get("/api/v1/signal-quality")
+    async def signal_quality():
+        """Sensor health: quarantined bad readings, stale signals, and per-signal quality findings."""
+        rep = state.report_now()
+        sensor_risks = [r for r in rep.risks if "sensor" in r.message.lower()]
+        out = {"sensor_findings": _jsonable(sensor_risks)}
+        if state.store is not None:
+            out["quarantined"] = state.store.quarantined[-50:]
+            out["stale_signals"] = state.store.stale_signals()
+        return out
 
     @app.get("/api/v1/water")
     async def water():

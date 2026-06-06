@@ -989,6 +989,65 @@ def test_api_open_when_no_key():
     assert c.get("/api/v1/community/overview").status_code == 200
 
 
+# ── Phase 13: signal quality (bad-sensor robustness) ─────────────────────
+def test_check_value_range_and_garbage():
+    from arvisx.signal_quality import check_value
+    assert check_value("tank_level_pct", 150)[0] == "bad"      # impossible level
+    assert check_value("fuel_level_pct", -5)[0] == "bad"
+    assert check_value("current_a", 99999)[0] == "bad"         # CT glitch
+    assert check_value("tank_level_pct", 78)[0] == "good"
+    assert check_value("power_kw", None)[0] == "bad"
+    assert check_value("status_text", "running")[0] == "good"  # non-numeric passes
+
+
+def test_store_quarantines_bad_reading():
+    from arvisx.store import AssetStore
+    store = AssetStore.from_fleet_definition(healthy_community())
+    assert store.apply_reading("UG-TANK-01", "tank_level_pct", 60) is True      # good stored
+    assert store.apply_reading("UG-TANK-01", "tank_level_pct", 250) is False    # impossible → quarantined
+    a = store.asset("UG-TANK-01")
+    assert a.signals["tank_level_pct"] == 60                    # good value NOT overwritten by garbage
+    assert any(q["value"] == 250 for q in store.quarantined)
+
+
+def test_bad_sensor_becomes_a_finding_not_a_false_alarm():
+    from arvisx.models import Asset, AssetType
+    # a CT clamp glitching to 99999A → flagged as a SENSOR fault, not an equipment fault
+    a = Asset("P9", "Pump 9", AssetType.BOOSTER_PUMP, signals={"current_a": 99999})
+    rep = build_report([a], signal_quality=True)
+    sensor = [r for r in rep.risks if "sensor" in r.message.lower()]
+    assert sensor and "current_a" in sensor[0].message
+    assert "sensor fault" in (sensor[0].message + sensor[0].detail).lower()
+
+
+def test_spike_vs_baseline_flagged_as_sensor():
+    from arvisx.learning import BaselineStore
+    from arvisx.models import Asset, AssetType
+    b = BaselineStore()
+    for _ in range(30):
+        b.observe("P1", "power_kw", 5.0)                        # learned normal ~5kW
+    a = Asset("P1", "Pump 1", AssetType.BOOSTER_PUMP, signals={"power_kw": 60.0})  # 60kW = wild spike
+    rep = build_report([a], baselines=b, signal_quality=True)
+    assert any("spike" in r.message.lower() for r in rep.risks)
+
+
+def test_stale_signal_detection():
+    from arvisx.store import AssetStore
+    from datetime import datetime, timedelta
+    store = AssetStore.from_fleet_definition(healthy_community())
+    store.apply_reading("UG-TANK-01", "tank_level_pct", 70)
+    assert store.stale_signals(max_age_s=900) == []            # fresh
+    future = datetime.now() + timedelta(hours=1)
+    stale = store.stale_signals(max_age_s=900, now=future)
+    assert any(s[0] == "UG-TANK-01" and s[1] == "tank_level_pct" for s in stale)
+
+
+def test_api_signal_quality_endpoint():
+    c = _client()
+    sq = c.get("/api/v1/signal-quality").json()
+    assert "sensor_findings" in sq
+
+
 # ── standalone runner ────────────────────────────────────────────────────
 def _main() -> int:
     fns = [g for n, g in sorted(globals().items()) if n.startswith("test_") and callable(g)]

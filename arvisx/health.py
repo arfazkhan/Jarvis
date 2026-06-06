@@ -204,7 +204,8 @@ _SEV_ORDER = {Severity.CRITICAL: 0, Severity.WARNING: 1, Severity.MAINTENANCE: 2
 
 
 def build_report(assets: List[Asset], now: Optional[datetime] = None, baselines=None,
-                 virtual: bool = False, zones=None, fusion: bool = False, water: bool = False) -> CommunityReport:
+                 virtual: bool = False, zones=None, fusion: bool = False, water: bool = False,
+                 signal_quality: bool = False) -> CommunityReport:
     """Build the community report. If `baselines` (a learning.BaselineStore) is given,
     learned-drift risks are added alongside the fixed-threshold rules. If `virtual` is
     set, PM virtual sensors derive v_* indicators (power-creep, cycling, dry-run, …) and
@@ -224,6 +225,12 @@ def build_report(assets: List[Asset], now: Optional[datetime] = None, baselines=
         h, r = assess_asset(a, now)
         healths.append(h)
         risks.extend(r)
+        if signal_quality:
+            try:
+                from arvisx.signal_quality import assess_quality_risks
+                risks.extend(assess_quality_risks(a, baselines, now))
+            except Exception:
+                pass
         if _vrisks:
             risks.extend(_vrisks)
             h.alerts.extend(x.message.split(" ", 1)[1] if " " in x.message else x.message for x in _vrisks)
