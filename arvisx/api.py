@@ -45,13 +45,19 @@ class _State:
     """Community state. Default = in-memory simulator. With ARVISX_SOURCE=mqtt it is
     a live AssetStore fed by the MQTT ingest adapter (broker on ARVISX_MQTT_BROKER)."""
     def __init__(self):
+        from arvisx.workorders import WorkOrderStore
         self.scenario = "prd"
         self.store = None        # set when MQTT source is active
         self._ingest = None
+        self.wo_store = WorkOrderStore()
         if os.environ.get("ARVISX_SOURCE", "sim").lower() == "mqtt":
             self._start_mqtt()
         else:
             self.assets = inject_prd_scenario()
+
+    def sync_workorders(self):
+        from arvisx.workorders import sync_workorders
+        return sync_workorders(self.current_assets(), self.wo_store)
 
     def _start_mqtt(self):
         from arvisx.store import AssetStore
@@ -130,6 +136,34 @@ def create_app():
                 llm = None
         adv = await investigate_asset(a, rks, llm=llm)
         return _jsonable(adv)
+
+    @app.post("/api/v1/workorders/sync")
+    async def wo_sync():
+        return {"status": "ok", **state.sync_workorders()}
+
+    @app.get("/api/v1/workorders")
+    async def wo_list():
+        state.sync_workorders()   # keep tickets reconciled with current risks
+        return {"count": len(state.wo_store.all()), "work_orders": _jsonable(state.wo_store.all())}
+
+    @app.get("/api/v1/workorders/{wo_id}")
+    async def wo_get(wo_id: str):
+        wo = state.wo_store.get(wo_id)
+        if wo is None:
+            raise HTTPException(404, f"unknown work order {wo_id}")
+        return _jsonable(wo)
+
+    @app.post("/api/v1/workorders/{wo_id}/status/{status}")
+    async def wo_status(wo_id: str, status: str):
+        from arvisx.models import WorkOrderStatus
+        try:
+            st = WorkOrderStatus(status)
+        except ValueError:
+            raise HTTPException(400, f"invalid status '{status}'")
+        wo = state.wo_store.set_status(wo_id, st)
+        if wo is None:
+            raise HTTPException(404, f"unknown work order {wo_id}")
+        return _jsonable(wo)
 
     @app.post("/api/v1/scenario/{name}")
     async def scenario(name: str):

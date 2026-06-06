@@ -215,6 +215,57 @@ def test_mqtt_loopback_drives_risks():
     assert "test overdue" in msgs                    # fire pump iso-date telemetry
 
 
+# ── Phase 3: work orders ─────────────────────────────────────────────────
+def test_workorders_open_from_risks():
+    from arvisx.workorders import WorkOrderStore, sync_workorders
+    store = WorkOrderStore()
+    c = sync_workorders(inject_prd_scenario(), store)
+    assert c["opened"] == 4                       # one per PRD risk
+    wos = store.all()
+    # priority derived from severity; advisory cause attached.
+    booster = next(w for w in wos if w.asset_id == "BOOST-PUMP-01")
+    assert booster.priority.value == "P2"         # warning
+    assert "wear" in booster.cause.lower()
+    assert booster.recommended_action
+    gen = next(w for w in wos if w.asset_id == "GEN-01")
+    assert gen.priority.value == "P3"             # maintenance
+
+
+def test_workorders_dedup_and_autoclose():
+    from arvisx.workorders import WorkOrderStore, sync_workorders
+    store = WorkOrderStore()
+    sync_workorders(inject_prd_scenario(), store)
+    c2 = sync_workorders(inject_prd_scenario(), store)     # same risks again
+    assert c2["opened"] == 0 and c2["refreshed"] == 4      # dedup — no new tickets
+    assert len(store.all()) == 4
+    # risks clear → tickets auto-close
+    c3 = sync_workorders(healthy_community(), store)
+    assert c3["auto_closed"] == 4
+    assert all(w.status.value == "done" for w in store.all())
+
+
+def test_workorders_reopen_on_recurrence():
+    from arvisx.workorders import WorkOrderStore, sync_workorders
+    store = WorkOrderStore()
+    sync_workorders(inject_prd_scenario(), store)
+    sync_workorders(healthy_community(), store)            # auto-closed
+    c = sync_workorders(inject_prd_scenario(), store)      # same problems return
+    assert c["reopened"] == 4 and c["opened"] == 0         # same WOs reopened, not duplicated
+    assert len(store.all()) == 4
+
+
+def test_api_workorders():
+    c = _client()
+    lst = c.get("/api/v1/workorders").json()
+    assert lst["count"] == 4
+    wid = lst["work_orders"][0]["wo_id"]
+    # status transition
+    upd = c.post(f"/api/v1/workorders/{wid}/status/in_progress").json()
+    assert upd["status"] == "in_progress"
+    assert c.post(f"/api/v1/workorders/{wid}/status/bogus").status_code == 400
+    assert c.get("/api/v1/workorders/NOPE").status_code == 404
+
+
 # ── standalone runner ────────────────────────────────────────────────────
 def _main() -> int:
     fns = [g for n, g in sorted(globals().items()) if n.startswith("test_") and callable(g)]

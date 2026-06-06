@@ -160,6 +160,43 @@ class Advisory:
     source: str = "rules"                # "rules" (offline floor) | "llm+rules"
 
 
+class Priority(str, Enum):
+    P1 = "P1"   # critical — immediate
+    P2 = "P2"   # warning
+    P3 = "P3"   # maintenance / scheduled
+    P4 = "P4"   # informational
+
+
+class WorkOrderStatus(str, Enum):
+    OPEN = "open"
+    ACK = "acknowledged"
+    IN_PROGRESS = "in_progress"
+    DONE = "done"
+    CANCELLED = "cancelled"
+
+
+@dataclass
+class WorkOrder:
+    """A trackable maintenance ticket generated from a risk, carrying the grounded
+    advisory so whoever acts on it has the cause + the field check, not just an alert."""
+    wo_id: str
+    asset_id: str
+    asset_name: str
+    service: ServiceType
+    title: str
+    priority: Priority
+    severity: Severity
+    cause: str                      # from the grounded (rules-floor) advisory
+    recommended_action: str
+    status: WorkOrderStatus
+    signature: str                  # (asset, risk-kind) — for dedup / auto-close
+    created_at: datetime
+    updated_at: datetime
+    last_seen_at: datetime          # last cycle the underlying risk was still active
+    assignee: Optional[str] = None  # FM / vendor
+    history: List[Dict[str, Any]] = field(default_factory=list)
+
+
 @dataclass
 class CommunityReport:
     generated_at: datetime
