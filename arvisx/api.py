@@ -16,6 +16,7 @@ Endpoints (prefix /api/v1):
 """
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
@@ -24,6 +25,8 @@ from typing import Any, Dict, List
 
 from arvisx.health import assess_asset, build_report
 from arvisx.simulator import community_zones, healthy_community, inject_prd_scenario
+
+logger = logging.getLogger("arvisx.api")
 
 
 def _jsonable(obj: Any) -> Any:
@@ -129,11 +132,32 @@ class _State:
 
 
 def create_app():
-    from fastapi import Body, FastAPI, HTTPException
+    import hmac
+    from fastapi import Body, FastAPI, HTTPException, Request
     from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import JSONResponse
 
-    app = FastAPI(title="ArvisX — Residential Operations Intelligence", version="0.1.0-phase1b")
-    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+    app = FastAPI(title="ArvisX — Residential Operations Intelligence", version="0.2.0")
+    # CORS: lock to configured origins when ARVISX_CORS is set, else open (dev).
+    _origins = [o.strip() for o in os.environ.get("ARVISX_CORS", "*").split(",") if o.strip()]
+    app.add_middleware(CORSMiddleware, allow_origins=_origins, allow_methods=["*"], allow_headers=["*"])
+
+    # ── API-key auth ────────────────────────────────────────────────────
+    # When ARVISX_API_KEY is set, every /api/v1 call must present it as
+    # `Authorization: Bearer <key>` or `X-API-Key: <key>`. Unset = open (dev) + warn.
+    _api_key = os.environ.get("ARVISX_API_KEY", "").strip()
+    if not _api_key:
+        logger.warning("[ArvisX] ARVISX_API_KEY not set — API is OPEN (dev mode). Set it for any networked pilot.")
+
+    @app.middleware("http")
+    async def _auth(request: Request, call_next):
+        if _api_key and request.url.path.startswith("/api/v1"):
+            auth = request.headers.get("authorization", "")
+            provided = auth[7:] if auth.lower().startswith("bearer ") else request.headers.get("x-api-key", "")
+            if not provided or not hmac.compare_digest(provided, _api_key):
+                return JSONResponse({"detail": "unauthorized — missing/invalid API key"}, status_code=401)
+        return await call_next(request)
+
     state = _State()
     app.state.community = state
 

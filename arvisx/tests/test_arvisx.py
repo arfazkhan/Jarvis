@@ -965,6 +965,30 @@ def test_api_investigate_and_monitor():
     assert c.post("/api/v1/investigate/NOPE").status_code == 404
 
 
+# ── API auth ─────────────────────────────────────────────────────────────
+def test_api_auth_enforced_when_key_set():
+    import tempfile, os as _os
+    from fastapi.testclient import TestClient
+    from arvisx.api import create_app
+    _os.environ["ARVISX_DB"] = _os.path.join(tempfile.mkdtemp(), "auth.db")
+    _os.environ["ARVISX_API_KEY"] = "secret-token-123"
+    try:
+        c = TestClient(create_app())
+        assert c.get("/api/v1/community/overview").status_code == 401            # no key
+        assert c.get("/api/v1/community/overview", headers={"X-API-Key": "wrong"}).status_code == 401
+        assert c.get("/api/v1/community/overview", headers={"X-API-Key": "secret-token-123"}).status_code == 200
+        assert c.get("/api/v1/community/overview",
+                     headers={"Authorization": "Bearer secret-token-123"}).status_code == 200
+        assert c.get("/").status_code == 200                                     # root not gated
+    finally:
+        _os.environ.pop("ARVISX_API_KEY", None)
+
+
+def test_api_open_when_no_key():
+    c = _client()                                  # no ARVISX_API_KEY → open (dev)
+    assert c.get("/api/v1/community/overview").status_code == 200
+
+
 # ── standalone runner ────────────────────────────────────────────────────
 def _main() -> int:
     fns = [g for n, g in sorted(globals().items()) if n.startswith("test_") and callable(g)]
