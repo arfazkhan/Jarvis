@@ -325,6 +325,62 @@ def test_drift_flows_into_report():
     assert any("drifting from its learned normal" in r.message for r in rep.risks)
 
 
+# ── Phase 5a: PM virtual sensors ─────────────────────────────────────────
+def _mk(asset_type, **signals):
+    from arvisx.models import Asset
+    return Asset("VS-01", "VS Pump", asset_type, signals=signals)
+
+
+def test_vsensor_short_cycling_and_duty():
+    from arvisx.virtual_sensors import derive_all
+    from arvisx.models import AssetType
+    a = _mk(AssetType.BOOSTER_PUMP, starts_today=144, runtime_today_hours=23.0, power_kw=3.0)
+    readings, risks = derive_all(a)
+    assert a.signals["v_cycling_per_hour"] == 6.0           # 144/24
+    assert a.signals["v_duty_cycle"] == 0.96
+    msgs = " ".join(r.message.lower() for r in risks)
+    assert "short-cycling" in msgs and "near-continuously" in msgs
+
+
+def test_vsensor_powercreep_abstains_without_history():
+    from arvisx.virtual_sensors import derive_all
+    from arvisx.models import AssetType
+    a = _mk(AssetType.BOOSTER_PUMP, power_kw=3.0)
+    readings, risks = derive_all(a, baselines=None)         # no learned normal
+    assert "v_power_creep_sigma" not in a.signals           # abstains, no fabrication
+    assert all("power creep" not in r.message.lower() for r in risks)
+
+
+def test_vsensor_dry_run_detected():
+    from arvisx.virtual_sensors import derive_all
+    from arvisx.learning import BaselineStore
+    from arvisx.models import AssetType
+    b = BaselineStore()
+    for _ in range(30):
+        b.observe("VS-01", "power_kw", 3.0)                 # learned normal ~3kW
+    a = _mk(AssetType.BOOSTER_PUMP, power_kw=1.0)           # now pulling ~1/3 → dry-run
+    _, risks = derive_all(a, baselines=b)
+    assert any("dry-run" in r.message.lower() for r in risks)
+
+
+def test_degradation_demo_catches_wear_from_power_alone():
+    from arvisx.degradation import run_demo
+    asset, baselines, series = run_demo()
+    rep = build_report([asset], baselines=baselines, virtual=True)
+    creep = [r for r in rep.risks if "power creep" in r.message.lower()]
+    assert len(creep) == 1                                  # caught
+    # and NOT duplicated by generic drift on power_kw
+    assert not any("power_kw drifting" in r.message for r in rep.risks)
+
+
+def test_vsensor_abstains_with_no_relevant_signals():
+    from arvisx.virtual_sensors import derive_all
+    from arvisx.models import AssetType
+    a = _mk(AssetType.FIRE_PANEL, active_faults=0)          # no power/runtime/starts
+    readings, risks = derive_all(a)
+    assert readings == [] and risks == []
+
+
 # ── standalone runner ────────────────────────────────────────────────────
 def _main() -> int:
     fns = [g for n, g in sorted(globals().items()) if n.startswith("test_") and callable(g)]

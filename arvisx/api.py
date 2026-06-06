@@ -67,8 +67,10 @@ class _State:
         assets = self.current_assets()
         if self.store is not None:
             self.baselines.learn_from_assets(assets)
-            return build_report(assets, baselines=self.baselines)
-        return build_report(assets)
+            return build_report(assets, baselines=self.baselines, virtual=True)
+        # Sim: instantaneous virtual sensors (cycling/duty/turnover) still apply;
+        # baseline-dependent ones (power-creep/dry-run) abstain without history.
+        return build_report(assets, virtual=True)
 
     def _start_mqtt(self):
         from arvisx.store import AssetStore

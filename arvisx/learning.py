@@ -88,11 +88,15 @@ class BaselineStore:
         return (rmed - med) / (_MAD_K * mad)
 
 
-def drift_risks(asset: Asset, baselines: BaselineStore, now: Optional[datetime] = None) -> List[Risk]:
-    """Drift risks for one asset's numeric signals (abstains where history is thin)."""
+def drift_risks(asset: Asset, baselines: BaselineStore, now: Optional[datetime] = None,
+                exclude=()) -> List[Risk]:
+    """Drift risks for one asset's numeric signals (abstains where history is thin).
+    `exclude` = signal keys already owned by a named virtual sensor (e.g. power_kw →
+    PowerCreep) so the same physical cause doesn't raise two risks / two tickets."""
     out: List[Risk] = []
+    _ex = set(exclude)
     for k, v in (asset.signals or {}).items():
-        if not _is_numeric(v) or _SKIP.search(k):
+        if not _is_numeric(v) or _SKIP.search(k) or k in _ex or k.startswith("v_"):
             continue
         z = baselines.drift_z(asset.asset_id, k)
         if z is None or abs(z) < DRIFT_Z:
