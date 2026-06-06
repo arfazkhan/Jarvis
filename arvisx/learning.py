@@ -87,6 +87,24 @@ class BaselineStore:
         rmed = statistics.median(recent)
         return (rmed - med) / (_MAD_K * mad)
 
+    def save_to(self, db) -> int:
+        """Persist each (asset, signal) history so drift learning survives a restart."""
+        with self._lock:
+            items = [(k, list(v)) for k, v in self._hist.items()]
+        for (asset_id, signal), hist in items:
+            db.save_baseline(asset_id, signal, hist)
+        return len(items)
+
+    def load_from(self, db) -> int:
+        n = 0
+        for asset_id, signal, values in db.load_baselines():
+            with self._lock:
+                dq = self._hist[(asset_id, signal)]
+                dq.clear()
+                dq.extend(float(v) for v in values)
+            n += 1
+        return n
+
 
 def drift_risks(asset: Asset, baselines: BaselineStore, now: Optional[datetime] = None,
                 exclude=()) -> List[Risk]:

@@ -556,6 +556,97 @@ def test_api_reason_endpoints_graceful():
     assert c.post("/api/v1/ask", json={}).status_code == 400
 
 
+# ── Phase 7: persistence + skillbook + outcome feedback ──────────────────
+def _tmpdb():
+    import tempfile, os as _os
+    from arvisx.persistence import ArvisxDb
+    return ArvisxDb(path=_os.path.join(tempfile.mkdtemp(), "t.db"), building_id="test")
+
+
+def test_baseline_warmstart_persists():
+    from arvisx.learning import BaselineStore
+    db = _tmpdb()
+    b1 = BaselineStore()
+    _feed(b1, "P1", "power_kw", [5.0 + (i % 3 - 1) * 0.1 for i in range(35)] + [7.5] * 5)
+    z_before = b1.drift_z("P1", "power_kw")
+    b1.save_to(db)
+    # fresh store, warm-started from disk → drift still detected (learning survived restart)
+    b2 = BaselineStore()
+    assert b2.drift_z("P1", "power_kw") is None              # empty before load
+    b2.load_from(db)
+    z_after = b2.drift_z("P1", "power_kw")
+    assert z_after is not None and abs(z_after - z_before) < 0.01
+
+
+def test_event_history_logged():
+    db = _tmpdb()
+    db.log_event("GEN-01", "Generator 1", "power_backup", "critical", "fault", "active fault")
+    h = db.history("GEN-01")
+    assert len(h) == 1 and h[0]["message"] == "fault"
+
+
+def test_skillbook_record_and_recall():
+    from arvisx.skillbook import Skillbook
+    from arvisx.models import Asset, AssetType, Risk, ServiceType, Severity
+    sb = Skillbook(_tmpdb())
+    a = Asset("BP-1", "Booster Pump 1", AssetType.BOOSTER_PUMP)
+    r = Risk("BP-1", "Booster Pump 1", ServiceType.WATER, Severity.WARNING,
+             "Booster Pump 1 power creep (3.4σ above its own normal)", "")
+    assert sb.recall(a, r) is None                            # nothing learned yet
+    sb.record(a, r, "Bearing wear", "Inspect bearings")
+    s = sb.recall(a, r)
+    assert s and s["cause"] == "Bearing wear" and s["confirmed"] == 0
+
+
+def test_outcome_feedback_confirms_skill():
+    from arvisx.skillbook import Skillbook
+    from arvisx.models import Asset, AssetType, Risk, ServiceType, Severity
+    sb = Skillbook(_tmpdb())
+    a = Asset("BP-9", "Booster Pump 9", AssetType.BOOSTER_PUMP)
+    r = Risk("BP-9", "Booster Pump 9", ServiceType.WATER, Severity.WARNING,
+             "Booster Pump 9 power creep (5.0σ above its own normal)", "")
+    sb.record_confirmed(a.asset_type.value, "power creep (#σ above its own normal)",
+                        "Worn bearing — replaced", "Replace bearing")
+    note = sb.recall_note(a, r)
+    assert note and "CONFIRMED" in note and "Worn bearing" in note   # institutional memory recalled
+
+
+def test_workorder_close_teaches_and_persists():
+    from arvisx.workorders import WorkOrderStore, sync_workorders
+    from arvisx.skillbook import Skillbook
+    db = _tmpdb(); sb = Skillbook(db); store = WorkOrderStore()
+    sync_workorders(inject_prd_scenario(), store, db=db, skillbook=sb)
+    booster = next(w for w in store.all() if w.asset_id == "BOOST-PUMP-01")
+    store.close_with_cause(booster.wo_id, "Worn impeller confirmed", "Replace impeller", skillbook=sb)
+    # event history + a confirmed skill now exist
+    assert any(e["asset_id"] == "BOOST-PUMP-01" for e in db.history())
+    confirmed = [s for s in sb.all() if s["confirmed"]]
+    assert confirmed and confirmed[0]["cause"] == "Worn impeller confirmed"
+    # WO persistence round-trips
+    store.save_to(db)
+    store2 = WorkOrderStore(); store2.load_from(db)
+    assert any(w.cause == "Worn impeller confirmed" for w in store2.all())
+
+
+def test_api_memory_endpoints():
+    import tempfile, os as _os
+    _os.environ["ARVISX_DB"] = _os.path.join(tempfile.mkdtemp(), "api.db")
+    try:
+        c = _client()
+        c.get("/api/v1/workorders")                          # triggers sync → events + skills
+        wid = c.get("/api/v1/workorders").json()["work_orders"][0]["wo_id"]
+        closed = c.post(f"/api/v1/workorders/{wid}/close", json={"actual_cause": "Bearing failure"}).json()
+        assert closed["status"] == "done" and "Bearing failure" in closed["cause"]
+        assert c.post(f"/api/v1/workorders/{wid}/close", json={}).status_code == 400
+        skills = c.get("/api/v1/skillbook").json()["skills"]
+        assert any(s["confirmed"] for s in skills)
+        # asset history populated
+        hist = c.get("/api/v1/asset/BOOST-PUMP-01/history").json()
+        assert len(hist["events"]) >= 1
+    finally:
+        _os.environ.pop("ARVISX_DB", None)
+
+
 # ── standalone runner ────────────────────────────────────────────────────
 def _main() -> int:
     fns = [g for n, g in sorted(globals().items()) if n.startswith("test_") and callable(g)]

@@ -47,11 +47,21 @@ class _State:
     def __init__(self):
         from arvisx.workorders import WorkOrderStore
         from arvisx.learning import BaselineStore
+        from arvisx.persistence import ArvisxDb
+        from arvisx.skillbook import Skillbook
         self.scenario = "prd"
         self.store = None        # set when MQTT source is active
         self._ingest = None
         self.wo_store = WorkOrderStore()
         self.baselines = BaselineStore()
+        # Phase 7: institutional memory — warm-start from the SQLite store.
+        self.db = ArvisxDb(os.environ.get("ARVISX_DB") or None)
+        self.skillbook = Skillbook(self.db)
+        try:
+            self.baselines.load_from(self.db)
+            self.wo_store.load_from(self.db)
+        except Exception:
+            pass
         if os.environ.get("ARVISX_SOURCE", "sim").lower() == "mqtt":
             self._start_mqtt()
         else:
@@ -60,9 +70,14 @@ class _State:
     def sync_workorders(self):
         from arvisx.workorders import sync_workorders
         zones = community_zones("healthy" if self.scenario == "healthy" else "prd")
-        return sync_workorders(self.current_assets(), self.wo_store, zones=zones,
-                               baselines=(self.baselines if self.store is not None else None),
-                               virtual=True, fusion=True)
+        out = sync_workorders(self.current_assets(), self.wo_store, zones=zones,
+                              baselines=(self.baselines if self.store is not None else None),
+                              virtual=True, fusion=True, db=self.db, skillbook=self.skillbook)
+        try:
+            self.wo_store.save_to(self.db)
+        except Exception:
+            pass
+        return out
 
     def report_now(self):
         # Drift learning only on a LIVE stream (MQTT) — a static sim snapshot has no
@@ -71,6 +86,10 @@ class _State:
         zones = community_zones("healthy" if self.scenario == "healthy" else "prd")
         if self.store is not None:
             self.baselines.learn_from_assets(assets)
+            try:
+                self.baselines.save_to(self.db)        # persist learned normals
+            except Exception:
+                pass
             return build_report(assets, baselines=self.baselines, virtual=True, zones=zones, fusion=True)
         # Sim: instantaneous virtual sensors (cycling/duty/turnover) still apply;
         # baseline-dependent ones (power-creep/dry-run) abstain without history.
@@ -152,7 +171,36 @@ def create_app():
             except Exception:
                 llm = None
         adv = await investigate_asset(a, rks, llm=llm)
-        return _jsonable(adv)
+        out = _jsonable(adv)
+        # Institutional memory: surface a prior learned skill for the leading risk.
+        if rks:
+            note = state.skillbook.recall_note(a, rks[0])
+            if note:
+                out["institutional_memory"] = note
+        return out
+
+    @app.get("/api/v1/asset/{asset_id}/history")
+    async def asset_history(asset_id: str):
+        return {"asset_id": asset_id, "events": state.db.history(asset_id)}
+
+    @app.post("/api/v1/workorders/{wo_id}/close")
+    async def wo_close(wo_id: str, payload: Dict[str, Any] = Body(...)):
+        cause = (payload or {}).get("actual_cause", "").strip()
+        if not cause:
+            raise HTTPException(400, "provide 'actual_cause'")
+        wo = state.wo_store.close_with_cause(wo_id, cause, (payload or {}).get("action", ""),
+                                             skillbook=state.skillbook, by=(payload or {}).get("by", "vendor"))
+        if wo is None:
+            raise HTTPException(404, f"unknown work order {wo_id}")
+        try:
+            state.wo_store.save_to(state.db)
+        except Exception:
+            pass
+        return _jsonable(wo)
+
+    @app.get("/api/v1/skillbook")
+    async def skillbook_list():
+        return {"skills": state.skillbook.all()}
 
     @app.post("/api/v1/workorders/sync")
     async def wo_sync():

@@ -235,6 +235,7 @@ class WorkOrder:
     created_at: datetime
     updated_at: datetime
     last_seen_at: datetime          # last cycle the underlying risk was still active
+    asset_type: str = ""            # equipment class — outcome feedback → skillbook scope
     assignee: Optional[str] = None  # FM / vendor
     history: List[Dict[str, Any]] = field(default_factory=list)
 

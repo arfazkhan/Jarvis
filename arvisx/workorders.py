@@ -20,7 +20,7 @@ from typing import Dict, List, Optional
 from arvisx.advisory import _rules_floor
 from arvisx.health import build_report
 from arvisx.models import (
-    Asset, Priority, Risk, Severity, WorkOrder, WorkOrderStatus,
+    Asset, Priority, Risk, ServiceType, Severity, WorkOrder, WorkOrderStatus,
 )
 
 _PRIORITY = {
@@ -59,6 +59,54 @@ class WorkOrderStore:
     def get(self, wo_id: str) -> Optional[WorkOrder]:
         return next((w for w in self._by_sig.values() if w.wo_id == wo_id), None)
 
+    def close_with_cause(self, wo_id: str, actual_cause: str, action: str = "",
+                         skillbook=None, by: str = "vendor") -> Optional[WorkOrder]:
+        """Outcome feedback: close a ticket with the CONFIRMED cause → teach the skillbook
+        so the next occurrence on this equipment class leads with the real cause."""
+        with self._lock:
+            wo = next((w for w in self._by_sig.values() if w.wo_id == wo_id), None)
+            if wo is None:
+                return None
+            wo.status = WorkOrderStatus.DONE
+            wo.updated_at = datetime.now()
+            wo.cause = actual_cause or wo.cause
+            if action:
+                wo.recommended_action = action
+            wo.history.append({"ts": wo.updated_at.isoformat(),
+                               "event": f"closed — confirmed cause: {actual_cause}", "by": by})
+        if skillbook is not None and wo.asset_type:
+            symptom = wo.signature.split("::", 1)[1] if "::" in wo.signature else wo.title.lower()
+            skillbook.record_confirmed(wo.asset_type, symptom, actual_cause,
+                                       action or wo.recommended_action, source=by)
+        return wo
+
+    def save_to(self, db) -> None:
+        from dataclasses import asdict
+        for wo in self._by_sig.values():
+            db.save_work_order(wo.wo_id, wo.signature, wo.status.value, asdict(wo))
+
+    def load_from(self, db) -> int:
+        for d in db.load_work_orders():
+            try:
+                wo = WorkOrder(
+                    wo_id=d["wo_id"], asset_id=d["asset_id"], asset_name=d["asset_name"],
+                    service=ServiceType(d["service"]), title=d["title"],
+                    priority=Priority(d["priority"]), severity=Severity(d["severity"]),
+                    cause=d["cause"], recommended_action=d["recommended_action"],
+                    status=WorkOrderStatus(d["status"]), signature=d["signature"],
+                    asset_type=d.get("asset_type", ""),
+                    created_at=datetime.fromisoformat(d["created_at"]),
+                    updated_at=datetime.fromisoformat(d["updated_at"]),
+                    last_seen_at=datetime.fromisoformat(d["last_seen_at"]),
+                    assignee=d.get("assignee"), history=d.get("history", []),
+                )
+                self._by_sig[wo.signature] = wo
+                n = int(wo.wo_id.split("-")[1]) if "-" in wo.wo_id else 0
+                self._seq = max(self._seq, n)
+            except Exception:
+                continue
+        return len(self._by_sig)
+
     def set_status(self, wo_id: str, status: WorkOrderStatus, by: str = "operator") -> Optional[WorkOrder]:
         with self._lock:
             wo = next((w for w in self._by_sig.values() if w.wo_id == wo_id), None)
@@ -71,7 +119,8 @@ class WorkOrderStore:
 
 
 def sync_workorders(assets: List[Asset], store: WorkOrderStore, now: Optional[datetime] = None,
-                    zones=None, baselines=None, virtual: bool = False, fusion: bool = False) -> Dict[str, int]:
+                    zones=None, baselines=None, virtual: bool = False, fusion: bool = False,
+                    db=None, skillbook=None) -> Dict[str, int]:
     """Reconcile work orders against the current risks: open new, refresh existing,
     reopen recurrences, auto-close cleared ones. Covers ALL risk sources — asset rules,
     drift, virtual sensors, ghost (zones), and fusion — when those flags/inputs are passed.
@@ -100,10 +149,17 @@ def sync_workorders(assets: List[Asset], store: WorkOrderStore, now: Optional[da
                     cause=(adv.root_cause if adv else risk.message),
                     recommended_action=(adv.recommended_action if adv else (risk.detail or "Inspect.")),
                     status=WorkOrderStatus.OPEN, signature=sig,
+                    asset_type=(asset.asset_type.value if asset else ""),
                     created_at=now, updated_at=now, last_seen_at=now,
                     history=[{"ts": now.isoformat(), "event": "opened", "by": "arvisx"}],
                 )
                 counts["opened"] += 1
+                # Institutional memory: log the fault event + record the (unconfirmed) pattern.
+                if db is not None:
+                    db.log_event(risk.asset_id, risk.asset_name, risk.service.value,
+                                 risk.severity.value, risk.message, risk.detail, now)
+                if skillbook is not None and asset is not None and adv is not None:
+                    skillbook.record(asset, risk, adv.root_cause, adv.recommended_action, confirmed=False)
             elif wo.status in (WorkOrderStatus.DONE, WorkOrderStatus.CANCELLED):
                 # Risk came back after the ticket was closed → reopen the same WO.
                 wo.status = WorkOrderStatus.OPEN
