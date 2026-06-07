@@ -1,0 +1,8 @@
+# ArvisX pilot — self-contained API image deps (deterministic floor, LLM OFF).
+# This pins everything the standalone pilot needs WITHOUT the commercial ARVIS stack.
+# The LLM layer (agent_unified.UnifiedLLM) is optional and imported only when
+# ARVIS_X_LLM=1 — leave it off for the trustworthy deterministic pilot.
+fastapi>=0.110
+uvicorn[standard]>=0.27
+paho-mqtt>=2.0
+python-dotenv>=1.0

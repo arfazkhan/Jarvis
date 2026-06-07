@@ -1,0 +1,13 @@
+# Keep the API image lean and secret-free.
+bot/
+tests/
+__pycache__/
+*.pyc
+*.db
+*.sqlite
+data/
+.env
+*.original.md
+DESIGN_BRIEF.md
+DEPLOY.md
+COMMISSIONING_RUNBOOK.md

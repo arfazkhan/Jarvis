@@ -1,0 +1,58 @@
+# ArvisX pilot stack — one command brings up the full residential ops layer:
+#   broker (MQTT)  ·  api (deterministic engine + REST)  ·  bot (WhatsApp bridge)
+#
+# Quick start:
+#   cp .env.example .env            # set ARVISX_API_KEY (and currency/tariff)
+#   cp bot/.env.example bot/.env    # set OWNER_NUMBER + the SAME api key
+#   docker compose up -d broker api
+#   docker compose up bot           # attach first run to scan the WhatsApp QR
+#
+# See DEPLOY.md for the full runbook.
+
+services:
+  broker:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto-data:/mosquitto/data
+    ports:
+      - "1883:1883"          # bind to a LAN/private interface in production
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ARVISX_SOURCE: ${ARVISX_SOURCE:-mqtt}
+      ARVISX_MQTT_BROKER: broker
+      ARVISX_MQTT_PORT: "1883"
+      ARVISX_DB: /data/arvisx.db
+    volumes:
+      - api-data:/data
+    ports:
+      - "8090:8090"
+    depends_on:
+      - broker
+
+  bot:
+    build:
+      context: ./bot
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: bot/.env
+    environment:
+      ARVIS_API_URL: ${BOT_API_URL:-http://api:8090}
+    volumes:
+      - bot-session:/app/session     # WhatsApp auth — scan QR once, persists
+      - bot-data:/app/data
+    depends_on:
+      - api
+
+volumes:
+  mosquitto-data:
+  api-data:
+  bot-session:
+  bot-data:
