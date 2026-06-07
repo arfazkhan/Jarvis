@@ -1,0 +1,10 @@
+# ArvisX LLM layer (ARVIS_X_LLM=1) — provider SDKs for the vendored UnifiedLLM.
+# The reasoning/ask/investigate/correlate channels degrade gracefully without
+# these; install them to enable the LLM-on-top layer. All providers supported,
+# selected at runtime via LLM_PROVIDER. Each SDK is lazy-imported only when its
+# key is set, so installing all four adds capability without forcing a provider.
+openai>=1.0      # OpenAI, and K2Think (OpenAI-compatible client, base_url override)
+groq>=0.4        # Groq (LLMAgent default)
+boto3>=1.34      # AWS Bedrock (IAM / profile auth path)
+httpx>=0.27      # AWS Bedrock (BEDROCK_API_KEY auth path); also used by openai
+# pydantic is pulled in by fastapi (requirements-pilot.txt) and by UnifiedLLM.

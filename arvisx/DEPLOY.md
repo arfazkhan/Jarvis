@@ -4,8 +4,10 @@ How to stand up ArvisX for a real residential community. ~30 minutes to a runnin
 stack; commissioning the building is a separate half-day (see
 `COMMISSIONING_RUNBOOK.md`).
 
-The pilot runs on the **deterministic floor** — no LLM, no cloud dependency, no
-hallucination. It needs only Docker.
+The pilot runs the **deterministic floor** plus the **LLM reasoning layer on top**
+(commercial UnifiedLLM, vendored into the image — see §1.5). The floor always
+runs and never hallucinates; the LLM only adds reasoning/ask/investigate. The
+image stays slim (provider SDKs only — no torch/faiss/whisper).
 
 ---
 
@@ -32,12 +34,29 @@ session) so restarts are safe.
 ## 1. Prerequisites
 
 - Docker + Docker Compose v2 (`docker compose version`).
+- This repo checked out **with the commercial stack** (the `agent_home` and
+  `agent_unified` packages at repo root) — the LLM layer is vendored from them.
 - A dedicated WhatsApp number for the bot (a spare SIM / second phone). The bot
   logs in by scanning a QR with that phone, like WhatsApp Web.
 - The building's owner/FM phone numbers (country code, no `+`).
 - A host on the **building LAN** the sensors/gateway can reach on port 1883.
 
 ---
+
+## 1.5. Vendor the LLM layer (once per build)
+
+The image's LLM layer comes from the commercial `agent_home` + `agent_unified`
+packages. A helper copies the minimal slice (~0.3 MB, no logs/ML deps) into
+`arvisx/vendor/` so the Docker build (context = `arvisx/`) can include it:
+
+```bash
+cd arvisx
+python scripts/vendor_commercial.py     # creates arvisx/vendor/ (git-ignored)
+```
+
+Re-run this whenever the commercial LLM code changes. To run the **deterministic
+floor only** (no LLM), set `ARVIS_X_LLM=0` in `.env` — the engine runs fine
+without provider keys; the vendor step is still required for the image to build.
 
 ## 2. Configure
 
@@ -53,6 +72,9 @@ Edit **`.env`** (the API):
   `python -c "import secrets; print(secrets.token_urlsafe(32))"`
 - `ARVISX_TARIFF` / `ARVISX_CURRENCY` — `0.11` / `QAR` for Qatar; `8` / `INR` for India.
 - `ARVISX_CORS` — set to your dashboard URL once a frontend exists (leave `*` for now).
+- `ARVIS_X_LLM` — `1` to enable the LLM layer (then set `LLM_PROVIDER` + the matching
+  provider key: `K2THINK_API_KEY` / `GROQ_API_KEY` / `OPENAI_API_KEY` / `BEDROCK_API_KEY`).
+  Bedrock auto-activates if AWS creds are present.
 
 Edit **`bot/.env`** (the WhatsApp bridge):
 - `ARVIS_API_KEY` — **paste the exact same key** as the API.
@@ -164,7 +186,8 @@ orders, and the skillbook. Snapshot it periodically:
 - [ ] "any issues?" / "water status?" / "what is this costing us?" answer correctly.
 - [ ] Building commissioned to OPERATIONAL (`COMMISSIONING_RUNBOOK.md`).
 - [ ] DB backup job in place.
-- [ ] LLM stays OFF (`ARVIS_X_LLM=0`) — deterministic floor only.
+- [ ] LLM layer: either `ARVIS_X_LLM=0` (floor only) OR `=1` with a valid provider
+      key and a successful `/ask` round-trip. Floor still authoritative either way.
 
 ---
 
