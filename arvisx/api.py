@@ -190,16 +190,7 @@ def create_app():
         if a is None:
             raise HTTPException(404, f"unknown asset {asset_id}")
         _, rks = assess_asset(a, datetime.now())
-        llm = None
-        if os.environ.get("ARVIS_X_LLM", "").strip() in ("1", "true", "True"):
-            try:
-                from arvisx.llm_env import load_arvis_env
-                load_arvis_env()
-                from agent_unified.llm import UnifiedLLM
-                llm = UnifiedLLM()
-            except Exception:
-                llm = None
-        adv = await investigate_asset(a, rks, llm=llm)
+        adv = await investigate_asset(a, rks, llm=_llm_for_reasoning())
         out = _jsonable(adv)
         # Institutional memory: surface a prior learned skill for the leading risk.
         if rks:
@@ -365,16 +356,15 @@ def create_app():
         return _jsonable(wo)
 
     def _llm_for_reasoning():
-        llm = None
-        if os.environ.get("ARVIS_X_LLM", "").strip() in ("1", "true", "True"):
-            try:
-                from arvisx.llm_env import load_arvis_env
-                load_arvis_env()
-                from agent_unified.llm import UnifiedLLM
-                llm = UnifiedLLM()
-            except Exception:
-                llm = None
-        return llm
+        if os.environ.get("ARVIS_X_LLM", "").strip() not in ("1", "true", "True"):
+            return None
+        try:
+            from arvisx.llm_env import load_arvis_env
+            load_arvis_env()                       # provider creds from repo .env
+            from arvisx.llm_client import make_llm
+            return make_llm()                      # ARVISX_LLM_PROVIDER (default k2think)
+        except Exception:
+            return None
 
     @app.post("/api/v1/reason/correlate")
     async def reason_correlate():

@@ -23,37 +23,20 @@ from pathlib import Path
 
 
 def _load_env_and_llm():
-    """Load repo .env, enable the LLM flag, build a UnifiedLLM. Returns (llm, why_skip)."""
+    """Load repo .env, enable the LLM flag, build ArvisX's own LLM client (K2Think by
+    default). Returns (llm, why_skip)."""
     try:
         from dotenv import load_dotenv
         load_dotenv(Path(__file__).resolve().parents[2] / ".env")
     except Exception:
         pass
     os.environ["ARVIS_X_LLM"] = "1"
-
-    # UnifiedLLM.ask_json (structured JSON) routes through the Bedrock "hybrid
-    # adapter" — it does NOT support the k2think/groq legacy text providers, so the
-    # reasoning channel must go to Bedrock. The commercial httpx path sends an
-    # `x-api-key` header, which AWS Bedrock rejects (it wants Authorization: Bearer);
-    # the modern path is boto3 + AWS_BEARER_TOKEN_BEDROCK. So: feed the key as the
-    # bearer token, blank BEDROCK_API_KEY to skip the broken httpx attempt, and let
-    # the default channel model run via boto3.converse.
-    import importlib.util
-    key = os.environ.get("BEDROCK_API_KEY", "").strip()
-    if not key:
-        return None, "no BEDROCK_API_KEY (ask_json needs the Bedrock adapter)"
-    if importlib.util.find_spec("boto3") is None:
-        return None, "boto3 not installed (Bedrock adapter needs it)"
-    os.environ["AWS_BEARER_TOKEN_BEDROCK"] = key
-    os.environ.setdefault("AWS_REGION", "us-east-1")
-    # Keep BEDROCK_API_KEY SET so the bedrock-first routing guard fires. The default
-    # reasoning model is non-Anthropic (Kimi) → the broken x-api-key httpx path is
-    # skipped, going straight to boto3.converse authed by AWS_BEARER_TOKEN_BEDROCK.
-    try:
-        from agent_unified import llm as _llm
-        return _llm.UnifiedLLM(), None
-    except Exception as e:
-        return None, f"UnifiedLLM unavailable: {e}"
+    os.environ.setdefault("ARVISX_LLM_PROVIDER", "k2think")
+    from arvisx.llm_client import make_llm
+    llm = make_llm()
+    if llm is None:
+        return None, f"no usable {os.environ.get('ARVISX_LLM_PROVIDER')} credentials"
+    return llm, None
 
 
 def _degraded_state():
@@ -73,8 +56,8 @@ def _run(verbose=False):
     if llm is None:
         say(f"SKIP — {why}")
         return None
-    say(f"[0] LLM up  provider={os.environ.get('LLM_PROVIDER', '?')} "
-        f"model={os.environ.get('LLM_MODEL', 'default')}")
+    say(f"[0] LLM up  provider={getattr(llm, 'provider', '?')} "
+        f"model={getattr(llm, 'model', '?')}")
 
     from arvisx.reasoning import ask, correlate
     assets, risks = _degraded_state()
