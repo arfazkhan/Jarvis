@@ -444,6 +444,56 @@ def create_app():
             raise HTTPException(400, str(e))
         return _jsonable(verdict)
 
+    @app.post("/api/v1/commission/building/{bid}/check-anomalies")
+    async def commission_anomalies(bid: str, payload: Dict[str, Any] = Body(default={})):
+        """Detect config/reality mismatches (unmapped device, untyped/unsignaled asset, bad
+        sensor) and let the agent explain each — why it matters + the fix. Read-only."""
+        from arvisx.commission_check import detect_commissioning_anomalies, narrate_anomalies
+        cfg = state.commissioner.get(bid)
+        if cfg is None:
+            raise HTTPException(404, f"unknown building {bid}")
+        topics = (payload or {}).get("observed_topics") or None
+        anomalies = detect_commissioning_anomalies(cfg, observed_topics=topics, store=state.store)
+        narrated = await narrate_anomalies(anomalies, cfg, llm=_llm_for_reasoning())
+        return {"building_id": bid, "count": len(narrated), "anomalies": narrated}
+
+    # ── Heartbeat: ArvisX runs its own checks on a cadence ───────────────
+    @app.post("/api/v1/heartbeat/tick")
+    async def heartbeat_tick():
+        """Run one heartbeat now: refresh → monitor sweep (escalation-aware) → readiness
+        re-check for learning buildings."""
+        from arvisx.scheduler import community_tick
+        state._last_tick = await community_tick(state, llm=_llm_for_reasoning())
+        return _jsonable(state._last_tick)
+
+    @app.get("/api/v1/heartbeat/status")
+    async def heartbeat_status():
+        return {"running": getattr(state, "_hb", None) is not None,
+                "interval_s": float(os.environ.get("ARVISX_HEARTBEAT_INTERVAL", "300")),
+                "ticks": getattr(getattr(state, "_hb", None), "ticks", 0),
+                "last_tick": _jsonable(getattr(state, "_last_tick", None))}
+
+    @app.on_event("startup")
+    async def _maybe_start_heartbeat():
+        state._last_tick = getattr(state, "_last_tick", None)
+        if os.environ.get("ARVISX_HEARTBEAT", "").strip() in ("1", "true", "True"):
+            import asyncio
+            from arvisx.scheduler import Heartbeat, community_tick
+            interval = float(os.environ.get("ARVISX_HEARTBEAT_INTERVAL", "300"))
+
+            async def _tick(n):
+                state._last_tick = await community_tick(state, llm=_llm_for_reasoning())
+
+            state._hb = Heartbeat(_tick, interval_s=interval)
+            state._hb_task = asyncio.create_task(state._hb.run())
+            logger.info(f"[ArvisX] heartbeat started (every {interval}s)")
+
+    @app.on_event("shutdown")
+    async def _stop_heartbeat():
+        hb = getattr(state, "_hb", None)
+        if hb is not None:
+            hb.stop()
+
     # ── WhatsApp operational layer (Phase 14) — deterministic, no LLM ────
     _ACTION_ROLES = {"owner", "fm", "facility_manager"}
 
