@@ -30,89 +30,17 @@ from arvisx.models import Asset, Risk, Severity
 logger = logging.getLogger("arvisx.agent")
 
 
-# ── Tools (each returns REAL deterministic data) ─────────────────────────
-def _t_get_asset_state(ctx, asset_id: str = "", **_):
-    a = ctx["by_id"].get(asset_id)
-    if not a:
-        return {"error": f"unknown asset {asset_id}"}
-    return {"asset_id": asset_id, "type": a.asset_type.value, "signals": dict(a.signals or {})}
-
-
-def _t_get_fault_history(ctx, asset_id: str = "", **_):
-    db = ctx.get("db")
-    return {"asset_id": asset_id, "history": (db.history(asset_id, 5) if db else [])}
-
-
-def _t_get_baseline(ctx, asset_id: str = "", signal: str = "", **_):
-    bl = ctx.get("baselines")
-    if not bl:
-        return {"baseline": None, "note": "no learned baseline available"}
-    base = bl.baseline(asset_id, signal)
-    z = bl.drift_z(asset_id, signal)
-    if base is None:
-        return {"baseline": None, "note": "insufficient history"}
-    med, mad, n = base
-    return {"asset_id": asset_id, "signal": signal, "median": round(med, 2),
-            "mad": round(mad, 3), "samples": n, "drift_sigma": (round(z, 2) if z is not None else None)}
-
-
-def _t_check_dependency_impact(ctx, asset_id: str = "", **_):
-    from arvisx.topology import impact_analysis
-    a = ctx["by_id"].get(asset_id)
-    rel = [r for r in ctx["risks"] if r.asset_id == asset_id]
-    if not a or not rel:
-        return {"impact": None}
-    imp = impact_analysis(ctx["assets"], rel)
-    return {"impacts": [{"service": c.service.value, "impact": c.impact, "redundancy": c.redundancy,
-                         "readiness_delta": c.readiness_delta, "note": c.note} for c in imp]}
-
-
-def _t_recall_known_pattern(ctx, asset_id: str = "", **_):
-    sb = ctx.get("skillbook")
-    a = ctx["by_id"].get(asset_id)
-    rel = [r for r in ctx["risks"] if r.asset_id == asset_id]
-    if not sb or not a or not rel:
-        return {"known_pattern": None}
-    return {"known_pattern": sb.recall(a, rel[0])}
-
-
-def _t_get_active_risks(ctx, **_):
-    return {"risks": [{"asset_id": r.asset_id, "service": r.service.value,
-                       "severity": r.severity.value, "message": r.message} for r in ctx["risks"]]}
-
-
-_TOOLS = {
-    "get_asset_state": _t_get_asset_state,
-    "get_fault_history": _t_get_fault_history,
-    "get_baseline": _t_get_baseline,
-    "check_dependency_impact": _t_check_dependency_impact,
-    "recall_known_pattern": _t_recall_known_pattern,
-    "get_active_risks": _t_get_active_risks,
-}
-_TOOL_DOC = (
-    "get_asset_state(asset_id) · get_fault_history(asset_id) · get_baseline(asset_id,signal) · "
-    "check_dependency_impact(asset_id) · recall_known_pattern(asset_id) · get_active_risks()"
-)
-
-# OpenAI-format schemas for NATIVE function-calling (providers that support it).
-_AID = {"type": "object", "properties": {"asset_id": {"type": "string"}}, "required": ["asset_id"]}
+# ── Tools come from the extensible registry (arvisx/tools.py) ────────────
+# Add a capability there with one @tool(...) decorator; it's offered automatically.
+from arvisx.tools import REGISTRY as _REGISTRY
 
 
 def _fn(name, desc, params):
     return {"type": "function", "function": {"name": name, "description": desc, "parameters": params}}
 
 
-_TOOL_SCHEMAS = [
-    _fn("get_asset_state", "Live signals + type for an asset", _AID),
-    _fn("get_fault_history", "Recent fault/event history for an asset", _AID),
-    _fn("get_baseline", "Learned median/MAD baseline + drift sigma for a signal",
-        {"type": "object", "properties": {"asset_id": {"type": "string"}, "signal": {"type": "string"}},
-         "required": ["asset_id", "signal"]}),
-    _fn("check_dependency_impact", "Downstream service impact + lost redundancy if this asset is degraded", _AID),
-    _fn("recall_known_pattern", "Prior confirmed fault pattern for this equipment class (institutional memory)", _AID),
-    _fn("get_active_risks", "All currently active risks across the community",
-        {"type": "object", "properties": {}}),
-]
+_TOOL_DOC = _REGISTRY.doc()
+_TOOL_SCHEMAS = _REGISTRY.schemas()
 
 
 @dataclass
@@ -152,13 +80,16 @@ _FINAL_SCHEMA = {
 
 
 async def investigate(asset: Asset, risk: Risk, assets: List[Asset], risks: List[Risk],
-                      llm=None, db=None, baselines=None, skillbook=None, max_steps: int = 5) -> Investigation:
+                      llm=None, db=None, baselines=None, skillbook=None, max_steps: int = 5,
+                      store=None, zones=None, wo_store=None) -> Investigation:
     """Agentic multi-step investigation of one fired risk. Uses NATIVE function-calling
-    when the provider supports it (llm.ask_tools), else falls back to the JSON-ReAct loop."""
+    when the provider supports it (llm.ask_tools), else falls back to the JSON-ReAct loop.
+    store/zones/wo_store enrich the tool context (water/quality/occupancy/work-order tools)."""
     if not _llm_on(llm):
         return _rules_fallback(asset, risk)
     ctx = {"by_id": {a.asset_id: a for a in assets}, "assets": assets, "risks": risks,
-           "db": db, "baselines": baselines, "skillbook": skillbook}
+           "db": db, "baselines": baselines, "skillbook": skillbook,
+           "store": store, "zones": zones, "wo_store": wo_store}
     if getattr(llm, "supports_tools", False) and hasattr(llm, "ask_tools"):
         return await _investigate_native(asset, risk, ctx, llm, max_steps)
     return await _investigate_json(asset, risk, ctx, llm, max_steps)
@@ -233,8 +164,8 @@ async def _investigate_native(asset: Asset, risk: Risk, ctx: dict, llm, max_step
                            "est_minutes": float(args.get("est_minutes", 5) or 5),
                            "reason": str(args.get("reason", ""))})
                 return inv
-            elif name in _TOOLS:
-                result = _TOOLS[name](ctx, **args)
+            elif name in _REGISTRY.names():
+                result = _REGISTRY.call(name, ctx, args)
                 steps.append({"thought": "", "tool": name, "args": args, "result": result})
             else:
                 result = {"error": f"unknown tool {name}"}
@@ -296,10 +227,10 @@ async def _investigate_json(asset: Asset, risk: Risk, ctx: dict, llm, max_steps:
                 evidence=[str(x)[:120] for x in (f.get("evidence") or [])], source="agent")
         tool = resp.get("tool")
         args = resp.get("args") or {}
-        if tool not in _TOOLS:
+        if tool not in _REGISTRY.names():
             convo.append({"role": "user", "content": f"OBSERVATION: unknown tool '{tool}'. Pick a valid tool or finalize."})
             continue
-        result = _TOOLS[tool](ctx, **args)
+        result = _REGISTRY.call(tool, ctx, args)
         steps.append({"thought": str(resp.get("thought", ""))[:160], "tool": tool, "args": args,
                       "result": result})
         convo.append({"role": "assistant", "content": json.dumps({"tool": tool, "args": args})})
@@ -345,7 +276,7 @@ async def watch_and_resolve(asset: Asset, risk: Risk, assets: List[Asset], risks
     from arvisx.watcher import WatchAgent
 
     inv = await investigate(asset, risk, assets, risks, llm=llm, db=db,
-                            baselines=baselines, skillbook=skillbook)
+                            baselines=baselines, skillbook=skillbook, store=store)
     if not inv.watch:
         return inv, []
 
@@ -363,7 +294,7 @@ async def watch_and_resolve(asset: Asset, risk: Risk, assets: List[Asset], risks
                                  "note": f"{w.asset_id} no longer flagged after observation"})
         fa = store.asset(w.asset_id)
         re_inv = await investigate(fa, fr, fresh, frisks, llm=llm, db=db,
-                                   baselines=baselines, skillbook=skillbook)
+                                   baselines=baselines, skillbook=skillbook, store=store)
         if re_inv.watch and w.checks < 3:               # still needs time → keep watching
             return ("wait", max(1.0, float(re_inv.watch.get("est_minutes", 5)) * 60.0 * time_scale))
         return ("resolved", {"status": "concluded", "investigation": re_inv})
@@ -377,7 +308,8 @@ _TIER_DEPTH = {Severity.CRITICAL: 6, Severity.WARNING: 3, Severity.MAINTENANCE: 
 
 
 async def monitor(assets: List[Asset], risks: List[Risk], llm=None, db=None, baselines=None,
-                  skillbook=None, max_investigations: int = 3) -> List[Investigation]:
+                  skillbook=None, max_investigations: int = 3,
+                  store=None, zones=None, wo_store=None) -> List[Investigation]:
     """Autonomously prioritize the active risks and investigate the top ones to a depth
     set by their tier. Fan-out capped so cost stays bounded."""
     by_id = {a.asset_id: a for a in assets}
@@ -399,5 +331,6 @@ async def monitor(assets: List[Asset], risks: List[Risk], llm=None, db=None, bas
             out.append(_rules_fallback(a, r))           # maintenance / no-LLM → rules advisory
         else:
             out.append(await investigate(a, r, assets, risks, llm=llm, db=db, baselines=baselines,
-                                         skillbook=skillbook, max_steps=depth))
+                                         skillbook=skillbook, max_steps=depth,
+                                         store=store, zones=zones, wo_store=wo_store))
     return out
