@@ -126,6 +126,7 @@ class Investigation:
     steps: List[Dict[str, Any]] = field(default_factory=list)   # the agent's tool-use trace
     evidence: List[str] = field(default_factory=list)
     source: str = "agent"
+    watch: Optional[Dict[str, Any]] = None   # {asset_id,signal,est_minutes,reason} if it chose to observe over time
 
 
 def _llm_on(llm) -> bool:
@@ -183,11 +184,21 @@ async def _investigate_native(asset: Asset, risk: Risk, ctx: dict, llm, max_step
         "patterns — before concluding. When you have enough, call submit_findings with a "
         "grounded conclusion. Cite ONLY evidence you actually retrieved; physical confirmation "
         "is required — never claim certainty.")
-    tools = _TOOL_SCHEMAS + [_fn("submit_findings",
-                                 "Finalize the investigation with a grounded conclusion", _FINAL_SCHEMA)]
+    _watch_fn = _fn("request_watch",
+                    "Observe a signal over time before concluding when the answer depends on how "
+                    "reality evolves (a refill, a sustained trend, a test being performed). The system "
+                    "will SLEEP and wake on a telemetry update or after est_minutes, then re-investigate.",
+                    {"type": "object", "properties": {
+                        "asset_id": {"type": "string"}, "signal": {"type": "string"},
+                        "est_minutes": {"type": "number"}, "reason": {"type": "string"}},
+                     "required": ["asset_id", "signal", "est_minutes", "reason"]})
+    tools = _TOOL_SCHEMAS + [
+        _fn("submit_findings", "Finalize the investigation with a grounded conclusion", _FINAL_SCHEMA),
+        _watch_fn]
     msgs: List[Dict[str, Any]] = [{"role": "user", "content":
         f"RISK: {risk.message} — {risk.detail}\nAsset: {asset.asset_id} "
-        f"({asset.asset_type.value}). Investigate with tools, then submit_findings."}]
+        f"({asset.asset_type.value}). Investigate with tools. Call submit_findings if you can "
+        f"conclude now, or request_watch if the answer needs observing over time."}]
     steps: List[Dict[str, Any]] = []
     _submit = {"type": "function", "function": {"name": "submit_findings"}}
 
@@ -209,6 +220,19 @@ async def _investigate_native(asset: Asset, risk: Risk, ctx: dict, llm, max_step
             name, args = tc["name"], tc["args"]
             if name == "submit_findings":
                 final, result = args, {"ok": True}
+            elif name == "request_watch":
+                inv = Investigation(
+                    asset.asset_id, risk.message,
+                    f"Needs observation: {str(args.get('reason', ''))[:140]}",
+                    f"Watch {args.get('signal', '')}; recheck ~{args.get('est_minutes', '?')} min",
+                    "Low", False, steps=steps,
+                    evidence=[f"watching {args.get('asset_id', asset.asset_id)}.{args.get('signal', '')}"],
+                    source="agent(watching)",
+                    watch={"asset_id": args.get("asset_id", asset.asset_id),
+                           "signal": args.get("signal", ""),
+                           "est_minutes": float(args.get("est_minutes", 5) or 5),
+                           "reason": str(args.get("reason", ""))})
+                return inv
             elif name in _TOOLS:
                 result = _TOOLS[name](ctx, **args)
                 steps.append({"thought": "", "tool": name, "args": args, "result": result})
@@ -306,6 +330,46 @@ async def _investigate_json(asset: Asset, risk: Risk, ctx: dict, llm, max_steps:
     fb.steps = steps
     fb.source = "agent(incomplete)→rules" if steps else "rules"
     return fb
+
+
+# ── Active watch: investigate → (if it chose to wait) sleep/wake → re-think ──
+async def watch_and_resolve(asset: Asset, risk: Risk, assets: List[Asset], risks: List[Risk],
+                            store, llm=None, db=None, baselines=None, skillbook=None,
+                            time_scale: float = 1.0, max_cycles: int = 8,
+                            max_wall_seconds: float = 3600.0):
+    """Investigate; if the agent calls request_watch, hand off to the WatchAgent which
+    sleeps until a telemetry update or the estimated deadline, then RE-investigates with
+    fresh state — repeating until resolved. `time_scale` compresses estimated minutes for
+    tests/demos (1.0 = real time). Returns (first_investigation, [Watch])."""
+    from arvisx.health import build_report
+    from arvisx.watcher import WatchAgent
+
+    inv = await investigate(asset, risk, assets, risks, llm=llm, db=db,
+                            baselines=baselines, skillbook=skillbook)
+    if not inv.watch:
+        return inv, []
+
+    wa = WatchAgent(store)
+    d = inv.watch
+    est_s = max(1.0, float(d.get("est_minutes", 5)) * 60.0 * time_scale)
+    wa.schedule(d["asset_id"], d.get("signal", ""), d.get("reason", ""), est_s)
+
+    async def on_check(w, woke_on_update, due):
+        fresh = store.snapshot()
+        frisks = build_report(fresh, baselines=baselines, virtual=True).risks
+        fr = next((r for r in frisks if r.asset_id == w.asset_id), None)
+        if fr is None:                                  # risk cleared → resolved
+            return ("resolved", {"status": "cleared",
+                                 "note": f"{w.asset_id} no longer flagged after observation"})
+        fa = store.asset(w.asset_id)
+        re_inv = await investigate(fa, fr, fresh, frisks, llm=llm, db=db,
+                                   baselines=baselines, skillbook=skillbook)
+        if re_inv.watch and w.checks < 3:               # still needs time → keep watching
+            return ("wait", max(1.0, float(re_inv.watch.get("est_minutes", 5)) * 60.0 * time_scale))
+        return ("resolved", {"status": "concluded", "investigation": re_inv})
+
+    watches = await wa.run(on_check, max_cycles=max_cycles, max_wall_seconds=max_wall_seconds)
+    return inv, watches
 
 
 # ── Proactive monitor: decide what to investigate + how deep ─────────────

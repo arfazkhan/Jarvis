@@ -25,6 +25,16 @@ class AssetStore:
         self._updates = 0
         self._ts: Dict[tuple, datetime] = {}            # (asset_id, signal) → last good update
         self.quarantined: List[Dict[str, object]] = []  # rejected bad readings (sensor faults)
+        self._on_update = None                          # callback(asset_id, signal) on a good reading
+
+    def set_update_callback(self, cb) -> None:
+        """Register a callback fired after each accepted reading — lets a WatchAgent
+        wake the instant relevant telemetry changes (not just on a timer)."""
+        self._on_update = cb
+
+    def signal_ts(self, asset_id: str, signal: str) -> Optional[datetime]:
+        """Last-good-update timestamp for one signal (None if never seen)."""
+        return self._ts.get((asset_id, signal))
 
     @classmethod
     def from_fleet_definition(cls, assets: List[Asset]) -> "AssetStore":
@@ -62,7 +72,13 @@ class AssetStore:
             self._ts[(asset_id, key)] = datetime.now()
             self.last_update = datetime.now()
             self._updates += 1
-            return True
+        cb = self._on_update
+        if cb is not None:
+            try:
+                cb(asset_id, key)
+            except Exception:
+                pass
+        return True
 
     def stale_signals(self, max_age_s: float = 900.0, now: Optional[datetime] = None) -> List[tuple]:
         """(asset_id, signal, age_s) for signals not updated within max_age_s — a frozen
