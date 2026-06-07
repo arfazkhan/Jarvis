@@ -94,6 +94,26 @@ _TOOL_DOC = (
     "check_dependency_impact(asset_id) · recall_known_pattern(asset_id) · get_active_risks()"
 )
 
+# OpenAI-format schemas for NATIVE function-calling (providers that support it).
+_AID = {"type": "object", "properties": {"asset_id": {"type": "string"}}, "required": ["asset_id"]}
+
+
+def _fn(name, desc, params):
+    return {"type": "function", "function": {"name": name, "description": desc, "parameters": params}}
+
+
+_TOOL_SCHEMAS = [
+    _fn("get_asset_state", "Live signals + type for an asset", _AID),
+    _fn("get_fault_history", "Recent fault/event history for an asset", _AID),
+    _fn("get_baseline", "Learned median/MAD baseline + drift sigma for a signal",
+        {"type": "object", "properties": {"asset_id": {"type": "string"}, "signal": {"type": "string"}},
+         "required": ["asset_id", "signal"]}),
+    _fn("check_dependency_impact", "Downstream service impact + lost redundancy if this asset is degraded", _AID),
+    _fn("recall_known_pattern", "Prior confirmed fault pattern for this equipment class (institutional memory)", _AID),
+    _fn("get_active_risks", "All currently active risks across the community",
+        {"type": "object", "properties": {}}),
+]
+
 
 @dataclass
 class Investigation:
@@ -119,13 +139,106 @@ def _rules_fallback(asset: Asset, risk: Risk) -> Investigation:
                          "Low", False, steps=[], evidence=[risk.detail or risk.message], source="rules")
 
 
+_FINAL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "root_cause": {"type": "string"}, "recommended_action": {"type": "string"},
+        "discriminating_test": {"type": "string"}, "confidence": {"type": "number"},
+        "evidence": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["root_cause", "recommended_action", "confidence"],
+}
+
+
 async def investigate(asset: Asset, risk: Risk, assets: List[Asset], risks: List[Risk],
                       llm=None, db=None, baselines=None, skillbook=None, max_steps: int = 5) -> Investigation:
-    """Agentic multi-step investigation of one fired risk."""
+    """Agentic multi-step investigation of one fired risk. Uses NATIVE function-calling
+    when the provider supports it (llm.ask_tools), else falls back to the JSON-ReAct loop."""
     if not _llm_on(llm):
         return _rules_fallback(asset, risk)
     ctx = {"by_id": {a.asset_id: a for a in assets}, "assets": assets, "risks": risks,
            "db": db, "baselines": baselines, "skillbook": skillbook}
+    if getattr(llm, "supports_tools", False) and hasattr(llm, "ask_tools"):
+        return await _investigate_native(asset, risk, ctx, llm, max_steps)
+    return await _investigate_json(asset, risk, ctx, llm, max_steps)
+
+
+def _final_from(args: dict, asset: Asset, risk: Risk, steps: list) -> Investigation:
+    band = "Medium" if float(args.get("confidence", 0.4) or 0.4) >= 0.5 else "Low"
+    return Investigation(
+        asset.asset_id, risk.message, str(args.get("root_cause", ""))[:160],
+        str(args.get("recommended_action", ""))[:200], band, False, steps=steps,
+        evidence=[str(x)[:120] for x in (args.get("evidence") or [])], source="agent")
+
+
+async def _investigate_native(asset: Asset, risk: Risk, ctx: dict, llm, max_steps: int) -> Investigation:
+    """Native function-calling ReAct loop: the model emits real tool_calls; we execute
+    each against the deterministic floor and feed results back as role=tool messages,
+    until it calls submit_findings (grounded conclusion)."""
+    from arvisx.llm_env import load_arvis_env
+    load_arvis_env()
+    sys = (
+        "You are an autonomous residential-infrastructure investigator. A risk has fired. "
+        "Use the tools to GATHER EVIDENCE — history, baselines, dependency impact, known "
+        "patterns — before concluding. When you have enough, call submit_findings with a "
+        "grounded conclusion. Cite ONLY evidence you actually retrieved; physical confirmation "
+        "is required — never claim certainty.")
+    tools = _TOOL_SCHEMAS + [_fn("submit_findings",
+                                 "Finalize the investigation with a grounded conclusion", _FINAL_SCHEMA)]
+    msgs: List[Dict[str, Any]] = [{"role": "user", "content":
+        f"RISK: {risk.message} — {risk.detail}\nAsset: {asset.asset_id} "
+        f"({asset.asset_type.value}). Investigate with tools, then submit_findings."}]
+    steps: List[Dict[str, Any]] = []
+    _submit = {"type": "function", "function": {"name": "submit_findings"}}
+
+    for _ in range(max_steps):
+        try:
+            res = await llm.ask_tools(messages=msgs, tools=tools,
+                                      system_msgs=[{"role": "system", "content": sys}], tool_choice="auto")
+        except Exception as e:
+            logger.warning(f"[Agent] native step failed: {e}")
+            break
+        calls = res.get("tool_calls") or []
+        if not calls:
+            msgs.append({"role": "assistant", "content": res.get("content", "")})
+            msgs.append({"role": "user", "content": "Call submit_findings now with your grounded conclusion."})
+            continue
+        msgs.append(res["assistant_message"])
+        final = None
+        for tc in calls:
+            name, args = tc["name"], tc["args"]
+            if name == "submit_findings":
+                final, result = args, {"ok": True}
+            elif name in _TOOLS:
+                result = _TOOLS[name](ctx, **args)
+                steps.append({"thought": "", "tool": name, "args": args, "result": result})
+            else:
+                result = {"error": f"unknown tool {name}"}
+            msgs.append({"role": "tool", "tool_call_id": tc["id"],
+                         "content": json.dumps(result, default=str)[:700]})
+        if final is not None:
+            return _final_from(final, asset, risk, steps)
+
+    # Budget reached without submit_findings → force the call once from gathered evidence.
+    if steps:
+        try:
+            msgs.append({"role": "user", "content":
+                "Investigation budget reached. Call submit_findings now using ONLY the observations above."})
+            res = await llm.ask_tools(messages=msgs, tools=tools,
+                                      system_msgs=[{"role": "system", "content": sys}], tool_choice=_submit)
+            for tc in (res.get("tool_calls") or []):
+                if tc["name"] == "submit_findings":
+                    return _final_from(tc["args"], asset, risk, steps)
+        except Exception as e:
+            logger.warning(f"[Agent] native finalize failed: {e}")
+    fb = _rules_fallback(asset, risk)
+    fb.steps = steps
+    fb.source = "agent(incomplete)→rules" if steps else "rules"
+    return fb
+
+
+async def _investigate_json(asset: Asset, risk: Risk, ctx: dict, llm, max_steps: int) -> Investigation:
+    """JSON-in-prose ReAct loop (for providers without native tool-calling)."""
     sys = (
         "You are an autonomous residential-infrastructure investigator. A risk has fired. "
         "GATHER EVIDENCE with tools before concluding — check history, baselines, dependency "

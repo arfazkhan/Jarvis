@@ -81,14 +81,68 @@ def _extract_json(text: str) -> Optional[dict]:
     return None
 
 
+def _parse_tool_args(raw: Any) -> dict:
+    """Tool-call arguments come as a JSON string — and some providers (K2Think)
+    double-encode them (a JSON string wrapping a JSON string). Decode until dict."""
+    v = raw
+    for _ in range(3):
+        if isinstance(v, dict):
+            return v
+        if isinstance(v, str):
+            try:
+                v = json.loads(v)
+            except json.JSONDecodeError:
+                return {}
+        else:
+            return {}
+    return v if isinstance(v, dict) else {}
+
+
 class ArvisxLLM:
-    """OpenAI-compatible LLM with the `ask_json` interface ArvisX reasoning expects."""
+    """OpenAI-compatible LLM with the `ask_json` + native `ask_tools` interfaces ArvisX
+    reasoning/agent layers expect."""
+
+    supports_tools = True
 
     def __init__(self, provider: str, api_key: str, base_url: str, model: str):
         from openai import OpenAI
         self.provider = provider
         self.model = model
         self._client = OpenAI(api_key=api_key, base_url=base_url)
+
+    async def ask_tools(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]],
+                        system_msgs: Optional[List[Dict[str, str]]] = None,
+                        tool_choice: str = "auto", max_tokens: int = 2000,
+                        **_: Any) -> Dict[str, Any]:
+        """Native function-calling turn. Returns:
+        {"tool_calls": [{"id","name","args"}], "content": str, "finish": str,
+         "assistant_message": <openai msg dict for the follow-up>}."""
+        msgs: List[Dict[str, Any]] = []
+        for s in (system_msgs or []):
+            msgs.append({"role": s.get("role", "system"), "content": s.get("content", "")})
+        msgs.extend(messages)
+
+        def _call():
+            return self._client.chat.completions.create(
+                model=self.model, messages=msgs, tools=tools, tool_choice=tool_choice,
+                temperature=0, max_tokens=max_tokens)
+
+        resp = await asyncio.to_thread(_call)
+        choice = resp.choices[0]
+        m = choice.message
+        calls = []
+        assistant_tool_calls = []
+        for tc in (m.tool_calls or []):
+            args = _parse_tool_args(tc.function.arguments)
+            calls.append({"id": tc.id, "name": tc.function.name, "args": args})
+            assistant_tool_calls.append({"id": tc.id, "type": "function",
+                                         "function": {"name": tc.function.name,
+                                                      "arguments": json.dumps(args)}})
+        assistant_message: Dict[str, Any] = {"role": "assistant", "content": m.content or ""}
+        if assistant_tool_calls:
+            assistant_message["tool_calls"] = assistant_tool_calls
+        return {"tool_calls": calls, "content": m.content or "",
+                "finish": choice.finish_reason, "assistant_message": assistant_message}
 
     async def ask_json(self, messages: List[Dict[str, str]],
                        system_msgs: Optional[List[Dict[str, str]]] = None,
