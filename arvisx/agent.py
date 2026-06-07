@@ -327,8 +327,14 @@ async def monitor(assets: List[Asset], risks: List[Risk], llm=None, db=None, bas
         if a is None:
             continue
         depth = _TIER_DEPTH.get(r.severity, 0)
+        # Policy escalation: even a low-tier risk gets an investigation when rules can't
+        # cleanly resolve it (low confidence, concurrent risks, sensor issue, novel drift).
+        from arvisx.escalation import should_escalate
+        esc, _why = should_escalate(r, a, risks, store=store, skillbook=skillbook)
+        if esc and depth == 0:
+            depth = 3
         if depth == 0 or not _llm_on(llm):
-            out.append(_rules_fallback(a, r))           # maintenance / no-LLM → rules advisory
+            out.append(_rules_fallback(a, r))           # rules suffice → deterministic advisory
         else:
             out.append(await investigate(a, r, assets, risks, llm=llm, db=db, baselines=baselines,
                                          skillbook=skillbook, max_steps=depth,

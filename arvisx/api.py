@@ -402,14 +402,47 @@ def create_app():
 
     @app.post("/api/v1/monitor")
     async def monitor_endpoint(payload: Dict[str, Any] = Body(default={})):
-        """Proactive sweep: autonomously prioritize + investigate the top risks by tier."""
+        """Proactive sweep: autonomously prioritize + investigate the top risks. Rules
+        handle the routine; the agent is auto-invoked only where escalation policy fires."""
         from arvisx.agent import monitor
         rep = state.report_now()
         cap = int((payload or {}).get("max_investigations", 3))
+        zones = community_zones("healthy" if state.scenario == "healthy" else "prd")
         invs = await monitor(state.current_assets(), rep.risks, llm=_llm_for_reasoning(),
                              db=state.db, baselines=state.baselines, skillbook=state.skillbook,
-                             max_investigations=cap)
+                             max_investigations=cap, store=state.store, zones=zones,
+                             wo_store=state.wo_store)
         return {"investigated": len(invs), "investigations": _jsonable(invs)}
+
+    @app.post("/api/v1/incident/{asset_id}")
+    async def incident_endpoint(asset_id: str):
+        """One incident, the ArvisX way: deterministic advisory always; the agent is
+        auto-invoked only when rules can't cleanly resolve it (escalation policy)."""
+        from arvisx.escalation import handle_incident
+        a = state.asset(asset_id)
+        if a is None:
+            raise HTTPException(404, f"unknown asset {asset_id}")
+        rep = state.report_now()
+        rk = next((r for r in rep.risks if r.asset_id == asset_id), None)
+        if rk is None:
+            return {"asset_id": asset_id, "status": "no active risk", "route": "none"}
+        zones = community_zones("healthy" if state.scenario == "healthy" else "prd")
+        out = await handle_incident(a, rk, state.current_assets(), rep.risks,
+                                    llm=_llm_for_reasoning(), db=state.db, baselines=state.baselines,
+                                    skillbook=state.skillbook, store=state.store, zones=zones,
+                                    wo_store=state.wo_store)
+        return _jsonable(out)
+
+    @app.post("/api/v1/commission/building/{bid}/evaluate-readiness")
+    async def commission_readiness(bid: str):
+        """Data-driven ops-readiness gate: approve LEARNING→OPERATIONAL when the baselines
+        are statistically trustworthy, else extend the learning window dynamically."""
+        try:
+            verdict = state.commissioner.evaluate_ops_readiness(
+                bid, state.current_assets(), state.baselines)
+        except Exception as e:
+            raise HTTPException(400, str(e))
+        return _jsonable(verdict)
 
     # ── WhatsApp operational layer (Phase 14) — deterministic, no LLM ────
     _ACTION_ROLES = {"owner", "fm", "facility_manager"}

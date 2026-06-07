@@ -172,6 +172,33 @@ class CommissioningManager:
         self._save(b)
         return b
 
+    # ── data-driven ops-readiness gate (replaces the hardcoded timer) ────
+    def evaluate_ops_readiness(self, building_id: str, assets, baselines,
+                               auto_advance: bool = True) -> Dict[str, Any]:
+        """Decide if a LEARNING building is ready for OPERATIONAL based on whether its
+        BASELINES are statistically trustworthy — not just whether learning_days elapsed.
+        Approve → advance to operational. Reject → extend learning_days dynamically so the
+        building keeps learning until it's actually confident. Returns a verdict dict."""
+        from arvisx.readiness import assess_baseline_readiness
+        b = self._require(building_id)
+        rd = assess_baseline_readiness(assets, baselines)
+        verdict: Dict[str, Any] = {
+            "building_id": building_id, "state": b.state, "approved": rd.ready,
+            "coverage": rd.coverage, "ready_count": rd.ready_count, "total": rd.total,
+            "reasons": rd.reasons, "summary": rd.summary()}
+        if rd.ready:
+            if auto_advance and b.state == CommissioningState.LEARNING.value:
+                b.state = CommissioningState.OPERATIONAL.value
+                self._save(b)
+            verdict["state"] = b.state
+        else:
+            # dynamically extend the learning window so it stays in LEARNING and keeps going
+            b.learning_days = int(b.learning_days) + rd.suggested_extra_days
+            self._save(b)
+            verdict["extended_learning_days_by"] = rd.suggested_extra_days
+            verdict["learning_days"] = b.learning_days
+        return verdict
+
     # ── gated state machine ──────────────────────────────────────────────
     def _can_enter(self, b: BuildingConfig, target: CommissioningState) -> Optional[str]:
         reqs = {

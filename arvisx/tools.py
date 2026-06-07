@@ -252,3 +252,66 @@ def _get_work_orders(ctx, asset_id: str = "", **_):
         items = [w for w in items if w.asset_id == asset_id]
     return {"work_orders": [{"wo_id": w.wo_id, "asset_id": w.asset_id, "title": w.title,
                              "status": w.status.value, "priority": w.priority.value} for w in items]}
+
+
+@tool("get_baseline_readiness", "Whether the learned baselines are trustworthy enough for operations "
+      "(coverage + stability) — the data-driven learning gate", _NONE)
+def _get_baseline_readiness(ctx, **_):
+    from arvisx.readiness import assess_baseline_readiness
+    rd = assess_baseline_readiness(ctx.get("assets") or [], ctx.get("baselines"))
+    return {"ready": rd.ready, "coverage": rd.coverage, "ready_count": rd.ready_count,
+            "total": rd.total, "reasons": rd.reasons,
+            "suggested_extra_days": rd.suggested_extra_days, "summary": rd.summary()}
+
+
+@tool("get_maintenance_schedule", "Upcoming maintenance/test due dates + runtime-vs-threshold, optionally one asset",
+      _AID_OPT)
+def _get_maintenance_schedule(ctx, asset_id: str = "", **_):
+    from datetime import datetime
+    now = datetime.now()
+    assets = [_asset(ctx, asset_id)] if asset_id else (ctx.get("assets") or [])
+    out = []
+    for a in assets:
+        if a is None:
+            continue
+        due = getattr(a, "next_maintenance_due", None)
+        days = round((due - now).total_seconds() / 86400.0, 1) if due else None
+        rt, rtt = getattr(a, "runtime_hours", None), getattr(a, "runtime_threshold_hours", None)
+        out.append({"asset_id": a.asset_id, "maintenance_due_in_days": days,
+                    "runtime_hours": rt, "runtime_threshold_hours": rtt,
+                    "runtime_pct": (round(100 * rt / rtt, 1) if rt and rtt else None)})
+    return {"schedule": out}
+
+
+@tool("compare_to_peer_asset", "Compare an asset's signals to same-type peers to spot an outlier sibling", _AID)
+def _compare_to_peer_asset(ctx, asset_id: str = "", **_):
+    a = _asset(ctx, asset_id)
+    if not a:
+        return {"error": f"unknown asset {asset_id}"}
+    peers = [p for p in (ctx.get("assets") or [])
+             if p.asset_type == a.asset_type and p.asset_id != a.asset_id]
+    if not peers:
+        return {"asset_id": asset_id, "peers": 0, "note": "no same-type peer to compare"}
+    cmp = {}
+    for k, v in (a.signals or {}).items():
+        if not isinstance(v, (int, float)) or isinstance(v, bool):
+            continue
+        pv = [p.signals[k] for p in peers if isinstance(p.signals.get(k), (int, float))
+              and not isinstance(p.signals.get(k), bool)]
+        if not pv:
+            continue
+        peer_mean = sum(pv) / len(pv)
+        dev = (v - peer_mean) / peer_mean * 100 if peer_mean else None
+        cmp[k] = {"value": v, "peer_mean": round(peer_mean, 2),
+                  "deviation_pct": (round(dev, 1) if dev is not None else None)}
+    return {"asset_id": asset_id, "peers": len(peers), "comparison": cmp}
+
+
+@tool("get_skill_history", "Learned fault patterns (institutional memory) for this building", _NONE)
+def _get_skill_history(ctx, **_):
+    sb = ctx.get("skillbook")
+    if not sb:
+        return {"skills": [], "note": "no skillbook in context"}
+    return {"skills": [{"scope": s["scope"], "symptom": s["symptom"], "cause": s["cause"],
+                        "confirmed": bool(s["confirmed"]), "times_seen": s["times_seen"]}
+                       for s in sb.all()[:10]]}
