@@ -167,7 +167,28 @@ async def investigate(asset: Asset, risk: Risk, assets: List[Asset], risks: List
                       "result": result})
         convo.append({"role": "assistant", "content": json.dumps({"tool": tool, "args": args})})
         convo.append({"role": "user", "content": "OBSERVATION: " + json.dumps(result, default=str)[:700]})
-    # Budget exhausted / error → ground out on the rules floor, keep the trace.
+    # Budget reached without a self-declared final. If the agent gathered evidence,
+    # ask ONCE more to synthesize a conclusion from those real observations (verbose
+    # reasoning models often use the whole budget exploring before concluding). Still
+    # grounded — the tools already ran and returned real data.
+    if steps:
+        convo.append({"role": "user", "content":
+            "Investigation budget reached. Using ONLY the observations above, output exactly one "
+            'JSON object: {"final": {"root_cause": str, "recommended_action": str, '
+            '"discriminating_test": str, "confidence": 0..1, "evidence": [str]}}'})
+        try:
+            resp = await llm.ask_json(messages=convo, system_msgs=[{"role": "system", "content": sys}],
+                                      channel="reasoning")
+            if isinstance(resp, dict) and isinstance(resp.get("final"), dict):
+                f = resp["final"]
+                band = "Medium" if float(f.get("confidence", 0.4) or 0.4) >= 0.5 else "Low"
+                return Investigation(
+                    asset.asset_id, risk.message, str(f.get("root_cause", ""))[:160],
+                    str(f.get("recommended_action", ""))[:200], band, False, steps=steps,
+                    evidence=[str(x)[:120] for x in (f.get("evidence") or [])], source="agent")
+        except Exception as e:
+            logger.warning(f"[Agent] finalize step failed: {e}")
+    # No conclusion → ground out on the rules floor, keep the tool trace.
     fb = _rules_fallback(asset, risk)
     fb.steps = steps
     fb.source = "agent(incomplete)→rules" if steps else "rules"
