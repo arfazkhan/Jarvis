@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable, List, Optional
@@ -36,6 +37,14 @@ class Watch:
     result: Any = None
     woke_on: List[str] = field(default_factory=list)   # "update" | "timeout" per cycle
     checks: int = 0
+    watch_id: str = field(default_factory=lambda: uuid.uuid4().hex[:10])
+
+    def to_record(self) -> dict:
+        return {"watch_id": self.watch_id, "asset_id": self.asset_id, "signal": self.signal,
+                "reason": self.reason, "est_seconds": self.est_seconds,
+                "created_at": self.created_at.isoformat(), "wake_at": self.wake_at.isoformat(),
+                "resolved": self.resolved, "checks": self.checks, "woke_on": list(self.woke_on),
+                "result": self.result}
 
 
 # on_check(watch, woke_on_update, due) -> ("resolved", result) | ("wait", new_est_seconds)
@@ -45,10 +54,20 @@ CheckFn = Callable[[Watch, bool, bool], Awaitable[tuple]]
 class WatchAgent:
     """Holds active watches and runs the sleep/wake loop against a live AssetStore."""
 
-    def __init__(self, store):
+    def __init__(self, store, db=None):
         self.store = store
+        self.db = db                     # ArvisxDb — durable watch lifecycle if provided
         self.watches: List[Watch] = []
         self._event: Optional[asyncio.Event] = None
+
+    def _persist(self, w: Watch):
+        if self.db is None:
+            return
+        try:
+            self.db.save_watch(w.watch_id, w.asset_id, w.signal, w.reason, w.est_seconds,
+                               w.created_at.isoformat(), w.wake_at.isoformat(), w.resolved, w.to_record())
+        except Exception as e:
+            logger.warning(f"[watch] persist failed: {e}")
 
     def _ensure_event(self):
         if self._event is None:
@@ -67,6 +86,7 @@ class WatchAgent:
                   created_at=now, wake_at=now + timedelta(seconds=float(est_seconds)),
                   baseline_ts=self.store.signal_ts(asset_id, signal))
         self.watches.append(w)
+        self._persist(w)
         logger.info(f"[watch] scheduled {asset_id}.{signal} est={est_seconds}s — {reason}")
         return w
 
@@ -109,4 +129,5 @@ class WatchAgent:
                     w.est_seconds = float(payload)
                     w.wake_at = now + timedelta(seconds=float(payload))
                     w.baseline_ts = self.store.signal_ts(w.asset_id, w.signal)
+                self._persist(w)
         return self.watches

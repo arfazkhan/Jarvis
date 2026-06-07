@@ -67,6 +67,17 @@ async def community_tick(state, llm=None, max_investigations: int = 3) -> Dict[s
                          max_investigations=max_investigations, store=getattr(state, "store", None),
                          zones=zones, wo_store=getattr(state, "wo_store", None))
 
+    # Durable agent state: persist each investigation this tick produced.
+    db = getattr(state, "db", None)
+    if db is not None:
+        from dataclasses import asdict
+        for inv in invs:
+            try:
+                db.save_investigation(inv.asset_id, inv.trigger, inv.root_cause,
+                                      inv.recommended_action, inv.confidence_band, inv.source, asdict(inv))
+            except Exception as e:
+                logger.warning(f"[heartbeat] persist investigation failed: {e}")
+
     readiness: List[Dict[str, Any]] = []
     commissioner = getattr(state, "commissioner", None)
     if commissioner is not None:
@@ -78,7 +89,13 @@ async def community_tick(state, llm=None, max_investigations: int = 3) -> Dict[s
                 except Exception as e:
                     logger.warning(f"[heartbeat] readiness check {b['building_id']} failed: {e}")
 
-    return {"ts": datetime.now().isoformat(timespec="seconds"), "readiness": round(rep.readiness, 1),
-            "risks": len(rep.risks), "investigated": len(invs),
-            "escalated": sum(1 for i in invs if getattr(i, "source", "").startswith("agent")),
-            "learning_checks": readiness}
+    summary = {"ts": datetime.now().isoformat(timespec="seconds"), "readiness": round(rep.readiness, 1),
+               "risks": len(rep.risks), "investigated": len(invs),
+               "escalated": sum(1 for i in invs if getattr(i, "source", "").startswith("agent")),
+               "learning_checks": readiness}
+    if db is not None:
+        try:
+            db.save_tick(summary)
+        except Exception as e:
+            logger.warning(f"[heartbeat] persist tick failed: {e}")
+    return summary

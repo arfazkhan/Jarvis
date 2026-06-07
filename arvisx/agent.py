@@ -280,7 +280,7 @@ async def watch_and_resolve(asset: Asset, risk: Risk, assets: List[Asset], risks
     if not inv.watch:
         return inv, []
 
-    wa = WatchAgent(store)
+    wa = WatchAgent(store, db=db)
     d = inv.watch
     est_s = max(1.0, float(d.get("est_minutes", 5)) * 60.0 * time_scale)
     wa.schedule(d["asset_id"], d.get("signal", ""), d.get("reason", ""), est_s)

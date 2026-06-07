@@ -397,7 +397,14 @@ def create_app():
         if rk is None:
             return {"asset_id": asset_id, "status": "no active risk to investigate"}
         inv = await investigate(a, rk, state.current_assets(), rep.risks, llm=_llm_for_reasoning(),
-                                db=state.db, baselines=state.baselines, skillbook=state.skillbook)
+                                db=state.db, baselines=state.baselines, skillbook=state.skillbook,
+                                store=state.store, wo_store=state.wo_store)
+        try:
+            from dataclasses import asdict
+            state.db.save_investigation(inv.asset_id, inv.trigger, inv.root_cause,
+                                        inv.recommended_action, inv.confidence_band, inv.source, asdict(inv))
+        except Exception:
+            pass
         return _jsonable(inv)
 
     @app.post("/api/v1/monitor")
@@ -465,6 +472,21 @@ def create_app():
         from arvisx.scheduler import community_tick
         state._last_tick = await community_tick(state, llm=_llm_for_reasoning())
         return _jsonable(state._last_tick)
+
+    @app.get("/api/v1/investigations")
+    async def investigations_history(asset_id: str = "", limit: int = 20):
+        """Durable agent memory: past investigations (optionally for one asset)."""
+        return {"investigations": state.db.recent_investigations(asset_id or None, limit)}
+
+    @app.get("/api/v1/watches")
+    async def open_watches():
+        """Active watches that survived restart (the agent's pending observations)."""
+        return {"watches": state.db.load_open_watches()}
+
+    @app.get("/api/v1/heartbeat/history")
+    async def heartbeat_history(limit: int = 50):
+        """Recorded heartbeat ticks — the building's pulse over time."""
+        return {"ticks": state.db.recent_ticks(limit)}
 
     @app.get("/api/v1/heartbeat/status")
     async def heartbeat_status():
