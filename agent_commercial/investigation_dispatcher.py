@@ -186,7 +186,7 @@ class InvestigationDispatcher:
                    f"(z={anomaly.z_score}, {anomaly.deviation_pct}%)",
             est_seconds=window, kind="drift_confirm")
 
-    async def schedule_post_maintenance_verification(self, equipment_id: str, point_id: str,
+    async def schedule_post_maintenance_verification(self, equipment_id: str, point_id: str = "",
                                                      hours: float = 24.0):
         """After a work order closes, auto-recheck the equipment N hours later: did the fix
         hold? Surfaces a verification advisory rather than assuming the repair worked."""

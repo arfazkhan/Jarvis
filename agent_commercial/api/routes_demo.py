@@ -919,14 +919,44 @@ async def list_work_orders(equipment_id: Optional[str] = None, status: Optional[
 
 
 @router.post("/workorder/{work_order_id}/status")
-async def update_work_order_status(work_order_id: str, new_status: str):
-    """Update a work order's status (open/in_progress/closed)."""
+async def update_work_order_status(work_order_id: str, new_status: str, request: Request = None):
+    """Update a work order's status (open/in_progress/closed). On CLOSE, schedule an
+    autonomous post-maintenance verification watch — auto-recheck that the fix held."""
     for w in _WORK_ORDERS:
         if w["id"] == work_order_id:
             w["status"] = new_status
             w["updated_at"] = datetime.now().isoformat()
+            if str(new_status).lower() in ("closed", "done", "completed", "resolved"):
+                w["verification_scheduled"] = await _schedule_post_maint(request, w["equipment_id"])
             return {"updated": True, "work_order": w}
     raise HTTPException(404, f"Work order {work_order_id} not found")
+
+
+async def _schedule_post_maint(request, equipment_id: str) -> bool:
+    """Best-effort: ask the dispatcher to watch this equipment N hours post-fix."""
+    import os
+    dispatcher = getattr(getattr(request, "app", None), "state", None)
+    dispatcher = getattr(dispatcher, "dispatcher", None) if dispatcher else None
+    if dispatcher is None or not hasattr(dispatcher, "schedule_post_maintenance_verification"):
+        return False
+    try:
+        hours = float(os.getenv("ARVIS_POST_MAINT_HOURS", "24"))
+        await dispatcher.schedule_post_maintenance_verification(equipment_id, hours=hours)
+        logger.info(f"[Demo] Post-maintenance verification scheduled for {equipment_id} (+{hours}h)")
+        return True
+    except Exception as e:
+        logger.debug(f"[Demo] post-maint schedule failed: {e}")
+        return False
+
+
+@router.get("/calibration/readiness")
+async def calibration_readiness(request: Request):
+    """Data-driven 'is the building ready for alerting?' verdict — aggregates the
+    calibrator's FP-shadow-tested promotions; approves or recommends extending learning."""
+    calibrator = getattr(request.app.state, "calibrator", None)
+    if calibrator is None or not hasattr(calibrator, "assess_ops_readiness"):
+        raise HTTPException(503, "calibrator not available")
+    return await calibrator.assess_ops_readiness()
 
 
 # ═══════════════════════════════════════════════════════════════════════════

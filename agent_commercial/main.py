@@ -1281,7 +1281,15 @@ class OpsCopilot:
                 database=self.database,
             ),
         )
-        
+
+        # Expose the calibrator + autonomous dispatcher to the API (calibration-readiness
+        # endpoint + post-maintenance verification watch on work-order close).
+        try:
+            self.api_app.state.calibrator = getattr(self, "calibrator", None)
+            self.api_app.state.dispatcher = getattr(self, "_dispatcher", None)
+        except Exception:
+            pass
+
         config = uvicorn.Config(
             self.api_app,
             host="0.0.0.0",
