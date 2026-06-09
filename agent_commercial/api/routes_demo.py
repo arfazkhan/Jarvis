@@ -949,6 +949,31 @@ async def _schedule_post_maint(request, equipment_id: str) -> bool:
         return False
 
 
+@router.get("/topology")
+async def equipment_topology(request: Request):
+    """The equipment dependency tree (role / redundancy / parent-child edges)."""
+    bms_state = getattr(request.app.state, "bms_state", None)
+    if bms_state is None:
+        raise HTTPException(503, "bms_state not available")
+    from agent_commercial.topology import system_graph
+    equipment = await bms_state.get_all_equipment()
+    return {"count": len(equipment), "graph": system_graph(equipment)}
+
+
+@router.get("/impact")
+async def cascade_impact(request: Request):
+    """Cascade: active alarms → quantified system impact + downstream affected units +
+    building-comfort delta, ordered by impact."""
+    bms_state = getattr(request.app.state, "bms_state", None)
+    if bms_state is None:
+        raise HTTPException(503, "bms_state not available")
+    from agent_commercial.topology import impact_analysis
+    equipment = await bms_state.get_all_equipment()
+    alarms = await bms_state.get_active_alarms()
+    impacts = impact_analysis(equipment, alarms)
+    return {"count": len(impacts), "impacts": [i.__dict__ for i in impacts]}
+
+
 @router.get("/calibration/readiness")
 async def calibration_readiness(request: Request):
     """Data-driven 'is the building ready for alerting?' verdict — aggregates the
