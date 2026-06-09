@@ -25,6 +25,18 @@ torch>=2.0.0                    # PyTorch for LSTM + VAE (fdd_autoencoder)
 # tensorflow>=2.13.0            # Alternative: TensorFlow (replaced by PyTorch)
 pgmpy>=0.1.17                   # Bayesian Network for root cause analysis (analyze_root_cause)
 
+# ── OpenMP coexistence (torch + faiss-cpu + numpy/MKL) ──────────────────────
+# Each of these bundles an OpenMP runtime; on Windows, loading more than one into
+# a single process can SEGFAULT (EXIT 139) at the BGE reranker / sentence-transformers
+# (CrossEncoder) load. agent_commercial/__init__.py sets the OpenMP guards
+# (KMP_DUPLICATE_LIB_OK=TRUE, OMP_NUM_THREADS=1, MKL_THREADING_LAYER=SEQUENTIAL,
+# KMP_INIT_AT_FORK=FALSE) BEFORE any native import — so reranking stays ON by default.
+# Verified-stable combo: torch==2.11.0  faiss-cpu==1.13.0  sentence-transformers==5.2.0
+#                        numpy==1.26.4  transformers==5.2.0
+# Escape hatch if a host still misbehaves: ARVIS_DISABLE_RERANK=1 (pass-through ranking).
+faiss-cpu>=1.8.0                # Vector similarity (reranker/RAG) — OpenMP-guarded (see note)
+sentence-transformers>=2.2.0    # BGE cross-encoder reranker (local) — OpenMP-guarded (see note)
+
 # ═══════════════════════════════════════════════════════════
 # API & Server
 # ═══════════════════════════════════════════════════════════

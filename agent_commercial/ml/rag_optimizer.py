@@ -63,6 +63,11 @@ class CrossEncoderReranker:
 
     def _get_local_model(self):
         cls = CrossEncoderReranker
+        # Escape hatch: skip the native BGE/torch load entirely (it can segfault on
+        # some CPU/lib combos). rerank() then degrades gracefully (Bedrock or pass-through).
+        if os.environ.get("ARVIS_DISABLE_RERANK", "").strip() in ("1", "true", "True"):
+            cls._CLS_local_ok = False
+            return None
         if cls._CLS_local_ok is False:
             return None
         if cls._CLS_local_model is None:

@@ -130,6 +130,57 @@ def _ensure_openai_client(agent, base_url: str, api_key):
         except Exception as e:
             logger.warning(f"[UnifiedLLM] failed to build OpenAI client for {base_url}: {e}")
 
+
+def _balanced_spans(s: str):
+    """Yield every top-level balanced JSON value (object OR array) in order. Counts both
+    bracket families together so a top-level array `[{...},{...}]` is returned whole
+    rather than as its first inner object."""
+    depth, start = 0, None
+    opens, closes = "{[", "}]"
+    for i, ch in enumerate(s):
+        if ch in opens:
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch in closes and depth > 0:
+            depth -= 1
+            if depth == 0 and start is not None:
+                yield s[start:i + 1]
+
+
+def _extract_json_robust(text: str):
+    """Pull the answer JSON from an LLM reply. Reasoning models (K2-Think) emit long
+    chain-of-thought — itself full of {...} example fragments — then a `</think>`
+    delimiter, then the real JSON last. So: drop everything up to the final `</think>`,
+    strip fences, then take the LAST brace-balanced object/array that parses (NOT a
+    greedy first-to-last match, which swallows reasoning braces). Returns dict/list or None."""
+    if not text:
+        return None
+    s = text
+    if "</think>" in s:
+        s = s.rsplit("</think>", 1)[1]
+    s = re.sub(r"<(?:think|thinking|reasoning)>.*?</(?:think|thinking|reasoning)>", "", s, flags=re.DOTALL)
+    s = s.strip()
+    if "```json" in s:
+        s = s.split("```json", 1)[1].split("```", 1)[0].strip()
+    elif "```" in s:
+        for b in s.split("```"):
+            if b.strip().startswith(("{", "[")):
+                s = b.strip()
+                break
+    s = s.strip()
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        pass
+    # Last top-level balanced value that parses (object or array) = the model's answer.
+    for cand in reversed(list(_balanced_spans(s))):
+        try:
+            return json.loads(cand)
+        except json.JSONDecodeError:
+            continue
+    return None
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # BEDROCK COST METERING — per-model pricing ($/1M tokens: input, output)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -725,44 +776,12 @@ class UnifiedLLM(BaseModel):
                     except json.JSONDecodeError:
                         pass
 
-                # Strip thinking tags
-                content = re.sub(r"<(?:think|thinking)>.*?</(?:think|thinking)>", "", content, flags=re.DOTALL)
-                content = re.sub(r"</?[a-zA-Z_]+>", "", content)
-
-                # Extract from markdown code fences
-                if "```json" in content:
-                    content = content.split("```json")[1].split("```")[0].strip()
-                elif "```" in content:
-                    for block in content.split("```"):
-                        block = block.strip()
-                        if block.startswith(("{", "[")):
-                            content = block
-                            break
-
-                content = content.strip()
-                if not content:
-                    raise json.JSONDecodeError("Empty content", "", 0)
-
-                # Try direct parse after cleanup
-                try:
-                    return json.loads(content)
-                except json.JSONDecodeError:
-                    pass
-
-                # Greedy extraction: find the largest JSON object/array
-                obj_match = re.search(r"(\{.*\})", content, re.DOTALL)
-                if obj_match:
-                    try:
-                        return json.loads(obj_match.group(1))
-                    except json.JSONDecodeError:
-                        pass
-
-                arr_match = re.search(r"(\[.*\])", content, re.DOTALL)
-                if arr_match:
-                    try:
-                        return json.loads(arr_match.group(1))
-                    except json.JSONDecodeError:
-                        pass
+                # Robust extraction — handles reasoning models (K2-Think) that wrap the
+                # JSON after a </think> delimiter / verbose chain-of-thought. Takes the
+                # LAST brace-balanced object, so reasoning-text braces don't poison it.
+                _robust = _extract_json_robust(content)
+                if _robust is not None:
+                    return _robust
 
                 # Channel-specific prose coercion — last resort before retry
                 # Nova Lite/Micro may respond with prose instead of {"tier":2}
