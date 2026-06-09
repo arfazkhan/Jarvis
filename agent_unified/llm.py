@@ -110,6 +110,26 @@ BEDROCK_FALLBACK_MAP: Dict[str, str] = {
 _BEDROCK_PREFIXES = ("amazon.", "anthropic.", "moonshot.", "moonshotai.", "minimax.",
                      "zai.", "z-ai.", "mistral.", "meta.", "cohere.", "deepseek.", "qwen.")
 
+
+def _bedrock_enabled() -> bool:
+    """Bedrock is the default backend when its creds exist — UNLESS ARVIS_LLM_BACKEND
+    explicitly selects a legacy OpenAI-compatible provider (k2think / openai / groq).
+    This is the single switch that lets commercial run on K2Think instead of Bedrock."""
+    if os.getenv("ARVIS_LLM_BACKEND", "").strip().lower() in ("k2think", "legacy", "groq", "openai"):
+        return False
+    return bool(os.getenv("BEDROCK_API_KEY") or os.getenv("AWS_ACCESS_KEY_ID") or os.getenv("AWS_PROFILE"))
+
+
+def _ensure_openai_client(agent, base_url: str, api_key):
+    """Give a legacy LLMAgent a real OpenAI-compatible client (the vendored stub builds
+    none), so _ask_openai_compat can serve k2think/openai/groq with NATIVE tool-calling."""
+    if api_key and getattr(agent, "client", None) is None:
+        try:
+            from openai import OpenAI
+            agent.client = OpenAI(base_url=base_url, api_key=api_key)
+        except Exception as e:
+            logger.warning(f"[UnifiedLLM] failed to build OpenAI client for {base_url}: {e}")
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # BEDROCK COST METERING — per-model pricing ($/1M tokens: input, output)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -273,11 +293,7 @@ class UnifiedLLM(BaseModel):
         super().__init__(**data)
         global _REASONING_AGENT, _TOOL_AGENT, _FALLBACK_TOOL_AGENT
 
-        _bedrock_active = bool(
-            os.getenv("BEDROCK_API_KEY")
-            or os.getenv("AWS_ACCESS_KEY_ID")
-            or os.getenv("AWS_PROFILE")
-        )
+        _bedrock_active = _bedrock_enabled()
         if _bedrock_active:
             logger.info("[UnifiedLLM] Bedrock active — skipping legacy provider init (K2Think/Groq).")
             return
@@ -310,16 +326,19 @@ class UnifiedLLM(BaseModel):
                 override_model=model
             )
             
-            # Configure Provider Specifics
-            if provider == "k2think" and _REASONING_AGENT.client:
-                _REASONING_AGENT.client.base_url = "https://api.k2think.ai/v1"
-
-                k2_key = os.getenv("K2THINK_API_KEY")
-                if k2_key:
-                    _REASONING_AGENT.client.api_key = k2_key
-            elif provider == "groq" and _REASONING_AGENT.client:
-                 # Groq client usually configured by LLMAgent via GROQ_API_KEY env var
-                 pass
+            # Configure Provider Specifics — build a real OpenAI-compatible client
+            # (the vendored LLMAgent stub builds none) so native tool-calling works.
+            if provider == "k2think":
+                _ensure_openai_client(_REASONING_AGENT, "https://api.k2think.ai/v1",
+                                      os.getenv("K2THINK_API_KEY"))
+                if _REASONING_AGENT.client:
+                    _REASONING_AGENT.client.base_url = "https://api.k2think.ai/v1"
+            elif provider == "openai":
+                _ensure_openai_client(_REASONING_AGENT, "https://api.openai.com/v1",
+                                      os.getenv("OPENAI_API_KEY"))
+            elif provider == "groq":
+                _ensure_openai_client(_REASONING_AGENT, "https://api.groq.com/openai/v1",
+                                      os.getenv("GROQ_API_KEY"))
             elif provider == "nvidia":
                  # Nvidia uses custom adapter _ask_nvidia using httpx
                  _REASONING_AGENT.provider = "nvidia"
@@ -341,10 +360,20 @@ class UnifiedLLM(BaseModel):
                 override_model=tool_model
             )
             
-            # 🚀 K2 Agentic Routing (build-api)
-            if tool_provider == "k2think" and _TOOL_AGENT.client:
-                _TOOL_AGENT.client.base_url = "https://build-api.k2think.ai/v1"
-                print(f"[UnifiedLLM] K2 Agentic Endpoint Active: {_TOOL_AGENT.client.base_url}")
+            # K2Think tool agent — use api.k2think.ai/v1 (verified to serve the tools
+            # API; build-api.k2think.ai/v1 returns 404). Build a real client if missing.
+            if tool_provider == "k2think":
+                _ensure_openai_client(_TOOL_AGENT, "https://api.k2think.ai/v1",
+                                      os.getenv("K2THINK_API_KEY"))
+                if _TOOL_AGENT.client:
+                    _TOOL_AGENT.client.base_url = "https://api.k2think.ai/v1"
+                    print(f"[UnifiedLLM] K2 tool endpoint: {_TOOL_AGENT.client.base_url}")
+            elif tool_provider == "openai":
+                _ensure_openai_client(_TOOL_AGENT, "https://api.openai.com/v1",
+                                      os.getenv("OPENAI_API_KEY"))
+            elif tool_provider == "groq":
+                _ensure_openai_client(_TOOL_AGENT, "https://api.groq.com/openai/v1",
+                                      os.getenv("GROQ_API_KEY"))
                 
         # Initialize Groq Fallback Layer (Always warm if Groq is not the primary)
         if _FALLBACK_TOOL_AGENT is None:
@@ -519,7 +548,7 @@ class UnifiedLLM(BaseModel):
             full_system_prompt = "\n".join([m["content"] for m in system_msgs])
 
         bedrock_model = BEDROCK_MODEL_MAP.get(channel)
-        if bedrock_model and (os.getenv("BEDROCK_API_KEY") or os.getenv("AWS_ACCESS_KEY_ID") or os.getenv("AWS_PROFILE")):
+        if bedrock_model and _bedrock_enabled():
             # Fix 14a: honour explicit override_model when caller requests a specific model.
             _effective_model = override_model or bedrock_model
             response = await self._ask_bedrock(
@@ -563,7 +592,7 @@ class UnifiedLLM(BaseModel):
                 # Create a fresh copy to modify to avoid mutating original list
                 reg_messages = list(messages) + [loop_correction]
                 
-                if bedrock_model and (os.getenv("BEDROCK_API_KEY") or os.getenv("AWS_ACCESS_KEY_ID") or os.getenv("AWS_PROFILE")):
+                if bedrock_model and _bedrock_enabled():
                     _effective_model = override_model or bedrock_model
                     response = await self._ask_bedrock(
                         model_id=_effective_model,
@@ -607,7 +636,7 @@ class UnifiedLLM(BaseModel):
         # Bedrock-first: tool channels always prefer Bedrock if AWS creds present
         tool_channel = channel if channel in BEDROCK_MODEL_MAP else "tool"
         bedrock_model = BEDROCK_MODEL_MAP.get(tool_channel)
-        if bedrock_model and (os.getenv("BEDROCK_API_KEY") or os.getenv("AWS_ACCESS_KEY_ID") or os.getenv("AWS_PROFILE")):
+        if bedrock_model and _bedrock_enabled():
             try:
                 return await self._ask_bedrock(
                     model_id=bedrock_model,
@@ -1212,9 +1241,18 @@ class UnifiedLLM(BaseModel):
             if getattr(message, "tool_calls", None):
                 from agent_unified.schema import ToolCall, Function
                 for tc in message.tool_calls:
+                    _args = tc.function.arguments
+                    # K2Think double-encodes tool arguments (a JSON string wrapping the
+                    # JSON object) — unwrap one layer so downstream json.loads works.
+                    try:
+                        _decoded = json.loads(_args)
+                        if isinstance(_decoded, str):
+                            _args = _decoded
+                    except Exception:
+                        pass
                     tool_calls.append(ToolCall(
                         id=tc.id,
-                        function=Function(name=tc.function.name, arguments=tc.function.arguments)
+                        function=Function(name=tc.function.name, arguments=_args)
                     ))
             
             content = message.content
