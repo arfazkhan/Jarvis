@@ -141,12 +141,41 @@ class _State:
 
 
 def create_app():
+    import asyncio
     import hmac
+    from contextlib import asynccontextmanager
+
     from fastapi import Body, FastAPI, Header, HTTPException, Request
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import JSONResponse, StreamingResponse
 
-    app = FastAPI(title="ArvisX — Residential Operations Intelligence", version="0.2.0")
+    @asynccontextmanager
+    async def lifespan(_app):
+        # Startup: optionally run the autonomous heartbeat (ARVISX_HEARTBEAT=1).
+        state._last_tick = getattr(state, "_last_tick", None)
+        if os.environ.get("ARVISX_HEARTBEAT", "").strip() in ("1", "true", "True"):
+            from arvisx.scheduler import Heartbeat, community_tick
+            interval = float(os.environ.get("ARVISX_HEARTBEAT_INTERVAL", "300"))
+
+            async def _tick(n):
+                state._last_tick = await community_tick(state, llm=_llm_for_reasoning())
+
+            state._hb = Heartbeat(_tick, interval_s=interval)
+            state._hb_task = asyncio.create_task(state._hb.run())
+            logger.info(f"[ArvisX] heartbeat started (every {interval}s)")
+        try:
+            yield
+        finally:
+            # Shutdown: stop the heartbeat and let its task unwind.
+            hb = getattr(state, "_hb", None)
+            if hb is not None:
+                hb.stop()
+            task = getattr(state, "_hb_task", None)
+            if task is not None:
+                task.cancel()
+
+    app = FastAPI(title="ArvisX — Residential Operations Intelligence", version="0.2.0",
+                  lifespan=lifespan)
     # CORS: lock to configured origins when ARVISX_CORS is set, else open (dev).
     _origins = [o.strip() for o in os.environ.get("ARVISX_CORS", "*").split(",") if o.strip()]
     app.add_middleware(CORSMiddleware, allow_origins=_origins, allow_methods=["*"], allow_headers=["*"])
@@ -603,26 +632,7 @@ def create_app():
                 "ticks": getattr(getattr(state, "_hb", None), "ticks", 0),
                 "last_tick": _jsonable(getattr(state, "_last_tick", None))}
 
-    @app.on_event("startup")
-    async def _maybe_start_heartbeat():
-        state._last_tick = getattr(state, "_last_tick", None)
-        if os.environ.get("ARVISX_HEARTBEAT", "").strip() in ("1", "true", "True"):
-            import asyncio
-            from arvisx.scheduler import Heartbeat, community_tick
-            interval = float(os.environ.get("ARVISX_HEARTBEAT_INTERVAL", "300"))
-
-            async def _tick(n):
-                state._last_tick = await community_tick(state, llm=_llm_for_reasoning())
-
-            state._hb = Heartbeat(_tick, interval_s=interval)
-            state._hb_task = asyncio.create_task(state._hb.run())
-            logger.info(f"[ArvisX] heartbeat started (every {interval}s)")
-
-    @app.on_event("shutdown")
-    async def _stop_heartbeat():
-        hb = getattr(state, "_hb", None)
-        if hb is not None:
-            hb.stop()
+    # (heartbeat start/stop is handled by the lifespan context manager above)
 
     # ── WhatsApp operational layer (Phase 14) — deterministic, no LLM ────
     _ACTION_ROLES = {"owner", "fm", "facility_manager"}
