@@ -64,6 +64,8 @@ class ArvisxDb:
                 PRIMARY KEY (building_id, watch_id));
             CREATE TABLE IF NOT EXISTS heartbeat_ticks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, ts TEXT, data TEXT);
+            CREATE TABLE IF NOT EXISTS users (
+                username TEXT PRIMARY KEY, role TEXT, pw_hash TEXT, created_at TEXT);
             """)
 
     # ── Building commissioning config ────────────────────────────────────
@@ -173,3 +175,23 @@ class ArvisxDb:
             rows = c.execute("SELECT data FROM heartbeat_ticks WHERE building_id=? ORDER BY id DESC LIMIT ?",
                              (self.building_id, limit)).fetchall()
             return [json.loads(r["data"]) for r in rows]
+
+    # ── Users (frontend auth) ────────────────────────────────────────────
+    def create_user(self, username: str, role: str, pw_hash: str) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("INSERT OR REPLACE INTO users (username, role, pw_hash, created_at) VALUES (?,?,?,?)",
+                      (username, role, pw_hash, datetime.now().isoformat()))
+
+    def get_user(self, username: str) -> Optional[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT username, role, pw_hash FROM users WHERE username=?", (username,)).fetchone()
+            return dict(r) if r else None
+
+    def count_users(self) -> int:
+        with self._lock, self._conn() as c:
+            return c.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"]
+
+    def list_users(self) -> List[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            rows = c.execute("SELECT username, role, created_at FROM users ORDER BY username").fetchall()
+            return [dict(r) for r in rows]

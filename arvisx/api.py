@@ -68,6 +68,14 @@ class _State:
             self.wo_store.load_from(self.db)
         except Exception:
             pass
+        # Bootstrap an initial owner account if configured and no users exist yet.
+        admin_u = os.environ.get("ARVISX_ADMIN_USER", "").strip()
+        admin_p = os.environ.get("ARVISX_ADMIN_PASSWORD", "").strip()
+        if admin_u and admin_p and self.db.count_users() == 0:
+            from arvisx.auth import hash_password
+            self.db.create_user(admin_u, "owner", hash_password(admin_p))
+        # User auth is enforced when any user exists OR an API key is set.
+        self.auth_on = bool(self.db.count_users() > 0 or os.environ.get("ARVISX_API_KEY", "").strip())
         if os.environ.get("ARVISX_SOURCE", "sim").lower() == "mqtt":
             self._start_mqtt()
         else:
@@ -134,9 +142,9 @@ class _State:
 
 def create_app():
     import hmac
-    from fastapi import Body, FastAPI, HTTPException, Request
+    from fastapi import Body, FastAPI, Header, HTTPException, Request
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import JSONResponse
+    from fastapi.responses import JSONResponse, StreamingResponse
 
     app = FastAPI(title="ArvisX — Residential Operations Intelligence", version="0.2.0")
     # CORS: lock to configured origins when ARVISX_CORS is set, else open (dev).
@@ -150,17 +158,61 @@ def create_app():
     if not _api_key:
         logger.warning("[ArvisX] ARVISX_API_KEY not set — API is OPEN (dev mode). Set it for any networked pilot.")
 
-    @app.middleware("http")
-    async def _auth(request: Request, call_next):
-        if _api_key and request.url.path.startswith("/api/v1"):
-            auth = request.headers.get("authorization", "")
-            provided = auth[7:] if auth.lower().startswith("bearer ") else request.headers.get("x-api-key", "")
-            if not provided or not hmac.compare_digest(provided, _api_key):
-                return JSONResponse({"detail": "unauthorized — missing/invalid API key"}, status_code=401)
-        return await call_next(request)
-
     state = _State()
     app.state.community = state
+
+    # Auth: API key (server) OR user Bearer token (browser). Writes (non-GET) require
+    # an owner/fm role; reads need any authenticated identity. Login is exempt.
+    from arvisx import auth as _auth_mod
+    _EXEMPT = {"/api/v1/auth/login"}
+
+    @app.middleware("http")
+    async def _auth(request: Request, call_next):
+        path = request.url.path
+        if not path.startswith("/api/v1") or path in _EXEMPT:
+            return await call_next(request)
+        if not (_api_key or state.auth_on):
+            request.state.role = "system"          # dev mode: wide open
+            return await call_next(request)
+        authz = request.headers.get("authorization", "")
+        # EventSource (SSE) can't set headers → allow ?token= for the stream.
+        if not authz and request.query_params.get("token"):
+            authz = "Bearer " + request.query_params["token"]
+        sub, role = _auth_mod.identify(authz, request.headers.get("x-api-key", ""), _api_key)
+        if role is None:
+            return JSONResponse({"detail": "unauthorized — log in or present an API key"}, status_code=401)
+        if request.method not in ("GET", "HEAD", "OPTIONS") and not _auth_mod.role_can_write(role):
+            return JSONResponse({"detail": "forbidden — this action requires an owner/fm role"}, status_code=403)
+        request.state.sub, request.state.role = sub, role
+        return await call_next(request)
+
+    # ── auth endpoints ───────────────────────────────────────────────────
+    @app.post("/api/v1/auth/login")
+    async def login(payload: Dict[str, Any] = Body(...)):
+        u = str((payload or {}).get("username", "")).strip()
+        pw = str((payload or {}).get("password", ""))
+        rec = state.db.get_user(u) if u else None
+        if not rec or not _auth_mod.verify_password(pw, rec["pw_hash"]):
+            raise HTTPException(401, "invalid credentials")
+        return {"token": _auth_mod.make_token(u, rec["role"]), "role": rec["role"], "username": u}
+
+    @app.get("/api/v1/auth/me")
+    async def whoami(authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        sub, role = _auth_mod.identify(authorization, x_api_key, _api_key)
+        return {"username": sub, "role": role}
+
+    @app.post("/api/v1/auth/users")
+    async def create_user_ep(payload: Dict[str, Any] = Body(...),
+                             authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        _, role = _auth_mod.identify(authorization, x_api_key, _api_key)
+        if role not in ("system", "owner"):
+            raise HTTPException(403, "only owner/system can create users")
+        p = payload or {}
+        u, pw, role = str(p.get("username", "")).strip(), str(p.get("password", "")), str(p.get("role", "viewer"))
+        if not u or not pw or role not in _auth_mod.ALL_ROLES:
+            raise HTTPException(400, "need username, password, role in {owner,fm,viewer}")
+        state.db.create_user(u, role, _auth_mod.hash_password(pw))
+        return {"username": u, "role": role}
 
     @app.get("/api/v1/community/overview")
     async def overview():
@@ -170,18 +222,30 @@ def create_app():
                 "services": _jsonable(rep.services)}
 
     @app.get("/api/v1/community/risks")
-    async def risks():
+    async def risks(limit: int = 200, offset: int = 0):
         rep = state.report_now()
-        return {"count": len(rep.risks), "risks": _jsonable(rep.risks)}
+        page = rep.risks[offset:offset + limit]
+        return {"count": len(rep.risks), "limit": limit, "offset": offset, "risks": _jsonable(page)}
 
     @app.get("/api/v1/community/assets")
-    async def assets():
+    async def assets(limit: int = 200, offset: int = 0):
         rep = state.report_now()
-        return {"count": len(rep.assets), "assets": _jsonable(rep.assets)}
+        page = rep.assets[offset:offset + limit]
+        return {"count": len(rep.assets), "limit": limit, "offset": offset, "assets": _jsonable(page)}
 
     @app.get("/api/v1/community/report")
     async def report():
         return _jsonable(state.report_now())
+
+    @app.get("/api/v1/asset/{asset_id}")
+    async def asset_state(asset_id: str):
+        """Single asset: live state + its current risks (for the asset detail screen)."""
+        a = state.asset(asset_id)
+        if a is None:
+            raise HTTPException(404, f"unknown asset {asset_id}")
+        rep = state.report_now()
+        return {"asset": _jsonable(a),
+                "risks": _jsonable([r for r in rep.risks if r.asset_id == asset_id])}
 
     @app.get("/api/v1/asset/{asset_id}/advisory")
     async def advisory(asset_id: str):
@@ -332,9 +396,33 @@ def create_app():
         return {"status": "ok", **state.sync_workorders()}
 
     @app.get("/api/v1/workorders")
-    async def wo_list():
+    async def wo_list(limit: int = 200, offset: int = 0):
         state.sync_workorders()   # keep tickets reconciled with current risks
-        return {"count": len(state.wo_store.all()), "work_orders": _jsonable(state.wo_store.all())}
+        allwo = state.wo_store.all()
+        return {"count": len(allwo), "limit": limit, "offset": offset,
+                "work_orders": _jsonable(allwo[offset:offset + limit])}
+
+    @app.post("/api/v1/workorders/from-risk")
+    async def wo_from_risk(payload: Dict[str, Any] = Body(...)):
+        """Create ONE work order for an asset's current risk (the per-risk button).
+        Optional 'message' picks a specific risk; default = the asset's top risk."""
+        from arvisx.workorders import open_work_order
+        asset_id = str((payload or {}).get("asset_id", "")).strip()
+        a = state.asset(asset_id)
+        if a is None:
+            raise HTTPException(404, f"unknown asset {asset_id}")
+        rep = state.report_now()
+        cand = [r for r in rep.risks if r.asset_id == asset_id]
+        if not cand:
+            raise HTTPException(409, f"no active risk on {asset_id} to ticket")
+        want = str((payload or {}).get("message", "")).strip().lower()
+        risk = next((r for r in cand if want and want in r.message.lower()), cand[0])
+        wo = open_work_order(state.wo_store, a, risk, db=state.db, skillbook=state.skillbook)
+        try:
+            state.wo_store.save_to(state.db)
+        except Exception:
+            pass
+        return _jsonable(wo)
 
     @app.get("/api/v1/workorders/{wo_id}")
     async def wo_get(wo_id: str):
@@ -487,6 +575,26 @@ def create_app():
     async def heartbeat_history(limit: int = 50):
         """Recorded heartbeat ticks — the building's pulse over time."""
         return {"ticks": state.db.recent_ticks(limit)}
+
+    @app.get("/api/v1/events/stream")
+    async def events_stream(interval: float = 5.0):
+        """Server-Sent Events for live tiles: readiness, risk count, open work orders.
+        EventSource can't set headers — pass the token as ?token=… (handled in auth).
+        The stream ends when the client disconnects (generator is cancelled)."""
+        import asyncio
+        import json as _json
+
+        async def gen():
+            while True:
+                rep = state.report_now()
+                open_wo = sum(1 for w in state.wo_store.all()
+                              if w.status.value in ("open", "acknowledged", "in_progress"))
+                payload = {"ts": rep.generated_at.isoformat(), "readiness": rep.readiness,
+                           "band": rep.readiness_band, "risks": len(rep.risks), "open_work_orders": open_wo}
+                yield f"data: {_json.dumps(payload)}\n\n"
+                await asyncio.sleep(max(1.0, float(interval)))
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
 
     @app.get("/api/v1/heartbeat/status")
     async def heartbeat_status():

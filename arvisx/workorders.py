@@ -118,6 +118,36 @@ class WorkOrderStore:
             return wo
 
 
+def open_work_order(store: WorkOrderStore, asset: Asset, risk: Risk, db=None, skillbook=None,
+                    now: Optional[datetime] = None) -> WorkOrder:
+    """Create ONE work order for a specific asset+risk (the per-risk 'Create work order'
+    button), deduped by signature — returns the existing open WO if one already exists."""
+    now = now or datetime.now()
+    sig = risk_signature(risk)
+    with store._lock:
+        wo = store._by_sig.get(sig)
+        if wo is not None and wo.status in _ACTIVE:
+            return wo
+        adv = _rules_floor(asset, [risk]) if asset else None
+        wid = store._next_id()
+        wo = WorkOrder(
+            wo_id=wid, asset_id=risk.asset_id, asset_name=risk.asset_name, service=risk.service,
+            title=risk.message, priority=_PRIORITY[risk.severity], severity=risk.severity,
+            cause=(adv.root_cause if adv else risk.message),
+            recommended_action=(adv.recommended_action if adv else (risk.detail or "Inspect.")),
+            status=WorkOrderStatus.OPEN, signature=sig,
+            asset_type=(asset.asset_type.value if asset else ""),
+            created_at=now, updated_at=now, last_seen_at=now,
+            history=[{"ts": now.isoformat(), "event": "opened (manual)", "by": "operator"}])
+        store._by_sig[sig] = wo
+    if db is not None:
+        db.log_event(risk.asset_id, risk.asset_name, risk.service.value, risk.severity.value,
+                     risk.message, risk.detail, now)
+    if skillbook is not None and asset is not None and adv is not None:
+        skillbook.record(asset, risk, adv.root_cause, adv.recommended_action, confirmed=False)
+    return wo
+
+
 def sync_workorders(assets: List[Asset], store: WorkOrderStore, now: Optional[datetime] = None,
                     zones=None, baselines=None, virtual: bool = False, fusion: bool = False,
                     db=None, skillbook=None) -> Dict[str, int]:
