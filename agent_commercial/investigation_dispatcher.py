@@ -58,7 +58,13 @@ class InvestigationDispatcher:
             "suppressed_concurrency": 0,
             "completed": 0,
             "failed": 0,
+            "watches_scheduled": 0,
         }
+
+        # Agent-decided temporal watches (drift confirmation, post-maintenance verify).
+        from agent_commercial.watch import WatchManager
+        self.watch = WatchManager(bms_state=bms_state)
+        self._watch_task = None
 
         # Subscribe to EventBus anomaly events
         if event_bus:
@@ -93,6 +99,12 @@ class InvestigationDispatcher:
         if _anom_rank < _thresh_rank:
             self._stats.setdefault("suppressed_severity", 0)
             self._stats["suppressed_severity"] += 1
+            # Don't just drop a sub-critical deviation — WATCH it. If it's sustained
+            # (or worsens) over the window, it gets re-investigated; transients self-clear.
+            try:
+                await self.schedule_drift_confirmation(anomaly)
+            except Exception as e:
+                logger.debug(f"[Dispatcher] drift-watch schedule failed: {e}")
             return None
 
         if not self._should_dispatch(eq_id):
@@ -154,7 +166,79 @@ class InvestigationDispatcher:
             **self._stats,
             "active_investigations": self._active,
             "tracked_equipment": len(self._last_investigation),
+            "open_watches": len(self.watch.open_watches()),
         }
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # AGENT-DECIDED WATCHES (wake / sleep / re-investigate over time)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    async def schedule_drift_confirmation(self, anomaly: AnomalyEvent,
+                                          window_seconds: Optional[float] = None):
+        """Watch a sub-critical deviation: re-investigate only if it's SUSTAINED over the
+        window (or the value moves), instead of alarming on a transient."""
+        import os as _os
+        window = window_seconds or float(_os.getenv("ARVIS_DRIFT_WATCH_SECONDS", "1800"))
+        self._stats["watches_scheduled"] += 1
+        return await self.watch.schedule(
+            anomaly.equipment_id, anomaly.point_id,
+            reason=f"confirm sustained deviation on {anomaly.point_id} "
+                   f"(z={anomaly.z_score}, {anomaly.deviation_pct}%)",
+            est_seconds=window, kind="drift_confirm")
+
+    async def schedule_post_maintenance_verification(self, equipment_id: str, point_id: str,
+                                                     hours: float = 24.0):
+        """After a work order closes, auto-recheck the equipment N hours later: did the fix
+        hold? Surfaces a verification advisory rather than assuming the repair worked."""
+        self._stats["watches_scheduled"] += 1
+        return await self.watch.schedule(
+            equipment_id, point_id,
+            reason=f"verify fix held on {equipment_id} ~{hours:.0f}h after maintenance",
+            est_seconds=hours * 3600.0, kind="post_maintenance")
+
+    async def _watch_recheck(self, watch, changed: bool, due: bool):
+        """Re-investigate a watched signal on wake. Returns (resolved|wait, payload)."""
+        if not self.queen:
+            return ("resolved", {"note": "no queen — watch closed"})
+        why = "value moved" if changed else "observation window elapsed"
+        query = (
+            f"AUTONOMOUS WATCH RE-CHECK ({watch.kind}): {watch.reason}. "
+            f"Trigger: {why}. Re-assess {watch.equipment_id}/{watch.point_id} against current "
+            f"telemetry — is the condition real and sustained (escalate), resolved (close), or "
+            f"still developing (keep watching)?")
+        ctx = {"autonomous": True, "trigger": f"watch_{watch.kind}",
+               "watch_equipment": watch.equipment_id, "watch_point": watch.point_id}
+        ctx.update(await self._get_equipment_readings(watch.equipment_id))
+        result = await self._run_swarm(query, ctx)
+        if result:
+            await self._archive(watch.equipment_id, result)
+            if self.sse:
+                try:
+                    await self.sse.broadcast(event_type="autonomous_advisory",
+                        payload={"trigger": f"watch_{watch.kind}", "equipment_id": watch.equipment_id,
+                                 "point_id": watch.point_id, "advisory": result.get("advice", "")},
+                        channel="monitor")
+                except Exception:
+                    pass
+        # One re-check per watch by default — the swarm's advisory is the outcome.
+        return ("resolved", {"woke_on": why, "advice": (result or {}).get("advice", "")[:200]})
+
+    def start_watch_loop(self):
+        """Start the background sleep/wake loop (call once at boot)."""
+        if self._watch_task is not None:
+            return
+        try:
+            self._watch_task = asyncio.ensure_future(
+                self.watch.run(self._watch_recheck))
+            logger.info("[Dispatcher] watch loop started")
+        except RuntimeError:
+            logger.debug("[Dispatcher] no event loop for watch loop")
+
+    def stop_watch_loop(self):
+        self.watch.stop()
+        if self._watch_task is not None:
+            self._watch_task.cancel()
+            self._watch_task = None
 
     def get_history(self, limit: int = 20) -> List[Dict]:
         items = list(self._history)[-limit:]

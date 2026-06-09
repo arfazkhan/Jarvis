@@ -399,6 +399,9 @@ class OpsCopilot:
                 self.state_engine.on_point_update(self._watchdog.on_point_update)
                 # Register autonomous alarm investigation
                 self.state_engine.on_alarm(self._on_alarm_auto_investigate)
+                # Start the agent-decided watch loop (drift confirmation + post-maintenance
+                # verification — wake on telemetry change or the chosen window, re-investigate).
+                self._dispatcher.start_watch_loop()
 
                 # Expose watchdog to the LLM agent so investigations can surface
                 # the real z-score for the equipment under analysis (demo screen 2/4).
@@ -624,6 +627,13 @@ class OpsCopilot:
         if hasattr(self, '_event_correlator') and self._event_correlator:
             self._event_correlator.persist_patterns()
         logger.info("Final state snapshot saved")
+
+        # Stop the agent-decided watch loop
+        if getattr(self, "_dispatcher", None):
+            try:
+                self._dispatcher.stop_watch_loop()
+            except Exception:
+                pass
 
         # Cancel background tasks
         for task in self._tasks:

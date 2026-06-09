@@ -75,6 +75,54 @@ class ThresholdCalibrator:
         self.fp_target = fp_target
         self.digest_builder = DailyDigestBuilder(db_conn, building_id)
 
+    async def assess_ops_readiness(self, min_coverage: float = 0.8,
+                                   min_learning_days: int = 28) -> dict:
+        """Data-driven 'is the building ready for alerting?' verdict — replaces a hardcoded
+        'N weeks then trust it'. Each PROMOTED scope already passed the FP shadow-test
+        (rejection rate within the spec band); this aggregates that record to a building-
+        level decision: APPROVE when a sufficient fraction of scopes are promoted with
+        enough observation days, else recommend EXTENDING the learning window."""
+        try:
+            cur = await self.conn.execute(
+                "SELECT promoted, sample_size_days FROM point_calibrations WHERE building_id=?",
+                (self.building_id,))
+            rows = await cur.fetchall()
+        except Exception as e:
+            return {"building_id": self.building_id, "ready": False, "coverage": 0.0,
+                    "reasons": [f"calibration store unavailable: {e}"], "suggested_extra_days": 7,
+                    "summary": "NOT ready — calibration store unavailable."}
+
+        total = len(rows)
+        promoted = sum(1 for r in rows if (r[0] or 0))
+        days = [int(r[1] or 0) for r in rows]
+        coverage = (promoted / total) if total else 0.0
+        min_days = min(days) if days else 0
+        avg_days = (sum(days) / len(days)) if days else 0.0
+        enough_days = min_days >= min_learning_days
+        ready = total > 0 and coverage >= min_coverage and enough_days
+
+        reasons, suggested = [], 0
+        if total == 0:
+            reasons.append("no calibrations yet — learning not started")
+        if total and coverage < min_coverage:
+            reasons.append(f"only {promoted}/{total} scopes promoted (need >={min_coverage:.0%}; "
+                           f"each must pass the FP shadow-test)")
+        if total and not enough_days:
+            suggested = max(7, min_learning_days - min_days)
+            reasons.append(f"min observation {min_days}d < {min_learning_days}d target")
+        if not ready and suggested == 0:
+            suggested = 7
+
+        summary = (f"Calibration READY — {promoted}/{total} scopes promoted ({coverage:.0%}), "
+                   f"min {min_days}d observed. Alerting is trustworthy."
+                   if ready else
+                   f"NOT ready — {promoted}/{total} promoted ({coverage:.0%}), min {min_days}d observed. "
+                   f"Extend learning ~{suggested}d. " + "; ".join(reasons[:2]))
+        return {"building_id": self.building_id, "ready": ready, "coverage": round(coverage, 3),
+                "promoted": promoted, "total_scopes": total, "min_observation_days": min_days,
+                "avg_observation_days": round(avg_days, 1), "fp_target": self.fp_target,
+                "reasons": reasons, "suggested_extra_days": suggested, "summary": summary}
+
     def hampel_filter(self, data_points: List[float]) -> List[float]:
         """Strip outlier daily standard deviations to prevent stealth-fault inflation."""
         if len(data_points) < 5:
