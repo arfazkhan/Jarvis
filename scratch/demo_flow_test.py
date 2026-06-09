@@ -114,7 +114,10 @@ async def main():
     from agent_commercial.main import OpsCopilot
     from agent_commercial.api.demo_orchestrator import DemoOrchestrator
 
-    copilot = OpsCopilot(mode="simulator")
+    # Honor ARVIS_API_PORT so multiple runs (e.g. the consistency harness) don't
+    # collide on :8000 — each run binds its own uvicorn port.
+    _api_port = int(os.environ.get("ARVIS_API_PORT", "8000"))
+    copilot = OpsCopilot(mode="simulator", api_port=_api_port)
     await copilot.start()
     bms_state = copilot.state_engine
     llm_agent = copilot.llm_agent  # adjust if attribute name differs

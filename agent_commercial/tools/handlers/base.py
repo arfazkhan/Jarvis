@@ -220,23 +220,51 @@ class BMSToolHandler(
         }
 
     def _validate_output(self, tool_name: str, result: Dict, tool_def: Dict) -> Dict:
-        """Flag schema violations in result (non-blocking: injects _schema_violation key)."""
+        """Enforce schema compliance on tool output.
+
+        Behaviour:
+          - If result is not a dict, wraps it in an error dict with all schema keys backfilled.
+          - If schema keys are missing, backfills them with type-safe defaults and records
+            a _schema_violation entry.  This runs even on error responses so that callers
+            can always destructure result[key] without KeyError.
+          - Pure-error dicts (containing *only* an 'error' key) are exempt to avoid
+            polluting clean error signals with phantom zeros.
+        """
         schema = tool_def.get("response_schema")
-        if not schema or not isinstance(result, dict) or result.get("error"):
+        if not schema:
             return result
+
+        # Non-dict result — wrap safely
+        if not isinstance(result, dict):
+            logger.error(
+                f"[ToolHandler] {tool_name} returned non-dict ({type(result).__name__}); "
+                "wrapping in schema-compliant error response."
+            )
+            result = {"error": f"Tool returned non-dict result: {type(result).__name__}"}
+
         try:
             properties = schema.get("properties", {})
-            missing_keys = [k for k in properties if k not in result]
+
+            # Exempt: pure single-key error dicts (avoids polluting clean error signals)
+            is_pure_error = set(result.keys()) <= {"error"}
+
+            missing_keys = [k for k in properties if k not in result and not is_pure_error]
             if missing_keys:
                 result["_schema_violation"] = {
                     "missing_keys": missing_keys,
                     "tool": tool_name,
                 }
-                logger.warning(f"[ToolHandler] {tool_name} output missing keys: {missing_keys}")
-                
+                logger.error(
+                    f"[ToolHandler] SCHEMA VIOLATION — {tool_name} missing keys: {missing_keys}. "
+                    "Backfilling with type-safe defaults. Fix the handler to eliminate this."
+                )
+
                 # Backfill missing keys with type-safe schema-compliant defaults
                 for k in missing_keys:
-                    prop_def = properties[k]
+                    prop_def = properties.get(k, {})
+                    if not isinstance(prop_def, dict):
+                        result[k] = None
+                        continue
                     prop_type = prop_def.get("type")
                     if prop_type == "array":
                         result[k] = []

@@ -511,8 +511,8 @@ async def get_equipment_details(request: Request):
         eq_points = {}
         for point_id in eq.data_points:
             if point_id in current_values:
-                # Remove equipment_id prefix from point name for cleaner display
-                param_name = point_id.replace(f"{eq.equipment_id}_", "")
+                # Remove equipment_id prefix from point name for cleaner display (support both _ and / delimiters)
+                param_name = point_id.replace(f"{eq.equipment_id}_", "").replace(f"{eq.equipment_id}/", "")
                 eq_points[param_name] = current_values[point_id]
         eq_data["realtime_data"] = eq_points
         details.append(eq_data)

@@ -121,27 +121,27 @@ class EmbeddingIntentRouter:
 NODE_REGISTRY = {
     "Energy_Agent": {
         "description": "Optimizes energy consumption, detects waste patterns, forecasts demand, calculates costs in QAR, tracks GSAS certification",
-        "keywords": ["energy", "cost", "kwh", "consumption", "burn rate", "waste", "ghost", "occupancy", "gsas", "gord", "certification", "green", "benchmark", "power", "electricity", "bills", "tariff"],
+        "keywords": ["energy", "cost", "kwh", "consumption", "burn rate", "waste", "ghost", "occupancy", "gsas", "gord", "certification", "green", "benchmark", "power", "electricity", "bills", "tariff", "kw", "load", "efficiency", "demand"],
     },
     "Alarm_Agent": {
         "description": "Triages BMS alarms, performs root cause analysis, correlates cascading failures, identifies nuisance alarms",
-        "keywords": ["alarm", "fault", "broken", "alert", "cascade", "root cause", "critical", "emergency", "trip", "failure", "error", "warning"],
+        "keywords": ["alarm", "fault", "broken", "alert", "cascade", "root cause", "critical", "emergency", "trip", "failure", "error", "warning", "active alarms", "triaged", "nuisance", "nuisance alarm", "failsafe", "deviation", "limit"],
     },
     "Comfort_Agent": {
         "description": "Monitors thermal comfort, zone temperatures, humidity, CO2 levels, occupant satisfaction, and setpoint optimization",
-        "keywords": ["hot", "cold", "comfort", "temperature", "humidity", "co2", "zone", "setpoint", "occupant", "thermal", "warm", "cool", "stuffy", "air quality"],
+        "keywords": ["hot", "cold", "comfort", "temperature", "humidity", "co2", "zone", "setpoint", "occupant", "thermal", "warm", "cool", "stuffy", "air quality", "tenant", "tenants", "complaining", "complaint", "uncomfortable", "overheating", "draft", "ventilation", "airflow"],
     },
     "Maintenance_Agent": {
         "description": "Predicts equipment failures, tracks remaining useful life, schedules preventive maintenance, monitors vibration and runtime",
-        "keywords": ["maintenance", "life", "rul", "predict", "health", "work order", "pm", "lifecycle", "runtime", "hours", "degradation", "vibration", "repair", "replace", "overdue"],
+        "keywords": ["maintenance", "life", "rul", "predict", "health", "work order", "pm", "lifecycle", "runtime", "hours", "degradation", "vibration", "repair", "replace", "overdue", "actuator", "damper", "valve", "linkage", "leakage", "wear", "bearing", "motor", "fan", "compressor", "leak", "slip", "slipping", "stuck", "friction"],
     },
     "Sensor_Fusion_Agent": {
         "description": "Detects sensor drift and calibration issues, validates data quality, creates virtual sensors from correlated readings",
-        "keywords": ["sensor", "drift", "calibration", "data quality", "reading", "stale", "virtual sensor", "accuracy", "measurement", "unreliable"],
+        "keywords": ["sensor", "drift", "calibration", "data quality", "reading", "stale", "virtual sensor", "accuracy", "measurement", "unreliable", "bias", "offset", "stuck reading", "sensor error", "sensor fault", "discrepancy"],
     },
     "Strategic_Agent": {
         "description": "Performs root cause analysis, identifies correlations and trends, runs what-if simulations, builds fleet-wide intelligence",
-        "keywords": ["why", "correlat", "cause", "what if", "simulate", "trust", "fleet", "goal", "compare", "trend", "pattern", "strategic", "long term", "analysis"],
+        "keywords": ["why", "correlat", "cause", "what if", "simulate", "trust", "fleet", "goal", "compare", "trend", "pattern", "strategic", "long term", "analysis", "impact", "downstream", "influence", "consequence", "rca", "cross-system", "correlation", "history"],
     },
     "Planning_Agent": {
         "description": "Creates step-by-step operational plans, sequences maintenance tasks, schedules rollback procedures",

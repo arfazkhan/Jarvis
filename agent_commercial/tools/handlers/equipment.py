@@ -67,6 +67,7 @@ class EquipmentHandlerMixin:
                     "warning": "equipment_not_registered",
                     "message": f"{equipment_id} has {len(points)} sensor data points but is not in the equipment registry. BMS integration may be incomplete.",
                     "equipment_id": equipment_id,
+                    "equipment": None,  # schema key — none registered
                     "data_points": [p.to_dict() for p in points],
                 }
             return {

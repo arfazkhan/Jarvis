@@ -787,6 +787,10 @@ class BMSStateEngine:
                     timestamp=datetime.fromisoformat(pt_data["timestamp"]) if pt_data.get("timestamp") else datetime.now(),
                 )
                 self._points[point.point_id] = point
+                if point.equipment_id and point.equipment_id in self._equipment:
+                    eq = self._equipment[point.equipment_id]
+                    if point.point_id not in eq.data_points:
+                        eq.data_points.append(point.point_id)
 
             for al_data in snapshot.get("alarms", []):
                 from agent_commercial.bms_data_model import AlarmSeverity

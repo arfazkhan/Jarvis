@@ -281,6 +281,7 @@ class SwarmNode(BaseModel):
                             {
                                 "agent": self.name,
                                 "tool": tool_name,
+                                "stage": "Investigate",
                                 "turn": turn,
                             },
                             channel="monitor",

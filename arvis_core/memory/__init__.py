@@ -10,6 +10,7 @@ from .orchestrator import MemoryOrchestrator
 from .consolidator import MemoryConsolidator
 from .preference_store import PreferenceStore
 from .observation_store import ObservationStore
+from .belief_store import BuildingBeliefStore
 from .conversation_buffer import ConversationBuffer
 from .context_builder import ContextBuilder
 from .types import (
@@ -26,6 +27,7 @@ __all__ = [
     'MemoryConsolidator',
     'PreferenceStore',
     'ObservationStore',
+    'BuildingBeliefStore',
     'ConversationBuffer',
     'ContextBuilder',
     # BMS 7-tier types
