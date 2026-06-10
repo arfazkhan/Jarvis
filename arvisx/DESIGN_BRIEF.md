@@ -230,6 +230,58 @@ explicitly approved, assume DON'T and ask.
 | **A fire- or gas-panel look-alike** | Legal exposure. Persistent "supplementary view" disclaimer instead. |
 | **Confidence hidden behind a tooltip** | Confidence chips are first-class, always visible on every risk. |
 
+### Commissioning & the learning period — the PRE-operational experience (be literal)
+
+ArvisX is not "install and alerts appear." A building goes through a **gated state
+machine**, and the UI must reflect which state it's in — the app looks different
+before go-live. This is where trust is won or lost.
+
+```
+DRAFT → ASSETS → SIGNALS → DEPENDENCIES → LEARNING → OPERATIONAL
+```
+
+**The wizard steps (Phase-3 screen, but the STATES affect every screen from day 0):**
+
+| Step | What the user does | Endpoint | UI notes |
+|---|---|---|---|
+| Create building | name + pick services | `POST /commission/building`, `.../services` | |
+| Add assets | confirm equipment list | `.../assets` (one per asset) | **Templates**: `.../apply-template {service}` pre-loads the standard assets — user confirms/edits instead of typing. **Discovery assist**: `POST /commission/discover {topics}` — if devices are already publishing, ArvisX *suggests* the asset list; user accepts/corrects. Design both as "confirm, don't type." |
+| Map signals | which feed belongs to which asset | `.../signals` | |
+| Dependencies | what depends on what | `.../dependencies` | |
+| Advance a step | | `.../transition {state}` | the API REFUSES illegal jumps — surface its error message verbatim |
+| Sanity check | find config/reality mismatches | `POST .../check-anomalies` | returns narrated anomalies (unmapped device publishing, asset with no signals, untyped asset, bad sensor) each with explanation + recommended fix. Design as a "fix-it list" before learning starts. |
+
+**The LEARNING state (days, not minutes — this needs its own design):**
+- While LEARNING: **show no alerts, no risks, no money numbers.** (Literal note: the
+  risk endpoints still RETURN data — this suppression is a UI rule. Read the building
+  state from `GET /commission/building/{bid}` and gate the risk/money UI on
+  `state == "operational"`.) The product is deliberately quiet; the screen must say so
+  proudly, not look broken:
+  > *"ArvisX is learning your building's normal. No alerts yet — it won't cry wolf on day one."*
+- Show learning progress: `GET .../learning` → days elapsed / target + pending validation
+  questions.
+- **Validation questions** — during learning ArvisX may ask the operator things telemetry
+  can't decide ("Is Transfer Pump B a standby or always-on?"). Endpoint:
+  `POST .../validations/{id}/answer {is_normal}`. Design as a short card stack, one
+  question at a time — answering tunes the model.
+
+**Go-live is a VERDICT, not a button:**
+- `POST .../evaluate-readiness` → either **approved** (auto-advances to OPERATIONAL) or
+  **rejected with reasons + a suggested extension** ("only 14/20 signals settled — extend
+  learning ~6 days"). Render the verdict verbatim — coverage %, reasons, extension.
+  There is NO manual "force go live" in the UI (force exists in the API for demos only —
+  never expose it).
+- The moment it approves: alerts arm, the digest starts, money appears. Consider making
+  this moment feel like a milestone ("Your building is now operational").
+
+**What every other screen does pre-operational (literal):**
+- DRAFT/ASSETS/SIGNALS/DEPENDENCIES → Home shows a setup checklist + progress, not a
+  readiness score. No risk list, no money.
+- LEARNING → Home shows the learning card (progress + validations). Service tiles
+  visible but labeled "learning — not yet scored." Checklist + gas billing MAY run
+  (telemetry is flowing); alerts/risks/costs DO NOT.
+- OPERATIONAL → the full product as designed.
+
 ### Rules of engagement
 1. **If the data isn't in an endpoint response, it doesn't go on screen.** No placeholder prose that "the backend will produce later."
 2. **Missing endpoint you genuinely need?** Ask for it (e.g. signal-history for sparklines, events-today for a feed) — small additions are cheap; faked data is not.
