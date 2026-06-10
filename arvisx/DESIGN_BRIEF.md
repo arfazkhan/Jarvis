@@ -182,6 +182,62 @@ Priority order. The first three are the MVP.
 
 ---
 
+## 5.5 BE LITERAL: build this / do not build this
+
+This section is blunt on purpose. Every widget below either has a live endpoint today
+(**BUILD**) or does not (**DON'T**). If a widget is not in the BUILD table and not
+explicitly approved, assume DON'T and ask.
+
+### ✅ BUILD — every widget here binds to a real endpoint, today
+
+| Widget | Endpoint | Notes |
+|---|---|---|
+| Login form | `POST /api/v1/auth/login` → `{token, role}` | store JWT; send as `Authorization: Bearer` |
+| Who am I / role gate | `GET /api/v1/auth/me` | hide write-actions for `viewer` |
+| Readiness hero (% + band) | `GET /api/v1/community/overview` | `community_readiness`, `readiness_band` |
+| 7 service tiles | same response → `services[]` | band + score per service |
+| Money strip | `GET /api/v1/costs` | `monthly_waste`, `exposure_low/high`, `currency` |
+| Risk list (severity, confidence, money) | `GET /api/v1/community/risks` | paginated `?limit=&offset=` |
+| "Create work order" button on a risk | `POST /api/v1/workorders/from-risk {asset_id}` | one click = one WO, deduped server-side |
+| Work-order queue + detail | `GET /api/v1/workorders`, `GET /workorders/{id}` | |
+| WO status change | `POST /workorders/{id}/status/{status}` | open/ack/in_progress/done |
+| WO close-with-cause (the root-cause field) | `POST /workorders/{id}/close {actual_cause, action}` | REQUIRED — this feeds learning |
+| Water hero (hours remaining, fill, refill-ok, forecast string) | `GET /api/v1/water` | forecast is a STRING, not a series |
+| Asset detail (live signals + its risks) | `GET /api/v1/asset/{id}` | |
+| Asset advisory (cause + action + institutional memory) | `GET /api/v1/asset/{id}/advisory` | |
+| Asset fault history | `GET /api/v1/asset/{id}/history` | |
+| Dependency tree / cascade impact | `GET /api/v1/topology`, `GET /api/v1/impact` | impact = ranked, with readiness delta |
+| Daily checklist screen | `GET /api/v1/checklist/today` | auto + physical + flagged readings |
+| Submit a manual reading (with verdict) | `POST /api/v1/checklist/submit-reading` | shows matched / mismatch / no_data |
+| Gas billing statement + CSV | `GET /api/v1/gas/billing?month=YYYY-MM` (`&format=csv`) | ok / no_data / flagged rows |
+| Live updates | `GET /api/v1/events/stream` (SSE, `?token=`) | else poll overview every 30–60s |
+| Commissioning wizard (Phase 3 only) | `POST /api/v1/commission/building/...` chain | gated steps; readiness gate decides go-live |
+
+### ❌ DO NOT BUILD — these have no backend, and some break the product's honesty rules
+
+| Don't build | Why |
+|---|---|
+| **"Similar issues in other communities"** (peer incidents, costs at other buildings) | No fleet data exists — single-tenant. Showing it = fabricated content. **Hard no.** |
+| **"Insights" / "Recommendations" cards with generated prose** ("you used 8% less water", "stagger gardening") | The backend does not produce these sentences. Frontend MUST NOT invent advisory text — every sentence on screen comes from an API response. |
+| **Time-series charts** (24-h water forecast curve, signal sparklines, trend graphs) | No series endpoint yet. `forecast` is a string. If you want charts, request the endpoint first — don't fake the curve. |
+| **"Best time to act: within N days"** | Not computed by the engine. |
+| **Per-WO "estimated time 2–3 hrs" / technician directory with avatars** | Not in the data model. `assignee` is a plain string; render it as text only. |
+| **3D isometric building map with asset positions** | No coordinates exist in commissioning data. Park until the wizard collects positions. A flat dependency-graph view (from `/topology`) is fine. |
+| **"What changed today" activity feed** | No endpoint yet (derivable from events — request it if needed). |
+| **Anything that controls equipment** (start/stop/restart buttons, setpoint sliders, toggles) | ArvisX is read-only. Forbidden, permanently. |
+| **Raw telemetry dashboards** (amps/volts gauges, sensor value tables) | Violates voice rule #1. Numbers shown must be consequences (hours, %, money), not sensor readings. |
+| **Payment/billing execution** (collect money, mark paid, invoices) | Gas billing screen ENDS at the statement + CSV. Society bills; we never touch money. |
+| **A fire- or gas-panel look-alike** | Legal exposure. Persistent "supplementary view" disclaimer instead. |
+| **Confidence hidden behind a tooltip** | Confidence chips are first-class, always visible on every risk. |
+
+### Rules of engagement
+1. **If the data isn't in an endpoint response, it doesn't go on screen.** No placeholder prose that "the backend will produce later."
+2. **Missing endpoint you genuinely need?** Ask for it (e.g. signal-history for sparklines, events-today for a feed) — small additions are cheap; faked data is not.
+3. **Empty/no-data states are designed, not hidden.** "No readings — cannot bill from data" is a feature.
+4. **Build order:** Login → Home → Issues → Work Orders → Asset detail. Then Water, Checklist, Gas Billing. Everything else after pilot.
+
+---
+
 ## 6. WhatsApp is a first-class channel (not an afterthought)
 
 Most residential users live in **WhatsApp**, not a dashboard. ArvisX already speaks WhatsApp:
