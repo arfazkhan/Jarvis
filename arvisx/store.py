@@ -50,10 +50,17 @@ class AssetStore:
         if key not in ("online",):
             flag, reason = check_value(key, value)
             if flag == "bad":
+                # JSON-safe quarantine record: a NaN/inf kept as a raw float would crash
+                # every API response that serializes the quarantine list (found by the
+                # adversarial twin test — one junk gateway message must not kill the API).
+                import math as _math
+                safe = value
+                if isinstance(value, float) and not _math.isfinite(value):
+                    safe = str(value)
                 with self._lock:
                     if self._assets.get(asset_id) is None:
                         return False
-                    self.quarantined.append({"asset_id": asset_id, "signal": key, "value": value,
+                    self.quarantined.append({"asset_id": asset_id, "signal": key, "value": safe,
                                              "reason": reason, "ts": datetime.now().isoformat()})
                 return False
         with self._lock:

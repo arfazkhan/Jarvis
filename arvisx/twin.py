@@ -83,6 +83,7 @@ class CommunityTwin:
         self.pool_window = (6, 14)                      # filtration schedule 06:00–14:00
         self.fire_next_test = self.now + timedelta(days=20)
         self._day = self.now.date()
+        self._frozen_oh_pct: Optional[float] = None     # captured when the sensor sticks
 
     # ── fault injection (gradual processes) ──────────────────────────────
     def inject(self, **kwargs):
@@ -153,8 +154,14 @@ class CommunityTwin:
     # ── telemetry emission (what the edge gateway would publish) ─────────
     def _emit(self, boosting: bool, boost_kw: float) -> List[Msg]:
         rng, p = self.rng, self.prefix
-        oh_reported = (0.64 if self.faults.stuck_oh_level
-                       else round(100 * self.oh_level / self.oh_capacity_l, 1))
+        oh_true = round(100 * self.oh_level / self.oh_capacity_l, 1)
+        if self.faults.stuck_oh_level:
+            if self._frozen_oh_pct is None:
+                self._frozen_oh_pct = oh_true        # sensor dies: freezes at its last reading
+            oh_reported = self._frozen_oh_pct
+        else:
+            self._frozen_oh_pct = None
+            oh_reported = oh_true
 
         def m(asset, signal, value) -> Msg:
             return (f"{p}/{asset}/{signal}",
