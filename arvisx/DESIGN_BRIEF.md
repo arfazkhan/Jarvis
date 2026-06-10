@@ -19,8 +19,9 @@ ArvisX is an **operations-intelligence layer for residential communities** (apar
 | **Owner / Committee member** | Building owner, HOA committee, board | "Is my community OK? What is this costing us?" High-level, money-framed, trust. | Read-only, summary-level |
 | **Facility Manager (FM)** | On-site manager / supervisor | "What's broken, what do I do, create the work order." Operational detail + actions. | Read + actions (create/close work orders) |
 | **Viewer / Resident rep** | Resident, watchman, vendor | "Is water/power OK right now?" Status only. | Read-only, minimal |
+| **Technician** | On-site maintenance staff | Receives daily checklist prompts on WhatsApp, submits readings/physical checks. Mostly lives in WhatsApp, not the dashboard. | WhatsApp replies; dashboard read-only if any |
 
-Actions (creating work orders, commissioning) are **role-gated**. Owners see money & readiness; FMs see and act on the detailed queue.
+Actions (creating work orders, commissioning) are **role-gated**. Owners see money & readiness; FMs see and act on the detailed queue. Technicians interact via WhatsApp prompts.
 
 ---
 
@@ -30,13 +31,14 @@ These are the nouns the whole product is built around. Every screen is a view on
 
 1. **Community Readiness** — a single 0–100% score for the whole community, with a band: **Healthy / Attention Required / Critical**. This is the hero number. It's a weighted roll-up of all services (water & fire weighted highest).
 
-2. **Services** — the 6 things ArvisX watches, each with its own health band and score:
+2. **Services** — the 7 things ArvisX watches, each with its own health band and score:
    - 💧 **Water Availability** (the hero service — "do we have water and for how long")
    - 🔌 **Power Backup** (generators, batteries)
    - 🏊 **Pool**
    - ♻️ **STP** (sewage treatment)
    - 🔥 **Fire Readiness** (*supplementary visibility only — NEVER presented as the certified fire system of record. Design must avoid implying it replaces the legal fire panel.*)
    - ⚡ **Energy** (efficiency / waste)
+   - 🔥🍳 **Gas Safety & Supply** (basement gas plant + per-apartment lines — *same disclaimer discipline as fire: supplementary visibility; the certified gas-safety system stays authoritative*)
 
 3. **Risks** — individual issues ArvisX has detected. Each risk has:
    - a **severity**: 🚨 Critical / ⚠️ Warning / 🔧 Maintenance / ℹ️ Info
@@ -53,6 +55,13 @@ These are the nouns the whole product is built around. Every screen is a view on
 7. **Asset Dependency / Impact** — assets depend on each other (tank → booster pump → distribution). If one fails, ArvisX shows the downstream impact and which redundancy is lost.
 
 8. **Commissioning** — the one-time setup wizard a non-engineer runs to onboard a new building (define assets, map signals, set dependencies, then go live). Goal: a non-engineer commissions a building in **half a day**.
+
+9. **Gas Billing Statement** — ArvisX records every apartment's gas meter continuously, so the month-end statement computes itself (consumption per flat + CSV export). Kills the manual meter round. Honesty states matter in the UI: a meter can be **ok**, **no_data** (no readings — never an invented number), or **flagged** (index decreased — tamper/rollover, human review). *ArvisX measures and reports; the society applies the tariff and bills.*
+
+10. **Daily Checklist (the self-writing logbook)** — two halves:
+   - **Auto-filled items** — telemetry-backed checks (tank %, runtimes, battery V, gas pressure) recorded automatically: timestamped, tamper-proof.
+   - **Physical items** — human-only checks (visual leak, noise, odour) prompted to the technician over WhatsApp; replies land in the same log.
+   - **Reading verification** — a human-submitted reading is checked against the sensor at the claimed time → **matched / mismatch (flagged) / no-data**. The mismatch state is the headline feature: pencil-whipped numbers are caught. The UI must show flags prominently but neutrally ("doesn't match the sensor — review"), not as accusations.
 
 ---
 
@@ -110,6 +119,29 @@ Status: Open   Priority: High   Asset: Transfer Pump A
 Opened: 2 days ago
 ```
 
+**Gas billing statement (month)**
+```
+Month: 2026-06        Total: 148.2 m³   Billable meters: 11 / Flagged: 1 / No data: 0
+  APT-101   ok        12.5 m³   (index 100.0 → 112.5)
+  APT-102   flagged   — index decreased: meter rollover/replacement/tamper, review manually
+  APT-103   ok        9.8 m³
+  …
+[Download CSV]   Note: measured by ArvisX — society applies tariff and bills.
+```
+
+**Daily checklist (today)**
+```
+Auto-recorded (telemetry, tamper-proof):  9/9 ✓
+  UG tank level 78%  ·  Booster power 3.1 kW  ·  Gen battery 12.8 V  ·  Gas pressure 0.5 bar …
+Physical checks:  3/4 done
+  ✅ Pump room visual — ok (tech1, 09:14)
+  ✅ Gas plant odour — ok (tech1, 09:16)
+  ⚠️ Generator room — ISSUE: "oil seep near base" (tech1, 09:21)
+  ⏳ Pool area — pending
+Submitted readings:  1 flagged ⚠
+  UG tank: submitted 75% — sensor recorded 40% at that time → doesn't match, review
+```
+
 **Currency is configurable** — default QAR (Qatar), but the same product runs in India (₹). Design currency as a token, not hardcoded.
 
 ---
@@ -121,7 +153,7 @@ Priority order. The first three are the MVP.
 ### MVP
 1. **Home / Community Readiness dashboard**
    - Hero: readiness % + band (color-coded).
-   - 6 service tiles (icon, name, band, score) — tappable into detail.
+   - 7 service tiles (icon, name, band, score) — tappable into detail.
    - "Active issues" count + top 2–3 risks preview.
    - A money strip ("This month: ~QAR 12 waste · QAR 39k at risk").
    - Audience: owner/committee first glance.
@@ -137,14 +169,16 @@ Priority order. The first three are the MVP.
    - Any water risks listed below.
 
 ### Phase 2
-4. **Service detail** (one template, 6 instances) — band, score, the assets in that service, their risks, history sparkline.
+4. **Service detail** (one template, 7 instances) — band, score, the assets in that service, their risks, history sparkline.
 5. **Work order queue** — Open / In Progress / Closed tabs; create + close-with-cause flow.
 6. **"What is this costing us"** — full economic breakdown (the committee money page).
 7. **Asset detail + impact** — one asset, its dependencies, "if this fails, X loses redundancy."
+8. **Daily Checklist** — the self-writing logbook (auto-recorded items + physical-check statuses + flagged readings). Two audiences: FM sees today's completion + flags; committee sees the weekly compliance trend ("rounds actually happened"). The ⚠ mismatch state is the star — visible, neutral wording.
+9. **Gas Billing** — month picker → per-apartment statement table (ok / no_data / flagged states) + total + [Download CSV]. The "this used to be a manual meter round" screen — design it boring and trustworthy, like a bank statement.
 
 ### Phase 3
-8. **Commissioning wizard** — multi-step, gated (Assets → Signals → Dependencies → Learning → Go live). Non-engineer audience; progress + validation states matter most here.
-9. **WhatsApp surface** — *(see §6, mostly text, but you may design message card templates / a digest layout.)*
+10. **Commissioning wizard** — multi-step, gated (Assets → Signals → Dependencies → Learning → Go live). Non-engineer audience; progress + validation states matter most here.
+11. **WhatsApp surface** — *(see §6, mostly text, but you may design message card templates / a digest layout.)*
 
 ---
 
@@ -153,7 +187,10 @@ Priority order. The first three are the MVP.
 Most residential users live in **WhatsApp**, not a dashboard. ArvisX already speaks WhatsApp:
 - **Daily digest** (morning summary: readiness + services + issue count)
 - **Sparse alerts** (only Critical/Warning, deduped — anti-fatigue is a hard rule)
-- **Q&A** ("any issues?", "water status?", "why is readiness down?", "what is this costing us?", "create work order")
+- **Q&A** ("any issues?", "water status?", "gas status?", "why is readiness down?", "what is this costing us?", "create work order")
+- **Technician checklist prompts** (9:00 daily + 17:00 reminder for still-pending):
+  > 🔧 Daily check: pump room visual — leaks, unusual noise/vibration? Reply: ok pump_room_visual / issue pump_room_visual \<note\>
+  The reply is confirmed ("✅ Logged: pump_room_visual → ok") and lands timestamped in the same daily log the dashboard shows.
 
 Design implication: the dashboard and WhatsApp must feel like **one product**. Same language, same icons/emoji vocabulary (✅ ⚠️ 🚨 🔧 💧 🔌 🏊 ♻️ 🔥 💸), same operational tone. A user who reads the WhatsApp digest then opens the app should see the same words. You may design WhatsApp message templates as part of the system.
 
@@ -165,8 +202,10 @@ Design implication: the dashboard and WhatsApp must feel like **one product**. S
 2. **Money is the committee's language.** Lead with cost wherever a committee/owner is the audience. Risk → money is the conversion that gets budgets approved.
 3. **Honesty / no false confidence.** Confidence (Low/Med/High) is always shown, never hidden. Low-confidence items are visible but de-emphasized. Never imply certainty ArvisX doesn't have.
 4. **Advisory, never controlling.** No toggle, slider, or button that implies the app operates equipment. The only actions are *create/close work order* and *commission*. CTA verbs: "Create work order," "Mark done," not "Turn off," "Restart."
-5. **Fire = visibility only.** Never design fire UI that looks like a certified fire-alarm control panel. Add a persistent disclaimer near fire content.
+5. **Fire & gas = visibility only.** Never design fire or gas UI that looks like a certified safety panel. Add a persistent disclaimer near fire AND gas content ("supplementary view — the certified system stays authoritative").
 6. **Anti-fatigue.** Alerts are precious. The design should reinforce scarcity — a clean inbox is the goal state, not an empty one to fill.
+7. **Flags are neutral, never accusations.** A mismatched checklist reading says "doesn't match the sensor — review", not "the technician lied." A flagged gas meter says "index decreased — review manually." ArvisX presents evidence; humans judge.
+8. **Honest empty states.** A meter with no readings shows "no data — cannot bill from data", never a guessed number. The no_data / abstain state deserves real design attention — it's the trust feature.
 
 ---
 
@@ -181,7 +220,8 @@ Design implication: the dashboard and WhatsApp must feel like **one product**. S
 | Info | grey | ℹ️ |
 | Money / cost | — | 💸 |
 
-Services: 💧 water · 🔌 power · 🏊 pool · ♻️ STP · 🔥 fire · ⚡ energy.
+Services: 💧 water · 🔌 power · 🏊 pool · ♻️ STP · 🔥 fire · ⚡ energy · 🍳 gas.
+Checklist states: ✅ done/matched · ⚠ mismatch (flagged) · ⏳ pending · ∅ no-data (honest abstain).
 
 ---
 
@@ -203,4 +243,4 @@ Services: 💧 water · 🔌 power · 🏊 pool · ♻️ STP · 🔥 fire · �
 
 ---
 
-*Backend status: 16 build phases complete, REST API live (all data above is real API output), WhatsApp bot working. Frontend is the missing layer — that's what you're designing.*
+*Backend status: 17 build phases complete (incl. Gas Safety & Supply + per-apartment gas billing + the self-writing daily checklist with reading verification), REST API live (all data above is real API output), WhatsApp bot working incl. technician checklist prompts, deployment proven on a digital twin (45-min real-time soak, adversarial suite). Frontend is the missing layer — that's what you're designing.*
