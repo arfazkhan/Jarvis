@@ -142,6 +142,32 @@ def assess_asset(asset: Asset, now: datetime) -> Tuple[AssetHealth, List[Risk]]:
         _risk(Severity.WARNING, f"{asset.name} reporting {n} active fault(s)",
               "Fire-system faults present (supplementary view — verify on the certified panel).")
 
+    if at == AssetType.GAS_PLANT:
+        # Supplementary visibility only — the certified gas-safety system (detectors,
+        # solenoid shutoff) stays authoritative, same discipline as fire.
+        leak = s.get("leak_ppm")
+        if isinstance(leak, (int, float)) and not isinstance(leak, bool) and leak > 100:
+            score = min(score, 25.0); alerts.append(f"Gas detected ({leak:.0f} ppm)")
+            _risk(Severity.CRITICAL, f"{asset.name} gas concentration elevated",
+                  f"{leak:.0f} ppm at the plant — possible leak. Verify on the certified gas-safety "
+                  "system and inspect immediately (supplementary view).")
+        lvl = s.get("tank_level_pct")
+        if isinstance(lvl, (int, float)) and not isinstance(lvl, bool):
+            if lvl < 15:
+                score = min(score, 35.0); alerts.append(f"Gas bank low ({lvl:.0f}%)")
+                _risk(Severity.CRITICAL, f"{asset.name} gas bank low — supply at risk",
+                      f"{lvl:.0f}% remaining — schedule a refill before apartments lose cooking gas.")
+            elif lvl < 30:
+                score -= 15.0; alerts.append(f"Gas bank below reserve ({lvl:.0f}%)")
+                _risk(Severity.WARNING, f"{asset.name} gas bank below comfortable reserve",
+                      f"{lvl:.0f}% remaining — plan the next refill.")
+        pr = s.get("line_pressure_bar")
+        if isinstance(pr, (int, float)) and not isinstance(pr, bool) and not (0.02 <= pr <= 2.5):
+            score = min(score, 40.0); alerts.append(f"Line pressure abnormal ({pr:.2f} bar)")
+            _risk(Severity.CRITICAL, f"{asset.name} line pressure out of band",
+                  f"{pr:.2f} bar on the distribution line — supply-loss or unsafe-delivery risk. "
+                  "Inspect the regulator (supplementary view).")
+
     score = max(0.0, min(100.0, score))
     status = ("Fault" if s.get("fault") else "Offline" if not asset.online else
               alerts[0] if alerts else "Normal")

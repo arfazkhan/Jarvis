@@ -22,6 +22,7 @@ class ServiceType(str, Enum):
     STP = "stp"
     FIRE = "fire"
     ENERGY = "energy"          # efficiency / ghost-operation (Phase 5b)
+    GAS = "gas"                # basement gas plant + apartment lines (Phase 17)
 
 
 class ZoneKind(str, Enum):
@@ -53,6 +54,8 @@ class AssetType(str, Enum):
     FIRE_PUMP = "fire_pump"
     AC_UNIT = "ac_unit"            # split/package AC (Phase 6 — fusion)
     FCU = "fan_coil_unit"
+    GAS_PLANT = "gas_plant"        # basement LPG bank/manifold feeding apartment lines
+    GAS_METER = "gas_meter"        # per-apartment cumulative meter (billing-grade reads)
 
 
 # Which service each asset type rolls up into.
@@ -71,6 +74,8 @@ ASSET_SERVICE: Dict[AssetType, ServiceType] = {
     AssetType.FIRE_PUMP: ServiceType.FIRE,
     AssetType.AC_UNIT: ServiceType.ENERGY,      # cooling effectiveness / comfort
     AssetType.FCU: ServiceType.ENERGY,
+    AssetType.GAS_PLANT: ServiceType.GAS,
+    AssetType.GAS_METER: ServiceType.GAS,
 }
 
 
@@ -148,11 +153,13 @@ OUTCOME_LABEL = {
     ServiceType.STP: "STP Compliance",
     ServiceType.FIRE: "Fire Readiness",
     ServiceType.ENERGY: "Energy & Waste",
+    ServiceType.GAS: "Gas Safety & Supply",
 }
 # Readiness weighting — essentials/safety count more toward the parent score.
 SERVICE_WEIGHT = {
     ServiceType.WATER: 1.5, ServiceType.FIRE: 1.5, ServiceType.POWER_BACKUP: 1.2,
     ServiceType.STP: 1.0, ServiceType.POOL: 0.8, ServiceType.ENERGY: 0.6,
+    ServiceType.GAS: 1.4,   # leak/supply = safety-critical, just under water/fire
 }
 
 

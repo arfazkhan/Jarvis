@@ -38,6 +38,9 @@ _RANGES: List[Tuple[str, float, float]] = [
     ("runtime", 0.0, 1e7),
     ("pct", 0.0, 105.0),
     ("turnover", 0.0, 100.0),
+    ("pressure", 0.0, 60.0),       # bar — gas/water line pressure
+    ("leak", 0.0, 50000.0),        # ppm — gas concentration
+    ("_total_m3", 0.0, 1e7),       # cumulative meter index
 ]
 _MAD_K = 1.4826
 _SPIKE_SIGMA = 8.0       # far beyond real drift (3σ) → sensor spike, not equipment drift

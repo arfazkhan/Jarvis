@@ -52,13 +52,17 @@ SERVICE_TOPOLOGY: Dict[ServiceType, List[DepNode]] = {
         DepNode(AssetType.FIRE_PUMP, "suppression", "single"),
         DepNode(AssetType.FIRE_PANEL, "detection", "single"),
     ],
+    ServiceType.GAS: [
+        DepNode(AssetType.GAS_PLANT, "supply", "single"),
+        DepNode(AssetType.GAS_METER, "metering", "parallel"),   # one meter ≠ the service
+    ],
 }
 
 # Role criticality (how essential the role is to delivering the service).
 _ROLE_CRIT = {
     "source": 1.0, "generation": 1.0, "suppression": 1.0, "circulation": 0.9, "aeration": 0.9,
     "transfer": 0.7, "treatment": 0.8, "storage": 0.6, "distribution": 0.6, "detection": 0.7,
-    "start": 0.6, "chemistry": 0.6,
+    "start": 0.6, "chemistry": 0.6, "supply": 1.0, "metering": 0.2,
 }
 # Redundancy absorbs impact.
 _REDUNDANCY_FACTOR = {"single": 1.0, "standby": 0.5, "parallel": 0.4}

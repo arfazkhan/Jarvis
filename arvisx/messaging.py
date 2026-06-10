@@ -42,6 +42,8 @@ def route_intent(text: str) -> str:
         return "stp"
     if re.search(r"\bfire\b", t):
         return "fire"
+    if re.search(r"\bgas\b|\blpg\b|cooking", t):
+        return "gas"
     if re.search(r"issue|problem|alert|wrong|attention|risk", t):
         return "issues"
     if re.search(r"how.*(doing|building|today)|status|readiness|overall|summary|digest", t):
@@ -81,9 +83,9 @@ def answer(text: str, report: CommunityReport, assets: Optional[list] = None, ba
         return {"intent": intent, "text": f"*{len(report.risks)} active issue(s):*\n" + "\n".join(lines)}
     if intent == "why":
         return {"intent": intent, "text": _why_readiness(report)}
-    if intent in ("water", "power", "pool", "stp", "fire"):
+    if intent in ("water", "power", "pool", "stp", "fire", "gas"):
         st = {"water": ServiceType.WATER, "power": ServiceType.POWER_BACKUP, "pool": ServiceType.POOL,
-              "stp": ServiceType.STP, "fire": ServiceType.FIRE}[intent]
+              "stp": ServiceType.STP, "fire": ServiceType.FIRE, "gas": ServiceType.GAS}[intent]
         return {"intent": intent, "text": _service_line(report, st)}
     if intent == "help":
         return {"intent": intent, "text": (

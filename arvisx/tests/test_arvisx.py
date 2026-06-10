@@ -19,7 +19,7 @@ from arvisx.simulator import healthy_community, inject_prd_scenario
 # ── Phase 0: health, PM, service roll-up, simulator ──────────────────────
 def test_healthy_all_green():
     rep = build_report(healthy_community())
-    assert len(rep.assets) == 12
+    assert len(rep.assets) == 13                            # 12 + gas plant (Phase 17)
     assert rep.risks == []
     assert all(s.band.value == "Healthy" for s in rep.services)
 
@@ -146,8 +146,9 @@ def _client():
 def test_api_overview_and_risks():
     c = _client()
     ov = c.get("/api/v1/community/overview").json()
-    assert len(ov["services"]) == 6                          # + energy (Phase 5b)
-    assert {s["service"] for s in ov["services"]} == {"water", "power_backup", "pool", "stp", "fire", "energy"}
+    assert len(ov["services"]) == 7                          # + energy (5b) + gas (17)
+    assert {s["service"] for s in ov["services"]} == {"water", "power_backup", "pool", "stp",
+                                                      "fire", "energy", "gas"}
     rk = c.get("/api/v1/community/risks").json()
     assert rk["count"] == 6                                  # 4 asset + 2 ghost
 
@@ -155,7 +156,7 @@ def test_api_overview_and_risks():
 def test_api_assets_and_advisory():
     c = _client()
     assets = c.get("/api/v1/community/assets").json()
-    assert assets["count"] == 12
+    assert assets["count"] == 13                             # 12 + gas plant
     adv = c.get("/api/v1/asset/BOOST-PUMP-01/advisory").json()
     assert adv["confirmed"] is False
     assert adv["source"] == "rules"          # no ARVIS_X_LLM → rules floor

@@ -54,6 +54,10 @@ def healthy_community(now: datetime | None = None) -> List[Asset]:
               signals={"active_faults": 0}),
         Asset("FIRE-PUMP-01", "Fire Pump 1", AssetType.FIRE_PUMP,
               signals={"next_test_due": d(20)}, next_maintenance_due=d(120)),
+        # ── Gas (basement plant; supplementary view — certified system authoritative)
+        Asset("GAS-PLANT-01", "Gas Plant 1", AssetType.GAS_PLANT,
+              signals={"tank_level_pct": 82.0, "line_pressure_bar": 0.5, "leak_ppm": 0.0},
+              next_maintenance_due=d(90)),
     ]
 
 

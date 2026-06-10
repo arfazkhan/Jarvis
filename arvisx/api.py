@@ -113,11 +113,28 @@ class _State:
     def _start_mqtt(self):
         from arvisx.store import AssetStore
         from arvisx.ingest.mqtt_adapter import MqttIngest
+        from arvisx.models import Asset, AssetType
         # Seed the fleet definition (ids/types/thresholds/maintenance = commissioning);
         # live telemetry then arrives over MQTT and overrides the signals.
-        self.store = AssetStore.from_fleet_definition(healthy_community())
+        fleet = healthy_community()
+        # Per-apartment gas meters (billing-grade reads). Count via ARVISX_GAS_METERS.
+        n_meters = int(os.environ.get("ARVISX_GAS_METERS", "12"))
+        fleet += [Asset(f"APT-{100 + i}", f"Apartment {100 + i} Gas Meter", AssetType.GAS_METER)
+                  for i in range(1, n_meters + 1)]
+        self.store = AssetStore.from_fleet_definition(fleet)
         self.assets = self.store.snapshot()
         self.scenario = "mqtt-live"
+        # Timestamped signal history (downsampled) — backs gas billing + the
+        # checklist's reading-verification ("the logbook can't be lied to").
+        _siglog_interval = float(os.environ.get("ARVISX_SIGLOG_INTERVAL_S", "600"))
+
+        def _log_signal(asset_id, signal, value=None):
+            try:
+                self.db.log_signal(asset_id, signal, value, min_interval_s=_siglog_interval)
+            except Exception:
+                pass
+
+        self.store.set_update_callback(_log_signal)
         broker = os.environ.get("ARVISX_MQTT_BROKER", "localhost")
         port = int(os.environ.get("ARVISX_MQTT_PORT", "1883"))
         self._ingest = MqttIngest(self.store, broker=broker, port=port)
@@ -677,6 +694,88 @@ def create_app():
         from arvisx.economics import community_cost
         bl = state.baselines if state.store is not None else None
         return community_cost(state.report_now(), state.current_assets(), bl)
+
+    # ── Gas metering: the month-end statement writes itself (Phase 17) ───
+    @app.get("/api/v1/gas/billing")
+    async def gas_billing(month: str = "", format: str = "json"):
+        """Per-apartment gas consumption from continuous meter telemetry — replaces
+        the manual month-end meter round. format=csv for the billing person."""
+        from arvisx.gas_billing import monthly_statement, statement_csv
+        stmt = monthly_statement(state.db, month or None)
+        if format.lower() == "csv":
+            from fastapi.responses import PlainTextResponse
+            return PlainTextResponse(statement_csv(stmt), media_type="text/csv")
+        return stmt
+
+    # ── Daily checklist: auto-filled, verified, prompted (Phase 17b) ─────
+    @app.get("/api/v1/checklist/today")
+    async def checklist_today(date: str = ""):
+        """The self-writing daily log: telemetry items auto-filled, physical items
+        from technician replies, submitted readings with verification verdicts."""
+        from arvisx.checklist import daily_log
+        return daily_log(state.current_assets(), state.db, date or None)
+
+    @app.post("/api/v1/checklist/submit-reading")
+    async def checklist_submit_reading(payload: Dict[str, Any] = Body(...)):
+        """A human-submitted meter/gauge reading — verified against recorded telemetry
+        at the claimed time. Mismatch = flagged (pencil-whip detection)."""
+        from arvisx.checklist import verify_reading
+        p = payload or {}
+        asset_id = str(p.get("asset_id", "")).strip()
+        signal = str(p.get("signal", "")).strip()
+        try:
+            value = float(p.get("value"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "provide numeric 'value'")
+        if not asset_id or not signal:
+            raise HTTPException(400, "provide 'asset_id' and 'signal'")
+        claimed = p.get("claimed_ts")
+        claimed_dt = datetime.fromisoformat(claimed) if claimed else None
+        v = verify_reading(state.db, asset_id, signal, value, claimed_dt, str(p.get("unit", "")))
+        state.db.save_checklist_response(
+            item_id=f"reading:{asset_id}:{signal}",
+            date=(claimed_dt or datetime.now()).strftime("%Y-%m-%d"),
+            status="submitted", note=v.note, by_user=str(p.get("by", "")),
+            verdict=v.verdict)
+        return _jsonable(v)
+
+    @app.post("/api/v1/checklist/physical")
+    async def checklist_physical(payload: Dict[str, Any] = Body(...)):
+        """Record a technician's physical-check response (ok / issue + note)."""
+        from arvisx.checklist import PHYSICAL_ITEMS
+        p = payload or {}
+        item_id = str(p.get("item_id", "")).strip()
+        if item_id not in {i for i, _, _ in PHYSICAL_ITEMS}:
+            raise HTTPException(400, f"unknown checklist item '{item_id}'")
+        status = str(p.get("status", "ok")).lower()
+        if status not in ("ok", "issue"):
+            raise HTTPException(400, "status must be 'ok' or 'issue'")
+        state.db.save_checklist_response(
+            item_id=item_id, date=datetime.now().strftime("%Y-%m-%d"),
+            status=status, note=str(p.get("note", "")), by_user=str(p.get("by", "")))
+        return {"recorded": True, "item_id": item_id, "status": status}
+
+    @app.get("/api/v1/whatsapp/checklist-prompts")
+    async def wa_checklist_prompts():
+        """Physical-check prompts still pending today — the bot sends these to the
+        technician ('pump room visual check? reply OK / photo')."""
+        from arvisx.checklist import pending_prompts
+        return {"prompts": pending_prompts(state.db)}
+
+    @app.post("/api/v1/whatsapp/checklist-reply")
+    async def wa_checklist_reply(payload: Dict[str, Any] = Body(...)):
+        """A technician's WhatsApp reply ('ok pump_room_visual' / 'issue ... <note>')
+        — parsed and timestamped into the same daily log."""
+        from arvisx.checklist import parse_checklist_reply
+        p = payload or {}
+        parsed = parse_checklist_reply(str(p.get("text", "")))
+        if parsed is None:
+            return {"recorded": False,
+                    "hint": "reply like: ok pump_room_visual — or: issue gen_room_visual oil leak"}
+        state.db.save_checklist_response(
+            item_id=parsed["item_id"], date=datetime.now().strftime("%Y-%m-%d"),
+            status=parsed["status"], note=parsed["note"], by_user=str(p.get("by", "")))
+        return {"recorded": True, **parsed}
 
     @app.post("/api/v1/scenario/{name}")
     async def scenario(name: str):

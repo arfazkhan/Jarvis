@@ -69,6 +69,16 @@ SERVICE_TEMPLATES: Dict[str, Dict[str, Any]] = {
             {"asset_id": "FIRE-PANEL-01", "role": "detection", "redundancy": "single"},
         ]},
     },
+    "gas": {
+        # Basement gas plant feeding apartment lines. Per-apartment meters are added
+        # via discovery (one per flat) — the template carries the plant itself.
+        "assets": [
+            {"id": "GAS-PLANT-01", "type": "gas_plant", "name": "Gas Plant (Basement)"},
+        ],
+        "dependencies": {"gas": [
+            {"asset_id": "GAS-PLANT-01", "role": "supply", "redundancy": "single"},
+        ]},
+    },
 }
 
 

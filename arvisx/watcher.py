@@ -75,7 +75,7 @@ class WatchAgent:
             loop = asyncio.get_event_loop()
             ev = self._event
 
-            def _cb(_aid, _sig):
+            def _cb(_aid, _sig, _val=None):
                 loop.call_soon_threadsafe(ev.set)
 
             self.store.set_update_callback(_cb)

@@ -32,7 +32,7 @@ DRIFT_Z = 3.0             # robust-z to flag drift
 _MAD_K = 1.4826           # MAD → std-equivalent
 
 # Signals we do NOT drift-check: cumulative (monotonic), config, schedules/dates.
-_SKIP = re.compile(r"runtime_hours$|_threshold$|^expected_|_due$|_date$|setpoint", re.I)
+_SKIP = re.compile(r"runtime_hours$|_threshold$|^expected_|_due$|_date$|setpoint|_total_m3$", re.I)
 
 
 def _is_numeric(v) -> bool:

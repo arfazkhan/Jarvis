@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -66,7 +66,16 @@ class ArvisxDb:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, ts TEXT, data TEXT);
             CREATE TABLE IF NOT EXISTS users (
                 username TEXT PRIMARY KEY, role TEXT, pw_hash TEXT, created_at TEXT);
+            CREATE TABLE IF NOT EXISTS signal_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, asset_id TEXT,
+                signal TEXT, value REAL, ts TEXT);
+            CREATE INDEX IF NOT EXISTS ix_siglog ON signal_log(building_id, asset_id, signal, ts);
+            CREATE TABLE IF NOT EXISTS checklist_responses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, item_id TEXT,
+                date TEXT, status TEXT, note TEXT, by_user TEXT, ts TEXT, verdict TEXT);
+            CREATE INDEX IF NOT EXISTS ix_checklist ON checklist_responses(building_id, date, item_id);
             """)
+        self._siglog_last: Dict[tuple, datetime] = {}   # (asset, signal) → last logged ts
 
     # ── Building commissioning config ────────────────────────────────────
     def save_building(self, building_id: str, name: str, state: str, data: Dict[str, Any]):
@@ -194,4 +203,79 @@ class ArvisxDb:
     def list_users(self) -> List[Dict[str, Any]]:
         with self._lock, self._conn() as c:
             rows = c.execute("SELECT username, role, created_at FROM users ORDER BY username").fetchall()
+            return [dict(r) for r in rows]
+
+    # ── Signal log (timestamped history: billing + reading verification) ──
+    def log_signal(self, asset_id: str, signal: str, value, ts: Optional[datetime] = None,
+                   min_interval_s: float = 600.0) -> bool:
+        """Record a timestamped numeric reading, downsampled to one row per
+        (asset, signal) per min_interval_s so a 20s gateway cadence doesn't bloat
+        SQLite. This history backs gas billing AND checklist reading-verification."""
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return False
+        ts = ts or datetime.now()
+        key = (asset_id, signal)
+        last = self._siglog_last.get(key)
+        if last is not None and (ts - last).total_seconds() < min_interval_s:
+            return False
+        self._siglog_last[key] = ts
+        with self._lock, self._conn() as c:
+            c.execute("INSERT INTO signal_log (building_id, asset_id, signal, value, ts)"
+                      " VALUES (?,?,?,?,?)",
+                      (self.building_id, asset_id, signal, float(value), ts.isoformat(timespec="seconds")))
+        return True
+
+    def signal_near(self, asset_id: str, signal: str, ts: datetime,
+                    window_s: float = 3600.0) -> Optional[Dict[str, Any]]:
+        """The logged reading nearest to ts within ±window_s — None = honest no-data."""
+        lo = (ts - timedelta(seconds=window_s)).isoformat(timespec="seconds")
+        hi = (ts + timedelta(seconds=window_s)).isoformat(timespec="seconds")
+        with self._lock, self._conn() as c:
+            rows = c.execute(
+                "SELECT value, ts FROM signal_log WHERE building_id=? AND asset_id=? AND signal=?"
+                " AND ts BETWEEN ? AND ?", (self.building_id, asset_id, signal, lo, hi)).fetchall()
+        if not rows:
+            return None
+        best = min(rows, key=lambda r: abs((datetime.fromisoformat(r["ts"]) - ts).total_seconds()))
+        return {"value": best["value"], "ts": best["ts"]}
+
+    def signal_range(self, asset_id: str, signal: str, start: datetime, end: datetime):
+        """(first, last) logged readings in [start, end] — consumption = last − first."""
+        with self._lock, self._conn() as c:
+            rows = c.execute(
+                "SELECT value, ts FROM signal_log WHERE building_id=? AND asset_id=? AND signal=?"
+                " AND ts BETWEEN ? AND ? ORDER BY ts",
+                (self.building_id, asset_id, signal,
+                 start.isoformat(timespec="seconds"), end.isoformat(timespec="seconds"))).fetchall()
+        if not rows:
+            return None
+        return ({"value": rows[0]["value"], "ts": rows[0]["ts"]},
+                {"value": rows[-1]["value"], "ts": rows[-1]["ts"]})
+
+    def signal_series(self, asset_id: str, signal: str, limit: int = 200) -> List[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            rows = c.execute(
+                "SELECT value, ts FROM signal_log WHERE building_id=? AND asset_id=? AND signal=?"
+                " ORDER BY ts DESC LIMIT ?", (self.building_id, asset_id, signal, limit)).fetchall()
+            return [dict(r) for r in reversed(rows)]
+
+    def meters_with_history(self, signal: str = "meter_total_m3") -> List[str]:
+        with self._lock, self._conn() as c:
+            rows = c.execute("SELECT DISTINCT asset_id FROM signal_log WHERE building_id=? AND signal=?",
+                             (self.building_id, signal)).fetchall()
+            return [r["asset_id"] for r in rows]
+
+    # ── Checklist responses (physical checks + submitted readings) ────────
+    def save_checklist_response(self, item_id: str, date: str, status: str, note: str = "",
+                                by_user: str = "", verdict: str = "") -> None:
+        with self._lock, self._conn() as c:
+            c.execute("INSERT INTO checklist_responses (building_id, item_id, date, status, note,"
+                      " by_user, ts, verdict) VALUES (?,?,?,?,?,?,?,?)",
+                      (self.building_id, item_id, date, status, note, by_user,
+                       datetime.now().isoformat(timespec="seconds"), verdict))
+
+    def checklist_responses_for(self, date: str) -> List[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            rows = c.execute("SELECT * FROM checklist_responses WHERE building_id=? AND date=?"
+                             " ORDER BY ts", (self.building_id, date)).fetchall()
             return [dict(r) for r in rows]

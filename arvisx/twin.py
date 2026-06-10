@@ -37,6 +37,14 @@ def _diurnal_demand(hour: float) -> float:
     return 0.25 + 1.1 * morning + 0.9 * evening
 
 
+def _cooking_demand(hour: float) -> float:
+    """Cooking-gas demand multiplier (breakfast/lunch/dinner peaks)."""
+    bkfst = math.exp(-((hour - 7.0) ** 2) / 1.5)
+    lunch = math.exp(-((hour - 12.5) ** 2) / 2.0)
+    dinner = math.exp(-((hour - 19.5) ** 2) / 2.5)
+    return 0.05 + 1.0 * bkfst + 0.7 * lunch + 1.2 * dinner
+
+
 @dataclass
 class Faults:
     """Active fault processes — gradual, physical, the way real equipment degrades."""
@@ -44,6 +52,8 @@ class Faults:
     oh_tank_leak_lph: float = 0.0                # overhead tank losing water
     gen_battery_decay_v_per_day: float = 0.0     # battery aging
     stuck_oh_level: bool = False                 # OH level sensor frozen (sensor fault)
+    gas_leak_ppm: float = 0.0                    # gas concentration at the plant
+    gas_pressure_drift_bar_per_day: float = 0.0  # regulator drifting out of band
 
 
 class CommunityTwin:
@@ -75,6 +85,15 @@ class CommunityTwin:
         self.gen_runtime_h = 910.0
         self.gen_test_weekday, self.gen_test_hour = 2, 10   # Wednesday 10:00, 0.5h test
         self.gen_running = False
+
+        # ── Gas plant + per-apartment meters ─────────────────────────────
+        self.gas_level_pct = 82.0                       # LPG bank
+        self.gas_pressure_bar = 0.5                     # regulated line pressure
+        self.n_apartments = 12                          # twin-scale flat count
+        # cumulative meter index (m³) per flat, with per-flat usage personality
+        self.gas_meters = {f"APT-{100 + i}": 150.0 + self.rng.uniform(0, 400)
+                           for i in range(1, self.n_apartments + 1)}
+        self._gas_usage_factor = {k: self.rng.uniform(0.6, 1.6) for k in self.gas_meters}
 
         # ── STP / Pool / Fire ────────────────────────────────────────────
         self.stp_runtime_today = 0.0
@@ -142,6 +161,17 @@ class CommunityTwin:
                 self.gen_battery_v = min(12.9, self.gen_battery_v + 0.05)
         _ = was_running
 
+        # Gas: each flat cooks on the breakfast/lunch/dinner curve; the bank drains
+        # with total consumption; line pressure holds unless the regulator drifts.
+        cook = _cooking_demand(hour)
+        total_m3 = 0.0
+        for k in self.gas_meters:
+            used = 0.012 * cook * self._gas_usage_factor[k] * rng.uniform(0.85, 1.15) * dt_hours
+            self.gas_meters[k] += used
+            total_m3 += used
+        self.gas_level_pct = max(2.0, self.gas_level_pct - total_m3 * 0.06)   # bank drain
+        self.gas_pressure_bar += f.gas_pressure_drift_bar_per_day * dt_hours / 24.0
+
         # STP: aeration tracks waste-water (follows demand); Pool: fixed schedule.
         if demand > 400:
             self.stp_runtime_today += dt_hours
@@ -191,6 +221,13 @@ class CommunityTwin:
             m("POOL-DOSE-01", "water_quality_ph", round(7.4 + rng.uniform(-0.05, 0.05), 2)),
             m("FIRE-PANEL-01", "active_faults", 0),
             m("FIRE-PUMP-01", "next_test_due", self.fire_next_test.isoformat()),
+            m("GAS-PLANT-01", "tank_level_pct", round(self.gas_level_pct, 1)),
+            m("GAS-PLANT-01", "line_pressure_bar",
+              round(self.gas_pressure_bar + rng.uniform(-0.01, 0.01), 3)),
+            m("GAS-PLANT-01", "leak_ppm", round(self.faults.gas_leak_ppm, 1)),
+        ] + [
+            m(meter_id, "meter_total_m3", round(idx, 3))
+            for meter_id, idx in self.gas_meters.items()
         ]
 
 

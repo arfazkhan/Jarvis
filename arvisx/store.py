@@ -25,12 +25,13 @@ class AssetStore:
         self._updates = 0
         self._ts: Dict[tuple, datetime] = {}            # (asset_id, signal) → last good update
         self.quarantined: List[Dict[str, object]] = []  # rejected bad readings (sensor faults)
-        self._on_update = None                          # callback(asset_id, signal) on a good reading
+        self._on_update: List = []                      # callbacks(asset_id, signal, value)
 
     def set_update_callback(self, cb) -> None:
-        """Register a callback fired after each accepted reading — lets a WatchAgent
-        wake the instant relevant telemetry changes (not just on a timer)."""
-        self._on_update = cb
+        """Register a callback fired after each accepted reading (multiple allowed —
+        the watcher's wake hook and the signal-log recorder coexist). Callbacks are
+        invoked as cb(asset_id, signal, value); accept *args to stay compatible."""
+        self._on_update.append(cb)
 
     def signal_ts(self, asset_id: str, signal: str) -> Optional[datetime]:
         """Last-good-update timestamp for one signal (None if never seen)."""
@@ -79,10 +80,14 @@ class AssetStore:
             self._ts[(asset_id, key)] = datetime.now()
             self.last_update = datetime.now()
             self._updates += 1
-        cb = self._on_update
-        if cb is not None:
+        for cb in list(self._on_update):
             try:
-                cb(asset_id, key)
+                cb(asset_id, key, value)
+            except TypeError:
+                try:
+                    cb(asset_id, key)      # legacy two-arg callbacks
+                except Exception:
+                    pass
             except Exception:
                 pass
         return True
