@@ -1,0 +1,53 @@
+{"ts": "2026-06-10T21:23:53", "t_min": 0.1, "kind": "infra_up", "broker": "127.0.0.1:1886", "api": "http://127.0.0.1:8096/api/v1"}
+{"ts": "2026-06-10T21:23:54", "t_min": 0.1, "kind": "commissioned", "building": "BLD-005198f9", "state": "learning"}
+{"ts": "2026-06-10T21:23:54", "t_min": 0.1, "kind": "probe", "risks": 2, "creep": 0, "new_alerts": 2, "hb_ticks": 1}
+{"ts": "2026-06-10T21:24:54", "t_min": 1.1, "kind": "probe", "risks": 4, "creep": 0, "new_alerts": 2, "hb_ticks": 1}
+{"ts": "2026-06-10T21:25:55", "t_min": 2.1, "kind": "probe", "risks": 4, "creep": 0, "new_alerts": 0, "hb_ticks": 2}
+{"ts": "2026-06-10T21:26:55", "t_min": 3.1, "kind": "probe", "risks": 14, "creep": 0, "new_alerts": 2, "hb_ticks": 2}
+{"ts": "2026-06-10T21:27:56", "t_min": 4.1, "kind": "probe", "risks": 14, "creep": 0, "new_alerts": 0, "hb_ticks": 3}
+{"ts": "2026-06-10T21:28:56", "t_min": 5.1, "kind": "probe", "risks": 12, "creep": 0, "new_alerts": 0, "hb_ticks": 3}
+{"ts": "2026-06-10T21:29:57", "t_min": 6.1, "kind": "probe", "risks": 12, "creep": 0, "new_alerts": 2, "hb_ticks": 4}
+{"ts": "2026-06-10T21:30:58", "t_min": 7.1, "kind": "probe", "risks": 14, "creep": 0, "new_alerts": 0, "hb_ticks": 4}
+{"ts": "2026-06-10T21:31:58", "t_min": 8.1, "kind": "probe", "risks": 14, "creep": 0, "new_alerts": 0, "hb_ticks": 5}
+{"ts": "2026-06-10T21:32:59", "t_min": 9.2, "kind": "probe", "risks": 14, "creep": 0, "new_alerts": 0, "hb_ticks": 5}
+{"ts": "2026-06-10T21:33:59", "t_min": 10.2, "kind": "probe", "risks": 13, "creep": 0, "new_alerts": 0, "hb_ticks": 6}
+{"ts": "2026-06-10T21:35:01", "t_min": 11.2, "kind": "probe", "risks": 13, "creep": 0, "new_alerts": 0, "hb_ticks": 6}
+{"ts": "2026-06-10T21:35:51", "t_min": 12.0, "kind": "readiness_gate", "approved": true, "coverage": 1.0, "state": "operational"}
+{"ts": "2026-06-10T21:36:01", "t_min": 12.2, "kind": "probe", "risks": 12, "creep": 0, "new_alerts": 0, "hb_ticks": 7}
+{"ts": "2026-06-10T21:37:02", "t_min": 13.2, "kind": "probe", "risks": 12, "creep": 0, "new_alerts": 0, "hb_ticks": 7}
+{"ts": "2026-06-10T21:38:02", "t_min": 14.2, "kind": "fault_injected", "fault": "power creep drip +0.4%/tick (real-time)"}
+{"ts": "2026-06-10T21:38:03", "t_min": 14.2, "kind": "probe", "risks": 12, "creep": 0, "new_alerts": 0, "hb_ticks": 8}
+{"ts": "2026-06-10T21:39:04", "t_min": 15.2, "kind": "probe", "risks": 12, "creep": 0, "new_alerts": 0, "hb_ticks": 8}
+{"ts": "2026-06-10T21:40:05", "t_min": 16.3, "kind": "probe", "risks": 12, "creep": 0, "new_alerts": 0, "hb_ticks": 9}
+{"ts": "2026-06-10T21:41:04", "t_min": 17.2, "kind": "probe", "risks": 12, "creep": 0, "new_alerts": 0, "hb_ticks": 9}
+{"ts": "2026-06-10T21:42:04", "t_min": 18.2, "kind": "creep_detected", "message": "Booster Pump 1 power creep (4.0\u03c3 above its own normal)", "latency_min": 4.2}
+{"ts": "2026-06-10T21:42:05", "t_min": 18.2, "kind": "probe", "risks": 14, "creep": 1, "new_alerts": 2, "hb_ticks": 10}
+{"ts": "2026-06-10T21:42:09", "t_min": 18.3, "kind": "sensor_death", "sensor": "GEN-BATT-01/battery_voltage stops publishing"}
+{"ts": "2026-06-10T21:43:05", "t_min": 19.2, "kind": "probe", "risks": 15, "creep": 1, "new_alerts": 0, "hb_ticks": 10}
+{"ts": "2026-06-10T21:44:05", "t_min": 20.3, "kind": "probe", "risks": 15, "creep": 1, "new_alerts": 0, "hb_ticks": 11}
+{"ts": "2026-06-10T21:45:06", "t_min": 21.3, "kind": "probe", "risks": 15, "creep": 1, "new_alerts": 0, "hb_ticks": 11}
+{"ts": "2026-06-10T21:46:06", "t_min": 22.3, "kind": "probe", "risks": 15, "creep": 1, "new_alerts": 0, "hb_ticks": 12}
+{"ts": "2026-06-10T21:47:06", "t_min": 23.3, "kind": "probe", "risks": 15, "creep": 1, "new_alerts": 0, "hb_ticks": 12}
+{"ts": "2026-06-10T21:48:07", "t_min": 24.3, "kind": "probe", "risks": 15, "creep": 1, "new_alerts": 0, "hb_ticks": 13}
+{"ts": "2026-06-10T21:49:09", "t_min": 25.3, "kind": "probe", "risks": 13, "creep": 1, "new_alerts": 0, "hb_ticks": 13}
+{"ts": "2026-06-10T21:50:09", "t_min": 26.3, "kind": "probe", "risks": 13, "creep": 1, "new_alerts": 0, "hb_ticks": 14}
+{"ts": "2026-06-10T21:51:08", "t_min": 27.3, "kind": "probe", "risks": 13, "creep": 1, "new_alerts": 0, "hb_ticks": 14}
+{"ts": "2026-06-10T21:52:09", "t_min": 28.3, "kind": "probe", "risks": 13, "creep": 1, "new_alerts": 0, "hb_ticks": 15}
+{"ts": "2026-06-10T21:53:10", "t_min": 29.3, "kind": "probe", "risks": 13, "creep": 1, "new_alerts": 0, "hb_ticks": 15}
+{"ts": "2026-06-10T21:54:11", "t_min": 30.3, "kind": "probe", "risks": 13, "creep": 1, "new_alerts": 0, "hb_ticks": 16}
+{"ts": "2026-06-10T21:55:10", "t_min": 31.3, "kind": "probe", "risks": 13, "creep": 1, "new_alerts": 0, "hb_ticks": 16}
+{"ts": "2026-06-10T21:56:11", "t_min": 32.3, "kind": "probe", "risks": 13, "creep": 1, "new_alerts": 0, "hb_ticks": 17}
+{"ts": "2026-06-10T21:57:11", "t_min": 33.4, "kind": "stale_sensor_detected", "signal": "GEN-BATT-01", "age_s": 923.5}
+{"ts": "2026-06-10T21:57:12", "t_min": 33.4, "kind": "probe", "risks": 14, "creep": 1, "new_alerts": 0, "hb_ticks": 17}
+{"ts": "2026-06-10T21:58:17", "t_min": 34.5, "kind": "probe", "risks": 14, "creep": 1, "new_alerts": 0, "hb_ticks": 18}
+{"ts": "2026-06-10T21:59:13", "t_min": 35.4, "kind": "probe", "risks": 14, "creep": 1, "new_alerts": 0, "hb_ticks": 18}
+{"ts": "2026-06-10T22:00:13", "t_min": 36.4, "kind": "probe", "risks": 12, "creep": 0, "new_alerts": 0, "hb_ticks": 19}
+{"ts": "2026-06-10T22:01:13", "t_min": 37.4, "kind": "probe", "risks": 12, "creep": 0, "new_alerts": 0, "hb_ticks": 19}
+{"ts": "2026-06-10T22:02:14", "t_min": 38.4, "kind": "probe", "risks": 12, "creep": 0, "new_alerts": 0, "hb_ticks": 20}
+{"ts": "2026-06-10T22:03:15", "t_min": 39.4, "kind": "probe", "risks": 12, "creep": 0, "new_alerts": 0, "hb_ticks": 20}
+{"ts": "2026-06-10T22:04:16", "t_min": 40.4, "kind": "probe", "risks": 12, "creep": 0, "new_alerts": 0, "hb_ticks": 21}
+{"ts": "2026-06-10T22:05:17", "t_min": 41.4, "kind": "probe", "risks": 12, "creep": 0, "new_alerts": 0, "hb_ticks": 21}
+{"ts": "2026-06-10T22:06:17", "t_min": 42.5, "kind": "probe", "risks": 12, "creep": 0, "new_alerts": 0, "hb_ticks": 22}
+{"ts": "2026-06-10T22:07:18", "t_min": 43.5, "kind": "probe", "risks": 12, "creep": 0, "new_alerts": 0, "hb_ticks": 22}
+{"ts": "2026-06-10T22:08:19", "t_min": 44.5, "kind": "probe", "risks": 12, "creep": 0, "new_alerts": 0, "hb_ticks": 23}
+{"ts": "2026-06-10T22:08:50", "t_min": 45.0, "kind": "soak_done", "result": "PASS", "false_alarm_while_healthy": false, "first_creep_min": 18.2, "stale_detected_min": 33.4, "alerts": 10, "heartbeat_ticks": 23}
