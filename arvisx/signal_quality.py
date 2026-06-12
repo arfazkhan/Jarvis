@@ -72,8 +72,9 @@ def check_value(key: str, value) -> Tuple[str, str]:
     return "good", ""
 
 
-# Config/schedule signals that don't vary → exclude from stuck detection.
-_NO_STUCK = re.compile(r"capacity|threshold|setpoint|_due|_date|expected_|volume", re.I)
+# Config/schedule/counter signals that legitimately don't vary → exclude from stuck
+# detection (starts_today is a counter that can sit at a value; active_faults likewise).
+_NO_STUCK = re.compile(r"capacity|threshold|setpoint|_due|_date|expected_|volume|starts_|active_faults", re.I)
 
 
 def assess_quality_risks(asset: Asset, baselines=None, now: Optional[datetime] = None) -> List[Risk]:
@@ -105,7 +106,9 @@ def assess_quality_risks(asset: Asset, baselines=None, now: Optional[datetime] =
                             f"{k}={v} is far outside its own learned range — looks like a sensor "
                             "glitch, not real change. Confirm before acting.",
                             confidence="Medium", evidence=[f"{k}={v}", "far outside learned baseline"]))
-        elif mad <= 1e-9 and n >= _STUCK_MIN_SAMPLES and not _NO_STUCK.search(k):
+        elif (mad <= 1e-9 and n >= _STUCK_MIN_SAMPLES and not _NO_STUCK.search(k)
+              and abs(v) > 1e-9 and abs(med) > 1e-9):
+            # frozen at ZERO is excluded above — a pump reading 0.0 kW is OFF, not stuck.
             out.append(Risk(asset.asset_id, asset.name, svc, Severity.MAINTENANCE,
                             f"{asset.name} {k} sensor possibly stuck (frozen value)",
                             f"{k} has not changed across {n} readings while it normally varies — the sensor "

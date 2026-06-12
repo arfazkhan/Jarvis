@@ -134,7 +134,9 @@ def commission_if_needed():
 def main():
     LOG.write_text("")
     print("═" * 70)
-    print(f"  ARVISX DEMO MODE — {TOTAL_MIN/60:.0f}h run · incident at hour {FAULT_AT_MIN/60:.0f} "
+    _dur = f"{TOTAL_MIN/60:.0f}h" if TOTAL_MIN >= 120 else f"{TOTAL_MIN:.0f}min"
+    _at = f"hour {FAULT_AT_MIN/60:.0f}" if FAULT_AT_MIN >= 120 else f"minute {FAULT_AT_MIN:.0f}"
+    print(f"  ARVISX DEMO MODE — {_dur} run · incident at {_at} "
           f"· telemetry every {CADENCE_S:.0f}s (1:1 physics)")
     print(f"  API for the bot: http://127.0.0.1:{API_PORT}  (see DEMO_MODE_HOWTO.md)")
     print("═" * 70)

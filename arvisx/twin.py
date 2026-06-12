@@ -96,10 +96,15 @@ class CommunityTwin:
         self._gas_usage_factor = {k: self.rng.uniform(0.6, 1.6) for k in self.gas_meters}
 
         # ── STP / Pool / Fire ────────────────────────────────────────────
-        self.stp_runtime_today = 0.0
-        self.stp_blower_runtime_h = 12_000.0
-        self.pool_runtime_today = 0.0
+        # Cold-start backfill: when spawned mid-day (1:1 demos), today's runtimes must
+        # reflect the hours that already passed — else "0.0h vs expected 8h" raises
+        # false inactivity alarms the moment the demo boots.
+        _h0 = self.now.hour + self.now.minute / 60.0
         self.pool_window = (6, 14)                      # filtration schedule 06:00–14:00
+        self.stp_runtime_today = round(0.75 * _h0, 1)   # aeration tracks demand most hours
+        self.stp_blower_runtime_h = 12_000.0 + self.stp_runtime_today
+        self.pool_runtime_today = round(max(0.0, min(_h0, self.pool_window[1])
+                                            - self.pool_window[0]) if _h0 > self.pool_window[0] else 0.0, 1)
         self.fire_next_test = self.now + timedelta(days=20)
         self._day = self.now.date()
         self._frozen_oh_pct: Optional[float] = None     # captured when the sensor sticks
@@ -209,7 +214,7 @@ class CommunityTwin:
             m("BOOST-PUMP-01", "power_kw", round(boost_kw, 2) if boosting else 0.0),
             m("BOOST-PUMP-01", "starts_today", self.boost_starts),
             m("BOOST-PUMP-01", "runtime_hours", round(self.boost_runtime_h, 1)),
-            m("GEN-01", "fuel_level_pct", round(self.gen_fuel_pct, 1)),
+            m("GEN-01", "fuel_level_pct", round(self.gen_fuel_pct + rng.uniform(-0.15, 0.15), 1)),
             m("GEN-01", "fault", False),
             m("GEN-01", "runtime_hours", round(self.gen_runtime_h, 1)),
             m("GEN-BATT-01", "battery_voltage", round(self.gen_battery_v + rng.uniform(-0.03, 0.03), 2)),

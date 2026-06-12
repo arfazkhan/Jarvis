@@ -44,10 +44,14 @@ def route_intent(text: str) -> str:
         return "fire"
     if re.search(r"\bgas\b|\blpg\b|cooking", t):
         return "gas"
+    if re.search(r"\bfix\b|repair|what (should|do) (i|we) do|recommend|next step|action", t):
+        return "fix"
     if re.search(r"issue|problem|alert|wrong|attention|risk", t):
         return "issues"
     if re.search(r"how.*(doing|building|today)|status|readiness|overall|summary|digest", t):
         return "status"
+    if re.search(r"^(hi|hello|hey|salam|salaam|namaste|good (morning|evening|afternoon))\b", t.strip()):
+        return "status"                      # a greeting gets the digest, not a shrug
     if re.search(r"help|commands|what can you", t):
         return "help"
     return "unknown"
@@ -79,8 +83,16 @@ def answer(text: str, report: CommunityReport, assets: Optional[list] = None, ba
     if intent == "issues":
         if not report.risks:
             return {"intent": intent, "text": "✅ No active issues. All services nominal."}
-        lines = [f"{_SEV_EMOJI.get(r.severity, '•')} {r.message}  [{r.confidence}]" for r in report.risks[:8]]
-        return {"intent": intent, "text": f"*{len(report.risks)} active issue(s):*\n" + "\n".join(lines)}
+        ranked = sorted(report.risks, key=_risk_rank)        # worst first
+        shown = ranked[:10]
+        lines = [f"{_SEV_EMOJI.get(r.severity, '•')} {r.message}  [{r.confidence}]" for r in shown]
+        text = f"*{len(report.risks)} active issue(s)* (top {len(shown)}):\n" + "\n".join(lines)
+        extra = len(report.risks) - len(shown)
+        if extra > 0:
+            text += f"\n\n…and {extra} more (ask e.g. 'show water status' to filter, or 'how to fix')."
+        return {"intent": intent, "text": text}
+    if intent == "fix":
+        return {"intent": intent, "text": _how_to_fix(report)}
     if intent == "why":
         return {"intent": intent, "text": _why_readiness(report)}
     if intent in ("water", "power", "pool", "stp", "fire", "gas"):
@@ -89,13 +101,39 @@ def answer(text: str, report: CommunityReport, assets: Optional[list] = None, ba
         return {"intent": intent, "text": _service_line(report, st)}
     if intent == "help":
         return {"intent": intent, "text": (
-            "I answer:\n• How is the building doing?\n• Any issues?\n• Why is readiness down?\n"
-            "• What is this costing us?\n• Show water / power / pool / STP / fire status\n• Create work order")}
+            "I answer:\n• How is the building doing?\n• Any issues?\n• How to fix?\n• Why is readiness down?\n"
+            "• What is this costing us?\n• Show water / power / gas / pool / STP / fire status\n• Create work order")}
     if intent == "create_work_order":
         return {"intent": intent, "text": "", "action": "create_work_order"}
     return {"intent": "unknown", "text": (
         "I didn't get that. Try: 'any issues?', 'how is the building?', 'why is readiness down?', "
         "or 'show water status'.")}
+
+
+_SEV_ORDER = {Severity.CRITICAL: 0, Severity.WARNING: 1, Severity.MAINTENANCE: 2, Severity.INFO: 3}
+_CONF_ORDER = {"High": 0, "Medium": 1, "Low": 2}
+
+
+def _risk_rank(r):
+    """Worst first: severity, then higher confidence, so the list a human reads first
+    is the one that matters most."""
+    return (_SEV_ORDER.get(r.severity, 9), _CONF_ORDER.get(r.confidence, 9))
+
+
+def _how_to_fix(report: CommunityReport) -> str:
+    """The top risks with their recommended actions (from the deterministic advisory
+    detail) — 'what do I actually do?'"""
+    if not report.risks:
+        return "✅ Nothing to fix — all services nominal."
+    ranked = sorted(report.risks, key=_risk_rank)[:5]
+    lines = ["*What to do — top priorities:*", ""]
+    for r in ranked:
+        action = (r.detail or "Inspect on site.").strip()
+        lines.append(f"{_SEV_EMOJI.get(r.severity, '•')} *{r.message}*  [{r.confidence}]")
+        lines.append(f"   → {action}")
+    lines.append("")
+    lines.append("Reply 'create work order' to raise a ticket.")
+    return "\n".join(lines)
 
 
 def _why_readiness(report: CommunityReport) -> str:
