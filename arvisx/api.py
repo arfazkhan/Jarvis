@@ -665,11 +665,17 @@ def create_app():
         p = payload or {}
         q = str(p.get("question", "")).strip()
         role = str(p.get("role", "viewer")).lower()
+        by = str(p.get("by", "")).strip()        # sender number (resident requests)
         if not q:
             raise HTTPException(400, "provide 'question'")
         res = answer(q, state.report_now(), state.current_assets(),
                      state.baselines if state.store is not None else None, role=role)
-        if res.get("action") == "create_work_order":
+        if res.get("action") == "resident_request":
+            # Record FIRST, confirm after — 'noted' is only said once it's true.
+            rid = state.db.save_resident_request(by, res.get("request_text") or q)
+            res["text"] = (f"✅ Noted — your request has been logged for the building team "
+                           f"(ref RR-{rid}). For emergencies, contact the facility desk directly.")
+        elif res.get("action") == "create_work_order":
             if role not in _ACTION_ROLES:
                 res["text"] = "⛔ Creating work orders requires a facility-manager role. Ask your FM."
             else:
@@ -681,12 +687,29 @@ def create_app():
 
     @app.get("/api/v1/whatsapp/alerts")
     async def wa_alerts():
-        """New alerts to push (severity>=WARNING + confidence Medium/High, deduped across polls)."""
+        """New alerts to push (severity>=WARNING + confidence Medium/High, deduped across
+        polls). Open resident requests ride the same poll so the building team hears about
+        them on the next tick — marked 'notified' only after being handed to the bot."""
         from arvisx.messaging import pending_alerts
         bl = state.baselines if state.store is not None else None
         alerts, sent = pending_alerts(state.report_now(), state._sent_alerts, state.current_assets(), bl)
         state._sent_alerts = sent
+        for rr in state.db.resident_requests(status="open"):
+            sender = f" from +{rr['by_user']}" if rr.get("by_user") else ""
+            alerts.append({
+                "signature": f"resident_request::{rr['id']}", "severity": "info",
+                "service": "resident_request", "asset_id": "",
+                "text": (f"📩 *Resident request* RR-{rr['id']}{sender}\n\n{rr['text']}\n\n"
+                         f"Reply 'create work order' to raise a ticket."),
+                "resident_text": "",            # ops-only — never echoed to resident groups
+            })
+            state.db.set_resident_request_status(rr["id"], "notified")
         return {"count": len(alerts), "alerts": alerts}
+
+    @app.get("/api/v1/resident-requests")
+    async def resident_requests(status: str = ""):
+        """Resident maintenance requests (open / notified / closed) — frontend list."""
+        return {"requests": state.db.resident_requests(status or None)}
 
     @app.get("/api/v1/costs")
     async def costs():

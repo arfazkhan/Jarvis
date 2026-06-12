@@ -163,12 +163,11 @@ def _answer_resident(intent: str, text: str, report: CommunityReport,
                      assets, baselines) -> Dict[str, Any]:
     """Outcome-only voice. Residents never see asset names, %, kW, or confidence."""
     if intent == "create_work_order":
-        # Residents can't raise tickets here, and we must not pretend anything was
-        # recorded (nothing is). Honest + resident language, no FM jargon.
-        return {"intent": intent, "text": (
-            "I can't raise maintenance requests from this chat — please contact the "
-            "building's facility desk directly. You can ask me 'any issues?' for the "
-            "current status of building services.")}
+        # Resident maintenance request: hand the caller (API) the action to RECORD it.
+        # The caller fills in the confirmation text only after the save succeeds —
+        # never claim 'noted' for something that wasn't.
+        return {"intent": intent, "text": "", "action": "resident_request",
+                "request_text": (text or "").strip()}
     if intent == "help":
         return {"intent": intent, "text": (
             "Ask me:\n• Is water supply ok?\n• Is the pool open?\n• Is gas supply normal?\n"

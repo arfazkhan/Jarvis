@@ -74,6 +74,10 @@ class ArvisxDb:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, item_id TEXT,
                 date TEXT, status TEXT, note TEXT, by_user TEXT, ts TEXT, verdict TEXT);
             CREATE INDEX IF NOT EXISTS ix_checklist ON checklist_responses(building_id, date, item_id);
+            CREATE TABLE IF NOT EXISTS resident_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, ts TEXT,
+                by_user TEXT, text TEXT, status TEXT);
+            CREATE INDEX IF NOT EXISTS ix_resident_req ON resident_requests(building_id, status, ts);
             """)
         self._siglog_last: Dict[tuple, datetime] = {}   # (asset, signal) → last logged ts
 
@@ -279,3 +283,29 @@ class ArvisxDb:
             rows = c.execute("SELECT * FROM checklist_responses WHERE building_id=? AND date=?"
                              " ORDER BY ts", (self.building_id, date)).fetchall()
             return [dict(r) for r in rows]
+
+    # ── Resident requests (WhatsApp 'create work order' from a resident) ──
+    # The bot's confirmation text is only sent AFTER this insert returns — the
+    # resident is never told 'noted' unless it actually was.
+    def save_resident_request(self, by_user: str, text: str) -> int:
+        with self._lock, self._conn() as c:
+            cur = c.execute("INSERT INTO resident_requests (building_id, ts, by_user, text, status)"
+                            " VALUES (?,?,?,?,?)",
+                            (self.building_id, datetime.now().isoformat(timespec="seconds"),
+                             by_user, text, "open"))
+            return int(cur.lastrowid)
+
+    def resident_requests(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            if status:
+                rows = c.execute("SELECT * FROM resident_requests WHERE building_id=? AND status=?"
+                                 " ORDER BY ts", (self.building_id, status)).fetchall()
+            else:
+                rows = c.execute("SELECT * FROM resident_requests WHERE building_id=?"
+                                 " ORDER BY ts", (self.building_id,)).fetchall()
+            return [dict(r) for r in rows]
+
+    def set_resident_request_status(self, request_id: int, status: str) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE resident_requests SET status=? WHERE building_id=? AND id=?",
+                      (status, self.building_id, request_id))

@@ -235,17 +235,30 @@ def test_pending_alerts_carries_resident_text():
     assert "Confidence" not in crit_alert["resident_text"]
 
 
-# ── Fix 1: resident work-order reply must be honest ───────────────────────
+# ── Fix 1: resident work-order request is actually RECORDED ───────────────
 
-def test_resident_work_order_reply_is_honest():
+def test_resident_work_order_returns_record_action():
+    """Resident WO → action for the API to record. Text stays EMPTY here: the
+    confirmation is only written after the save succeeds (honesty ordering)."""
     report = _make_report()
-    res = answer("create work order", report, role="resident")
-    t = res["text"]
-    # must not claim anything was recorded/forwarded — nothing is
-    for false_claim in ("noted", "they'll see", "recorded", "sent to", "forwarded"):
-        assert false_claim not in t.lower(), f"resident WO reply claims: {false_claim!r}"
-    assert "facility desk" in t.lower()
-    assert "action" not in res                # no WO action fires for residents
+    res = answer("create work order: pool light broken", report, role="resident")
+    assert res.get("action") == "resident_request"
+    assert res["text"] == ""                       # no claim before the save
+    assert "pool light broken" in res["request_text"]
+
+
+def test_resident_request_persistence_roundtrip(tmp_path):
+    from arvisx.persistence import ArvisxDb
+    db = ArvisxDb(str(tmp_path / "rr.db"))
+    rid = db.save_resident_request("919048057376", "pool light broken near steps")
+    assert rid >= 1
+    open_reqs = db.resident_requests(status="open")
+    assert len(open_reqs) == 1
+    assert open_reqs[0]["text"] == "pool light broken near steps"
+    assert open_reqs[0]["by_user"] == "919048057376"
+    db.set_resident_request_status(rid, "notified")
+    assert db.resident_requests(status="open") == []
+    assert len(db.resident_requests(status="notified")) == 1
 
 
 # ── Fix 2: softener consistency across tiers ──────────────────────────────
