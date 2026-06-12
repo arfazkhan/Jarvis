@@ -668,7 +668,7 @@ def create_app():
         if not q:
             raise HTTPException(400, "provide 'question'")
         res = answer(q, state.report_now(), state.current_assets(),
-                     state.baselines if state.store is not None else None)
+                     state.baselines if state.store is not None else None, role=role)
         if res.get("action") == "create_work_order":
             if role not in _ACTION_ROLES:
                 res["text"] = "⛔ Creating work orders requires a facility-manager role. Ask your FM."

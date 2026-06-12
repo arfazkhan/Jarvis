@@ -11,6 +11,12 @@ principles from the product review, enforced here:
   3. ANTI-FATIGUE — alerts only for severity>=WARNING AND confidence in {Medium,High}, deduped
      by signature, so the bot stays sparse and trusted (the 'act on 8/10 alerts' metric).
 Actions (create work order) are ROLE-gated; reads are open to any authorized user.
+
+Three-tier voice:
+  resident — outcome language only; no asset names, no %, no kW, no confidence noise.
+             Only surfaces CRITICAL service disruptions; all else is "normal".
+  manager/owner — current digest: bands, issues ranked, money lines.
+  technician/fm — full: asset, signal deviation, recommended action, confidence tag.
 """
 from __future__ import annotations
 
@@ -21,6 +27,31 @@ from arvisx.models import CommunityReport, OUTCOME_LABEL, ServiceType, Severity
 
 _BAND_EMOJI = {"Healthy": "✅", "Attention Required": "⚠️", "Critical": "🚨"}
 _SEV_EMOJI = {Severity.CRITICAL: "🚨", Severity.WARNING: "⚠️", Severity.MAINTENANCE: "🔧", Severity.INFO: "ℹ️"}
+
+# ── Resident-tier voice ───────────────────────────────────────────────────
+# Maps ServiceType → (ok_phrase, disrupted_phrase).
+# ok = what a resident sees when nothing is wrong.
+# disrupted = what a resident sees when severity==CRITICAL (service down or imminent).
+_RESIDENT_SERVICE: Dict[ServiceType, tuple] = {
+    ServiceType.WATER:        ("💧 Water supply normal",
+                               "🚨 Water supply disruption — building team is on it"),
+    ServiceType.POWER_BACKUP: ("⚡ Backup power ready",
+                               "🚨 Backup power issue — building team notified"),
+    ServiceType.POOL:         ("🏊 Pool operational",
+                               "🚨 Pool temporarily out of service"),
+    ServiceType.STP:          ("🌿 Waste management normal",
+                               "🚨 Waste system issue — building team is on it"),
+    ServiceType.FIRE:         ("🔥 Fire systems normal",
+                               "🚨 Fire system alert — evacuate if alarm sounds"),
+    ServiceType.GAS:          ("🔥 Cooking gas supply normal",
+                               "🚨 Gas supply issue — do not use gas appliances, building team notified"),
+    ServiceType.ENERGY:       ("💡 Common areas normal", "⚠️ Energy system attention needed"),
+}
+
+# roles that receive the full technician/FM voice
+_TECH_ROLES = {"technician", "fm", "owner"}
+# roles that receive the manager/committee voice
+_MGR_ROLES = {"manager", "committee"}
 
 
 # ── intent routing (keyword → canned intent) ─────────────────────────────
@@ -73,8 +104,15 @@ def _service_line(report: CommunityReport, st: ServiceType) -> str:
 
 
 # ── the canned answers (deterministic) ───────────────────────────────────
-def answer(text: str, report: CommunityReport, assets: Optional[list] = None, baselines=None) -> Dict[str, Any]:
+def answer(text: str, report: CommunityReport, assets: Optional[list] = None,
+           baselines=None, role: str = "viewer") -> Dict[str, Any]:
     intent = route_intent(text)
+    r = role.lower() if role else "viewer"
+    if r == "resident":
+        return _answer_resident(intent, text, report, assets, baselines)
+    if r in _TECH_ROLES:
+        return _answer_tech(intent, text, report, assets, baselines)
+    # manager / committee / viewer / owner fallthrough → standard voice
     if intent == "status":
         return {"intent": intent, "text": daily_digest(report)}
     if intent == "cost":
@@ -108,6 +146,84 @@ def answer(text: str, report: CommunityReport, assets: Optional[list] = None, ba
     return {"intent": "unknown", "text": (
         "I didn't get that. Try: 'any issues?', 'how is the building?', 'why is readiness down?', "
         "or 'show water status'.")}
+
+
+# ── Resident renderer ────────────────────────────────────────────────────
+def _answer_resident(intent: str, text: str, report: CommunityReport,
+                     assets, baselines) -> Dict[str, Any]:
+    """Outcome-only voice. Residents never see asset names, %, kW, or confidence."""
+    if intent == "create_work_order":
+        return {"intent": intent, "text": "", "action": "create_work_order"}
+    if intent == "help":
+        return {"intent": intent, "text": (
+            "Ask me:\n• Is water supply ok?\n• Is the pool open?\n• Is gas supply normal?\n"
+            "• Is backup power ready?\n• Any issues?")}
+    # For any query, produce the resident-friendly outcome summary.
+    return {"intent": intent, "text": _resident_summary(report)}
+
+
+def _resident_summary(report: CommunityReport) -> str:
+    """Resident view: one line per service, plain outcome language, CRITICAL disruptions only."""
+    lines = ["*Building Status*", ""]
+    critical_services = {r.service for r in report.risks if r.severity == Severity.CRITICAL}
+    for st, (ok_phrase, bad_phrase) in _RESIDENT_SERVICE.items():
+        svc = next((s for s in report.services if s.service == st), None)
+        if svc is None:
+            continue
+        if st in critical_services:
+            lines.append(bad_phrase)
+        else:
+            lines.append(ok_phrase)
+    # Only surface critical count — no noise for healthy buildings
+    crits = [r for r in report.risks if r.severity == Severity.CRITICAL]
+    lines.append("")
+    if crits:
+        lines.append(f"⚠️ {len(crits)} issue(s) being addressed. Building team has been notified.")
+    else:
+        lines.append("✅ All services operating normally.")
+    return "\n".join(lines)
+
+
+# ── Technician / FM renderer ──────────────────────────────────────────────
+def _answer_tech(intent: str, text: str, report: CommunityReport,
+                 assets, baselines) -> Dict[str, Any]:
+    """Full operational detail: asset names, signal deviations, actions, confidence."""
+    if intent == "status":
+        return {"intent": intent, "text": _tech_digest(report)}
+    if intent == "issues":
+        if not report.risks:
+            return {"intent": intent, "text": "✅ No active issues."}
+        ranked = sorted(report.risks, key=_risk_rank)
+        shown = ranked[:10]
+        lines = [f"{_SEV_EMOJI.get(r.severity,'•')} [{r.asset_id}] {r.message}  [{r.confidence}]  → {r.detail or 'inspect on site'}"
+                 for r in shown]
+        body = f"*{len(report.risks)} issue(s)* (top {len(shown)}):\n" + "\n".join(lines)
+        extra = len(report.risks) - len(shown)
+        if extra > 0:
+            body += f"\n…and {extra} more."
+        return {"intent": intent, "text": body}
+    if intent == "fix":
+        return {"intent": intent, "text": _how_to_fix(report)}
+    # for service-specific and other intents fall back to standard answer path
+    return answer(text, report, assets, baselines, role="manager")
+
+
+def _tech_digest(report: CommunityReport) -> str:
+    """Technician digest: all services + worst risk per service + action."""
+    L = ["*ARVIS Tech Summary*", "",
+         f"{_BAND_EMOJI.get(report.readiness_band,'•')} Community Readiness: *{report.readiness:.0f}%*", ""]
+    for s in report.services:
+        band_e = _BAND_EMOJI.get(s.band.value, "•")
+        L.append(f"{band_e} {OUTCOME_LABEL.get(s.service, s.service.value)} ({s.score:.0f}%)")
+        svc_risks = sorted([r for r in report.risks if r.service == s.service], key=_risk_rank)
+        for r in svc_risks[:2]:
+            L.append(f"   {_SEV_EMOJI.get(r.severity,'•')} [{r.asset_id}] {r.message}  [{r.confidence}]")
+            if r.detail:
+                L.append(f"      → {r.detail}")
+    n = len(report.risks)
+    L.append("")
+    L.append(f"{n} active issue(s). Reply 'issues' for full list." if n else "No active issues.")
+    return "\n".join(L)
 
 
 _SEV_ORDER = {Severity.CRITICAL: 0, Severity.WARNING: 1, Severity.MAINTENANCE: 2, Severity.INFO: 3}
