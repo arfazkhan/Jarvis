@@ -235,6 +235,80 @@ def test_pending_alerts_carries_resident_text():
     assert "Confidence" not in crit_alert["resident_text"]
 
 
+# ── Fix 1: resident work-order reply must be honest ───────────────────────
+
+def test_resident_work_order_reply_is_honest():
+    report = _make_report()
+    res = answer("create work order", report, role="resident")
+    t = res["text"]
+    # must not claim anything was recorded/forwarded — nothing is
+    for false_claim in ("noted", "they'll see", "recorded", "sent to", "forwarded"):
+        assert false_claim not in t.lower(), f"resident WO reply claims: {false_claim!r}"
+    assert "facility desk" in t.lower()
+    assert "action" not in res                # no WO action fires for residents
+
+
+# ── Fix 2: softener consistency across tiers ──────────────────────────────
+
+def test_manager_fix_intent_softened():
+    report = _make_report()
+    report.risks.append(_risk("Booster Pump 2 power creep (3.2σ above its own normal)",
+                              detail="Trend power and inspect bearings."))
+    t = answer("how to fix", report, role="manager")["text"]
+    assert "working harder than usual" in t
+    assert "σ" not in t and "power creep" not in t.lower()
+    assert "Trend power and inspect bearings." in t     # action stays precise
+
+
+def test_tech_fix_intent_keeps_raw():
+    report = _make_report()
+    report.risks.append(_risk("Booster Pump 2 power creep (3.2σ above its own normal)",
+                              detail="Trend power and inspect bearings."))
+    t = answer("how to fix", report, role="fm")["text"]
+    assert "power creep" in t and "σ" in t
+
+
+def test_tech_service_query_keeps_raw():
+    report = _make_report()
+    report.risks.append(_risk("Booster Pump 2 power creep (3.2σ above its own normal)"))
+    t = answer("water status", report, role="fm")["text"]
+    assert "power creep" in t                 # raw, not "working harder than usual"
+
+
+def test_manager_service_query_softened():
+    report = _make_report()
+    report.risks.append(_risk("Booster Pump 2 power creep (3.2σ above its own normal)"))
+    t = answer("water status", report, role="manager")["text"]
+    assert "working harder than usual" in t and "σ" not in t
+
+
+# ── Fix 3: resident push dedup per service ────────────────────────────────
+
+def test_resident_push_deduped_per_service():
+    report = _make_report(critical_service=ServiceType.WATER)
+    # second distinct CRITICAL water risk
+    report.risks.append(_risk("Overhead Tank 1 level critically low", name="Overhead Tank 1",
+                              sev=Severity.CRITICAL))
+    alerts, sent = pending_alerts(report, set(), [], None)
+    crits = [a for a in alerts if a["severity"] == "critical"]
+    assert len(crits) == 2, "both technical alerts must still go to ops"
+    with_resident = [a for a in crits if a["resident_text"]]
+    assert len(with_resident) == 1, "residents get the water disruption ONCE, not per risk"
+    assert "resident::water" in sent
+
+
+def test_resident_push_dedup_persists_across_polls():
+    report = _make_report(critical_service=ServiceType.WATER)
+    _alerts1, sent = pending_alerts(report, set(), [], None)
+    # new critical water risk on the NEXT poll — resident already pinged for water
+    report.risks.append(_risk("Overhead Tank 1 level critically low", name="Overhead Tank 1",
+                              sev=Severity.CRITICAL))
+    alerts2, _sent2 = pending_alerts(report, sent, [], None)
+    new_crit = [a for a in alerts2 if a["severity"] == "critical"]
+    assert new_crit, "the new risk still alerts ops"
+    assert all(not a["resident_text"] for a in new_crit), "no repeat resident ping for water"
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for f in fns:

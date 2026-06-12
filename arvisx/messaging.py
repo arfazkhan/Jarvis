@@ -99,14 +99,17 @@ def _svc(report: CommunityReport, st: ServiceType):
     return next((s for s in report.services if s.service == st), None)
 
 
-def _service_line(report: CommunityReport, st: ServiceType) -> str:
+def _service_line(report: CommunityReport, st: ServiceType, soften: bool = True) -> str:
+    """One service's status. soften=True → manager phrasing; technician passes False
+    for the raw precise message."""
     s = _svc(report, st)
     if s is None:
         return f"{OUTCOME_LABEL.get(st, st.value)}: not monitored"
     rk = [r for r in report.risks if r.service == st]
     head = f"{_BAND_EMOJI.get(s.band.value, '•')} {OUTCOME_LABEL.get(st, st.value)} — {s.band.value} ({s.score:.0f}%)"
     if rk:
-        head += "\n" + "\n".join(f"   • {_manager_phrasing(r)}  [{r.confidence}]" for r in rk[:3])
+        head += "\n" + "\n".join(
+            f"   • {_manager_phrasing(r) if soften else r.message}  [{r.confidence}]" for r in rk[:3])
     return head
 
 
@@ -160,11 +163,12 @@ def _answer_resident(intent: str, text: str, report: CommunityReport,
                      assets, baselines) -> Dict[str, Any]:
     """Outcome-only voice. Residents never see asset names, %, kW, or confidence."""
     if intent == "create_work_order":
-        # A resident can't raise maintenance tickets — but say it in resident language,
-        # not FM jargon.
+        # Residents can't raise tickets here, and we must not pretend anything was
+        # recorded (nothing is). Honest + resident language, no FM jargon.
         return {"intent": intent, "text": (
-            "I've noted that. Maintenance requests go to the building team — they'll see it. "
-            "For anything urgent, contact the facility desk directly.")}
+            "I can't raise maintenance requests from this chat — please contact the "
+            "building's facility desk directly. You can ask me 'any issues?' for the "
+            "current status of building services.")}
     if intent == "help":
         return {"intent": intent, "text": (
             "Ask me:\n• Is water supply ok?\n• Is the pool open?\n• Is gas supply normal?\n"
@@ -229,8 +233,11 @@ def _answer_tech(intent: str, text: str, report: CommunityReport,
             body += f"\n…and {extra} more."
         return {"intent": intent, "text": body}
     if intent == "fix":
-        return {"intent": intent, "text": _how_to_fix(report)}
-    # for service-specific and other intents fall back to standard answer path
+        return {"intent": intent, "text": _how_to_fix(report, soften=False)}
+    if intent in _RESIDENT_INTENT_SVC:   # same intent→service map; raw voice here
+        return {"intent": intent,
+                "text": _service_line(report, _RESIDENT_INTENT_SVC[intent], soften=False)}
+    # for the remaining intents (cost / why / help / wo / unknown) use the standard path
     return answer(text, report, assets, baselines, role="manager")
 
 
@@ -291,16 +298,18 @@ def _risk_rank(r):
     return (_SEV_ORDER.get(r.severity, 9), _CONF_ORDER.get(r.confidence, 9))
 
 
-def _how_to_fix(report: CommunityReport) -> str:
+def _how_to_fix(report: CommunityReport, soften: bool = True) -> str:
     """The top risks with their recommended actions (from the deterministic advisory
-    detail) — 'what do I actually do?'"""
+    detail) — 'what do I actually do?'. soften=True → manager phrasing; the technician
+    tier passes soften=False to keep the raw precise message."""
     if not report.risks:
         return "✅ Nothing to fix — all services nominal."
     ranked = sorted(report.risks, key=_risk_rank)[:5]
     lines = ["*What to do — top priorities:*", ""]
     for r in ranked:
         action = (r.detail or "Inspect on site.").strip()
-        lines.append(f"{_SEV_EMOJI.get(r.severity, '•')} *{r.message}*  [{r.confidence}]")
+        msg = _manager_phrasing(r) if soften else r.message
+        lines.append(f"{_SEV_EMOJI.get(r.severity, '•')} *{msg}*  [{r.confidence}]")
         lines.append(f"   → {action}")
     lines.append("")
     lines.append("Reply 'create work order' to raise a ticket.")
@@ -371,7 +380,11 @@ def pending_alerts(report: CommunityReport, already_sent: Set[str],
                    assets: Optional[list] = None, baselines=None) -> Tuple[List[Dict[str, Any]], Set[str]]:
     """New alerts to push: severity>=WARNING, not previously sent. Each enriched with a
     money line (technician/manager voice) AND a resident-voiced variant (CRITICAL only,
-    else ''). The bot picks per recipient tier. Returns (alerts, updated_sent_set)."""
+    else ''). The bot picks per recipient tier. Returns (alerts, updated_sent_set).
+
+    Resident dedup is per SERVICE, not per risk: the resident phrase is the same fixed
+    disruption line, so three critical water risks must not ping a resident group three
+    times. Tracked as 'resident::<service>' in the same persisted sent-set."""
     by_id = {a.asset_id: a for a in (assets or [])}
     out: List[Dict[str, Any]] = []
     sent = set(already_sent)
@@ -382,7 +395,14 @@ def pending_alerts(report: CommunityReport, already_sent: Set[str],
         if sig in sent:
             continue
         sent.add(sig)
+        resident_text = format_alert_resident(r)
+        if resident_text:
+            rsig = f"resident::{r.service.value}"
+            if rsig in sent:
+                resident_text = ""          # this service's disruption already pushed
+            else:
+                sent.add(rsig)
         out.append({"signature": sig, "severity": r.severity.value, "service": r.service.value,
                     "asset_id": r.asset_id, "text": format_alert(r, by_id.get(r.asset_id), baselines),
-                    "resident_text": format_alert_resident(r)})
+                    "resident_text": resident_text})
     return out, sent
