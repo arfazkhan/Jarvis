@@ -689,7 +689,9 @@ def create_app():
     async def wa_alerts():
         """New alerts to push (severity>=WARNING + confidence Medium/High, deduped across
         polls). Open resident requests ride the same poll so the building team hears about
-        them on the next tick — marked 'notified' only after being handed to the bot."""
+        them on the next tick. They stay 'open' until the bot ACKS the WhatsApp send
+        (POST /whatsapp/resident-requests/ack) — a crash mid-push re-delivers next poll:
+        at-least-once, never silently lost (worst case the team sees a duplicate)."""
         from arvisx.messaging import pending_alerts
         bl = state.baselines if state.store is not None else None
         alerts, sent = pending_alerts(state.report_now(), state._sent_alerts, state.current_assets(), bl)
@@ -703,8 +705,21 @@ def create_app():
                          f"Reply 'create work order' to raise a ticket."),
                 "resident_text": "",            # ops-only — never echoed to resident groups
             })
-            state.db.set_resident_request_status(rr["id"], "notified")
         return {"count": len(alerts), "alerts": alerts}
+
+    @app.post("/api/v1/whatsapp/resident-requests/ack")
+    async def resident_requests_ack(payload: Dict[str, Any] = Body(...)):
+        """Bot confirms it DELIVERED resident-request pings to the team — only then do
+        they stop riding the alerts poll."""
+        ids = (payload or {}).get("ids") or []
+        acked = []
+        for i in ids:
+            try:
+                state.db.set_resident_request_status(int(i), "notified")
+                acked.append(int(i))
+            except (TypeError, ValueError):
+                continue
+        return {"acked": acked}
 
     @app.get("/api/v1/resident-requests")
     async def resident_requests(status: str = ""):
