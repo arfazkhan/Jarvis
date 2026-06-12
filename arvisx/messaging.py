@@ -45,7 +45,14 @@ _RESIDENT_SERVICE: Dict[ServiceType, tuple] = {
                                "🚨 Fire system alert — evacuate if alarm sounds"),
     ServiceType.GAS:          ("🔥 Cooking gas supply normal",
                                "🚨 Gas supply issue — do not use gas appliances, building team notified"),
-    ServiceType.ENERGY:       ("💡 Common areas normal", "⚠️ Energy system attention needed"),
+    ServiceType.ENERGY:       ("💡 Common areas normal",
+                               "🚨 Common-area systems need attention — building team notified"),
+}
+
+# Resident intent → the service it asks about (for single-service resident answers).
+_RESIDENT_INTENT_SVC: Dict[str, ServiceType] = {
+    "water": ServiceType.WATER, "power": ServiceType.POWER_BACKUP, "pool": ServiceType.POOL,
+    "stp": ServiceType.STP, "fire": ServiceType.FIRE, "gas": ServiceType.GAS,
 }
 
 # roles that receive the full technician/FM voice
@@ -99,7 +106,7 @@ def _service_line(report: CommunityReport, st: ServiceType) -> str:
     rk = [r for r in report.risks if r.service == st]
     head = f"{_BAND_EMOJI.get(s.band.value, '•')} {OUTCOME_LABEL.get(st, st.value)} — {s.band.value} ({s.score:.0f}%)"
     if rk:
-        head += "\n" + "\n".join(f"   • {r.message}  [{r.confidence}]" for r in rk[:3])
+        head += "\n" + "\n".join(f"   • {_manager_phrasing(r)}  [{r.confidence}]" for r in rk[:3])
     return head
 
 
@@ -112,7 +119,7 @@ def answer(text: str, report: CommunityReport, assets: Optional[list] = None,
         return _answer_resident(intent, text, report, assets, baselines)
     if r in _TECH_ROLES:
         return _answer_tech(intent, text, report, assets, baselines)
-    # manager / committee / viewer / owner fallthrough → standard voice
+    # manager / committee / viewer fallthrough → standard voice (softened phrasing)
     if intent == "status":
         return {"intent": intent, "text": daily_digest(report)}
     if intent == "cost":
@@ -123,7 +130,7 @@ def answer(text: str, report: CommunityReport, assets: Optional[list] = None,
             return {"intent": intent, "text": "✅ No active issues. All services nominal."}
         ranked = sorted(report.risks, key=_risk_rank)        # worst first
         shown = ranked[:10]
-        lines = [f"{_SEV_EMOJI.get(r.severity, '•')} {r.message}  [{r.confidence}]" for r in shown]
+        lines = [f"{_SEV_EMOJI.get(r.severity, '•')} {_manager_phrasing(r)}  [{r.confidence}]" for r in shown]
         text = f"*{len(report.risks)} active issue(s)* (top {len(shown)}):\n" + "\n".join(lines)
         extra = len(report.risks) - len(shown)
         if extra > 0:
@@ -153,13 +160,32 @@ def _answer_resident(intent: str, text: str, report: CommunityReport,
                      assets, baselines) -> Dict[str, Any]:
     """Outcome-only voice. Residents never see asset names, %, kW, or confidence."""
     if intent == "create_work_order":
-        return {"intent": intent, "text": "", "action": "create_work_order"}
+        # A resident can't raise maintenance tickets — but say it in resident language,
+        # not FM jargon.
+        return {"intent": intent, "text": (
+            "I've noted that. Maintenance requests go to the building team — they'll see it. "
+            "For anything urgent, contact the facility desk directly.")}
     if intent == "help":
         return {"intent": intent, "text": (
             "Ask me:\n• Is water supply ok?\n• Is the pool open?\n• Is gas supply normal?\n"
             "• Is backup power ready?\n• Any issues?")}
-    # For any query, produce the resident-friendly outcome summary.
+    # Single-service question ("is the pool open?") → just that service's line.
+    if intent in _RESIDENT_INTENT_SVC:
+        return {"intent": intent,
+                "text": _resident_service_line(report, _RESIDENT_INTENT_SVC[intent])}
+    # Anything else → the whole-building outcome summary.
     return {"intent": intent, "text": _resident_summary(report)}
+
+
+def _resident_service_line(report: CommunityReport, st: ServiceType) -> str:
+    """One service, resident voice. CRITICAL → disruption phrase; otherwise normal."""
+    pair = _RESIDENT_SERVICE.get(st)
+    if pair is None:
+        return "That service isn't monitored here."
+    ok_phrase, bad_phrase = pair
+    if any(r.service == st and r.severity == Severity.CRITICAL for r in report.risks):
+        return bad_phrase
+    return ok_phrase
 
 
 def _resident_summary(report: CommunityReport) -> str:
@@ -226,6 +252,35 @@ def _tech_digest(report: CommunityReport) -> str:
     return "\n".join(L)
 
 
+# ── Manager phrasing (plain-language reword of technician risk text) ───────
+# DETERMINISTIC reword, NOT paraphrase: each rule maps a known detector phrase to a
+# plain-operational sentence (asset name preserved). It never invents — unmatched
+# messages fall through with only the math noise (Nσ, % duty, kW, key=value) stripped,
+# so a manager sees "working harder than usual" instead of "power creep (3.2σ above its
+# own normal)", while the technician tier keeps the raw text. Source of truth for the
+# phrasing seam if it later moves onto Risk itself.
+_MGR_RULES: List[Tuple[str, str]] = [
+    (r"short-?cycling",                 "{name} is switching on and off too often — extra wear, worth a check"),
+    (r"power creep|drawing more power", "{name} is working harder than usual — worth an inspection"),
+    (r"running near-continuously|duty", "{name} is running almost non-stop — may be undersized or a leak"),
+    (r"drifting from its learned normal","{name} readings are drifting from their usual pattern"),
+    (r"filtration runtime below normal","{name} is filtering less than usual — pool water quality at risk"),
+    (r"offline — no operational signal","{name} has stopped reporting — we've lost its signal"),
+    (r"runtime above threshold",        "{name} is past its service hours — schedule maintenance"),
+]
+# Math/jargon parentheticals to strip from any unmatched message.
+_MGR_NOISE = re.compile(r"\s*\([^)]*(?:σ|sigma|% duty|starts/h|kW|=)[^)]*\)")
+
+
+def _manager_phrasing(r) -> str:
+    """Plain-language version of a risk message for the manager/committee tier."""
+    msg = r.message or ""
+    for pat, template in _MGR_RULES:
+        if re.search(pat, msg, re.IGNORECASE):
+            return template.format(name=r.asset_name)
+    return _MGR_NOISE.sub("", msg).strip()
+
+
 _SEV_ORDER = {Severity.CRITICAL: 0, Severity.WARNING: 1, Severity.MAINTENANCE: 2, Severity.INFO: 3}
 _CONF_ORDER = {"High": 0, "Medium": 1, "Low": 2}
 
@@ -258,7 +313,7 @@ def _why_readiness(report: CommunityReport) -> str:
         return f"✅ Community Readiness {report.readiness:.0f}% — everything is nominal."
     worst = min(attention, key=lambda s: s.score)
     rk = [r for r in report.risks if r.service == worst.service]
-    cause = rk[0].message if rk else f"{worst.outcome} below normal"
+    cause = _manager_phrasing(rk[0]) if rk else f"{worst.outcome} below normal"
     conf = rk[0].confidence if rk else "Medium"
     return (f"Community Readiness {report.readiness:.0f}% ({report.readiness_band}).\n\n"
             f"Primary contributor: *{worst.outcome}*\nReason: {cause}\nConfidence: {conf}")
@@ -302,10 +357,21 @@ def format_alert(r, asset=None, baselines=None) -> str:
             f"{r.message}\nConfidence: {r.confidence}{money}{impact}\n\nCreate work order? Reply: create work order")
 
 
+def format_alert_resident(r) -> str:
+    """Resident-voiced push. ONLY a CRITICAL service disruption is worth a resident's
+    attention — returns the plain disruption phrase, or '' for anything lower (residents
+    don't get maintenance/warning noise pushed at them)."""
+    if r.severity != Severity.CRITICAL:
+        return ""
+    pair = _RESIDENT_SERVICE.get(r.service)
+    return pair[1] if pair else ""
+
+
 def pending_alerts(report: CommunityReport, already_sent: Set[str],
                    assets: Optional[list] = None, baselines=None) -> Tuple[List[Dict[str, Any]], Set[str]]:
     """New alerts to push: severity>=WARNING, not previously sent. Each enriched with a
-    money line. Returns (alerts, updated_sent_set) — caller persists the set."""
+    money line (technician/manager voice) AND a resident-voiced variant (CRITICAL only,
+    else ''). The bot picks per recipient tier. Returns (alerts, updated_sent_set)."""
     by_id = {a.asset_id: a for a in (assets or [])}
     out: List[Dict[str, Any]] = []
     sent = set(already_sent)
@@ -317,5 +383,6 @@ def pending_alerts(report: CommunityReport, already_sent: Set[str],
             continue
         sent.add(sig)
         out.append({"signature": sig, "severity": r.severity.value, "service": r.service.value,
-                    "asset_id": r.asset_id, "text": format_alert(r, by_id.get(r.asset_id), baselines)})
+                    "asset_id": r.asset_id, "text": format_alert(r, by_id.get(r.asset_id), baselines),
+                    "resident_text": format_alert_resident(r)})
     return out, sent
