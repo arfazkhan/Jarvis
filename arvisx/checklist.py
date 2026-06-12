@@ -133,11 +133,21 @@ def daily_log(assets: List[Any], db, date: Optional[str] = None) -> Dict[str, An
     }
 
 
+# Prompt prefix variants — the SAME prompt text every morning pattern-matches as
+# automation to WhatsApp; vary the wrapper, keep the reply syntax (ok/issue <item_id>)
+# verbatim so the router regex still parses every reply.
+_PROMPT_PREFIXES = ("🔧 Daily check:", "🔧 Morning round:", "📋 Daily inspection:",
+                    "🔧 Routine check:")
+
+
 def pending_prompts(db, date: Optional[str] = None) -> List[Dict[str, str]]:
     """Physical items not yet answered today — what the WhatsApp bot should send."""
+    import random
     date = date or datetime.now().strftime("%Y-%m-%d")
     answered = {r["item_id"] for r in db.checklist_responses_for(date)}
-    return [{"item_id": i, "label": lbl, "prompt": prompt}
+    prefix = random.choice(_PROMPT_PREFIXES)
+    return [{"item_id": i, "label": lbl,
+             "prompt": prompt.replace("🔧 Daily check:", prefix, 1)}
             for i, lbl, prompt in PHYSICAL_ITEMS if i not in answered]
 
 

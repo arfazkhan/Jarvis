@@ -111,8 +111,11 @@ def test_manager_gets_band_labels():
 
 
 def test_viewer_same_as_manager():
+    import random
     report = _make_report()
+    random.seed(7)                      # digest phrasing varies per send (anti-ban);
     res_v = answer("status", report, role="viewer")
+    random.seed(7)                      # pin the RNG to compare the tier, not the variant
     res_m = answer("status", report, role="manager")
     assert res_v["text"] == res_m["text"]
 
@@ -320,6 +323,59 @@ def test_resident_push_dedup_persists_across_polls():
     new_crit = [a for a in alerts2 if a["severity"] == "critical"]
     assert new_crit, "the new risk still alerts ops"
     assert all(not a["resident_text"] for a in new_crit), "no repeat resident ping for water"
+
+
+# ── Phase A anti-ban: phrasing variants never lose facts or keywords ──────
+
+def test_digest_varies_but_facts_constant():
+    from arvisx.messaging import daily_digest, _DIGEST_HEADERS
+    report = _make_report(warning_service=ServiceType.WATER)
+    seen = set()
+    for _ in range(40):
+        t = daily_digest(report)
+        seen.add(t.split("\n")[0])
+        assert t.split("\n")[0] in _DIGEST_HEADERS
+        assert "Community Readiness: *70%*" in t      # the number NEVER varies
+        assert "1" in t.split("\n")[-1]               # issue count present
+    assert len(seen) > 1, "header must actually vary across sends"
+
+
+def test_alert_variants_keep_message_confidence_and_cta():
+    from arvisx.messaging import format_alert
+    r = _risk("Booster Pump 2 power creep (3.2σ above its own normal)",
+              detail="Trend power and inspect bearings.")
+    seen = set()
+    for _ in range(40):
+        t = format_alert(r)
+        seen.add(t)
+        assert "Booster Pump 2 power creep" in t       # fact verbatim
+        assert "Confidence: Medium" in t
+        assert "create work order" in t.lower()        # parseable CTA in EVERY variant
+    assert len(seen) > 1
+
+
+def test_resident_push_suffix_varies_but_phrase_intact():
+    crit = _risk("Transfer Pump offline", sev=Severity.CRITICAL)
+    seen = set()
+    for _ in range(40):
+        t = format_alert_resident(crit)
+        seen.add(t)
+        assert t.startswith("🚨 Water supply disruption — building team is on it")
+    assert len(seen) > 1
+
+
+def test_checklist_prompts_keep_reply_syntax(tmp_path):
+    from arvisx.persistence import ArvisxDb
+    from arvisx.checklist import pending_prompts, _PROMPT_PREFIXES
+    db = ArvisxDb(str(tmp_path / "cl.db"))
+    prefixes_seen = set()
+    for _ in range(30):
+        for p in pending_prompts(db):
+            assert f"ok {p['item_id']}" in p["prompt"], "reply syntax must stay verbatim"
+            assert f"issue {p['item_id']}" in p["prompt"]
+            prefixes_seen.add(p["prompt"].split(":")[0] + ":")
+    assert prefixes_seen <= set(_PROMPT_PREFIXES)
+    assert len(prefixes_seen) > 1, "prompt prefix must vary across days"
 
 
 if __name__ == "__main__":

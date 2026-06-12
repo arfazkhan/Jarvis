@@ -20,6 +20,7 @@ Three-tier voice:
 """
 from __future__ import annotations
 
+import random
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -327,15 +328,42 @@ def _why_readiness(report: CommunityReport) -> str:
             f"Primary contributor: *{worst.outcome}*\nReason: {cause}\nConfidence: {conf}")
 
 
+# ── outbound phrasing variants (anti-spam-pattern) ───────────────────────
+# WhatsApp's automation detection flags REPEATED IDENTICAL outbound text. Every
+# PUSHED surface (digest, alerts, checklist prompts, resident pings) varies its
+# wrapper phrasing per send. DETERMINISTIC-safe: variants are hand-written, the
+# facts (numbers, names, refs) are interpolated unchanged, and machine-parsed
+# reply keywords ('create work order', 'ok <item_id>') stay verbatim in every
+# variant. Q&A replies (responses to a user message) are NOT varied — replies
+# don't pattern-match as broadcast spam, and tests pin their exact text.
+_DIGEST_HEADERS = ("*ARVIS Daily Summary*", "*ARVIS Morning Brief*",
+                   "*Daily Building Report*", "*ARVIS Daily Status*")
+_DIGEST_FOOT_OK = ("No active issues.", "All clear — no active issues.",
+                   "Nothing needs attention today.", "No issues on the board.")
+_DIGEST_FOOT_N = ("{n} active issue(s).", "{n} issue(s) on the board.",
+                  "{n} item(s) need attention.", "Tracking {n} active issue(s).")
+_ALERT_HEAD = ("*{label} Risk*", "*{label} Alert*", "*{label} — attention needed*")
+_ALERT_CTA = ("Create work order? Reply: create work order",
+              "Raise a ticket? Reply: create work order",
+              "Reply 'create work order' to log this.",
+              "To raise a ticket, reply: create work order")
+_RESIDENT_PUSH_SUFFIX = ("", " Updates to follow.", " We'll keep you posted.",
+                         " More information as we have it.")
+
+
+def _vary(options) -> str:
+    return random.choice(options)
+
+
 # ── daily digest ─────────────────────────────────────────────────────────
 def daily_digest(report: CommunityReport) -> str:
-    L = [f"*ARVIS Daily Summary*", f"", f"{_BAND_EMOJI.get(report.readiness_band, '•')} "
+    L = [_vary(_DIGEST_HEADERS), f"", f"{_BAND_EMOJI.get(report.readiness_band, '•')} "
          f"Community Readiness: *{report.readiness:.0f}%*", ""]
     for s in report.services:
         L.append(f"{_BAND_EMOJI.get(s.band.value, '•')} {OUTCOME_LABEL.get(s.service, s.service.value)}")
     n = len(report.risks)
     L.append("")
-    L.append(f"{n} active issue(s)." if n else "No active issues.")
+    L.append(_vary(_DIGEST_FOOT_N).format(n=n) if n else _vary(_DIGEST_FOOT_OK))
     return "\n".join(L)
 
 
@@ -361,8 +389,9 @@ def format_alert(r, asset=None, baselines=None) -> str:
         money = f"\n{ml}" if ml else ""
     except Exception:
         pass
-    return (f"{_SEV_EMOJI.get(r.severity, '🚨')} *{OUTCOME_LABEL.get(r.service, r.service.value)} Risk*\n\n"
-            f"{r.message}\nConfidence: {r.confidence}{money}{impact}\n\nCreate work order? Reply: create work order")
+    head = _vary(_ALERT_HEAD).format(label=OUTCOME_LABEL.get(r.service, r.service.value))
+    return (f"{_SEV_EMOJI.get(r.severity, '🚨')} {head}\n\n"
+            f"{r.message}\nConfidence: {r.confidence}{money}{impact}\n\n{_vary(_ALERT_CTA)}")
 
 
 def format_alert_resident(r) -> str:
@@ -372,7 +401,7 @@ def format_alert_resident(r) -> str:
     if r.severity != Severity.CRITICAL:
         return ""
     pair = _RESIDENT_SERVICE.get(r.service)
-    return pair[1] if pair else ""
+    return (pair[1] + _vary(_RESIDENT_PUSH_SUFFIX)) if pair else ""
 
 
 def pending_alerts(report: CommunityReport, already_sent: Set[str],
