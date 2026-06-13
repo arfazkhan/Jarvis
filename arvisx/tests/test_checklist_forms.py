@@ -5,7 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 
 from arvisx.checklist_forms import (templates_for, get_template, entry_is_issue,
-                                     run_summary, manager_digest, Item)
+                                     run_summary, manager_digest, valid_issue_transition,
+                                     ISSUE_STATUSES, Item)
 from arvisx.persistence import ArvisxDb
 
 
@@ -113,6 +114,63 @@ def test_manager_digest_surfaces_issues_and_completion():
 
 def test_manager_digest_empty_day():
     assert "No checklists started" in manager_digest([], "2026-06-14")
+
+
+# ── issue lifecycle ─────────────────────────────────────────────────────
+def test_issue_transitions():
+    assert valid_issue_transition("open", "assigned")
+    assert valid_issue_transition("in_progress", "resolved")
+    assert valid_issue_transition("resolved", "open")        # reopen
+    assert not valid_issue_transition("resolved", "assigned")
+    assert not valid_issue_transition("open", "bogus")
+
+
+def test_issue_persistence_and_history(tmp_path):
+    db = ArvisxDb(str(tmp_path / "iss.db"))
+    iid = db.create_issue("one-anthem", "Fire alarm panel: OFF", detail="main panel off",
+                          asset="Fire Panel", severity="critical", source="manual", raised_by="Ajith")
+    iss = db.get_issue(iid)
+    assert iss["status"] == "open" and iss["history"][0]["action"] == "opened"
+    db.update_issue(iid, assignee="Arjun", by="Athul")
+    db.update_issue(iid, status="in_progress", by="Arjun", note="checking breaker")
+    db.update_issue(iid, status="resolved", by="Arjun", note="reset, normal")
+    iss = db.get_issue(iid)
+    assert iss["status"] == "resolved" and iss["assignee"] == "Arjun"
+    assert len(iss["history"]) == 4                          # open + assign + 2 status
+    assert db.list_issues("one-anthem", status="resolved")[0]["id"] == iid
+    assert db.list_issues("one-anthem", status="open") == []
+
+
+def test_auto_issue_dedup_per_run_item(tmp_path):
+    db = ArvisxDb(str(tmp_path / "iss2.db"))
+    rid = db.create_checklist_run("one-anthem", "ANTHEM-SHIFT-2", "2026-06-14")
+    assert db.find_auto_issue(rid, "g2_fire_alarm") is None
+    aid = db.create_issue("one-anthem", "Fire alarm: OFF", run_id=rid, item_id="g2_fire_alarm",
+                          source="auto")
+    assert db.find_auto_issue(rid, "g2_fire_alarm") == aid    # found before resolve
+    db.update_issue(aid, status="resolved", by="system", note="corrected")
+    assert db.find_auto_issue(rid, "g2_fire_alarm") is None    # resolved → not re-found
+
+
+# ── photo evidence storage ──────────────────────────────────────────────
+def test_photo_save_and_resolve(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARVISX_UPLOAD_DIR", str(tmp_path / "up"))
+    from arvisx.uploads import save_photo, photo_path
+    name, mt = save_photo(b"\xff\xd8\xff fake jpeg bytes", filename="round.jpg")
+    assert mt == "image/jpeg" and name.endswith(".jpg")
+    assert photo_path(name) is not None
+    assert photo_path("nope.jpg") is None
+
+
+def test_photo_rejects_bad_type_and_traversal(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARVISX_UPLOAD_DIR", str(tmp_path / "up2"))
+    from arvisx.uploads import save_photo, photo_path
+    import pytest
+    with pytest.raises(ValueError):
+        save_photo(b"data", filename="evil.exe")
+    with pytest.raises(ValueError):
+        save_photo(b"", filename="empty.png")
+    assert photo_path("../secret") is None                    # traversal rejected
 
 
 if __name__ == "__main__":

@@ -88,12 +88,21 @@ class ArvisxDb:
             CREATE INDEX IF NOT EXISTS ix_cl_runs ON checklist_runs(building_id, shift_date, template_id);
             CREATE TABLE IF NOT EXISTS checklist_run_entries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER, item_id TEXT,
-                value TEXT, status TEXT, note TEXT, is_issue INTEGER, ts TEXT);
+                value TEXT, status TEXT, note TEXT, is_issue INTEGER, ts TEXT, photo TEXT);
             CREATE INDEX IF NOT EXISTS ix_cl_entries ON checklist_run_entries(run_id, item_id);
             CREATE TABLE IF NOT EXISTS checklist_signoffs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER, role TEXT,
                 by_user TEXT, ts TEXT);
             CREATE INDEX IF NOT EXISTS ix_cl_signoffs ON checklist_signoffs(run_id, role);
+            -- Tracked issues with a lifecycle (open→assigned→in_progress→resolved) +
+            -- photo evidence + a transition history. source=auto (from a flagged entry)
+            -- or manual (logged directly).
+            CREATE TABLE IF NOT EXISTS checklist_issues (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, run_id INTEGER,
+                item_id TEXT, asset TEXT, title TEXT, detail TEXT, status TEXT, severity TEXT,
+                source TEXT, assignee TEXT, raised_by TEXT, photo TEXT,
+                created_at TEXT, updated_at TEXT, history TEXT);
+            CREATE INDEX IF NOT EXISTS ix_cl_issues ON checklist_issues(building_id, status);
             """)
         self._siglog_last: Dict[tuple, datetime] = {}   # (asset, signal) → last logged ts
 
@@ -353,20 +362,107 @@ class ArvisxDb:
 
     def save_checklist_entry(self, run_id: int, item_id: str, value: str = "", status: str = "",
                              note: str = "", is_issue: bool = False) -> None:
-        """Upsert one item's entry (operator may correct before submit). Server-timestamped."""
+        """Upsert one item's entry (operator may correct before submit). Server-timestamped.
+        Preserves any photo already attached to this item across the upsert."""
         with self._lock, self._conn() as c:
+            old = c.execute("SELECT photo FROM checklist_run_entries WHERE run_id=? AND item_id=?",
+                            (run_id, item_id)).fetchone()
+            photo = old["photo"] if old else None
             c.execute("DELETE FROM checklist_run_entries WHERE run_id=? AND item_id=?",
                       (run_id, item_id))
             c.execute("INSERT INTO checklist_run_entries (run_id, item_id, value, status, note,"
-                      " is_issue, ts) VALUES (?,?,?,?,?,?,?)",
+                      " is_issue, ts, photo) VALUES (?,?,?,?,?,?,?,?)",
                       (run_id, item_id, value, status, note, 1 if is_issue else 0,
-                       datetime.now().isoformat(timespec="seconds")))
+                       datetime.now().isoformat(timespec="seconds"), photo))
+
+    def set_checklist_entry_photo(self, run_id: int, item_id: str, photo: str) -> None:
+        """Attach a photo; create a stub entry if the item hasn't been filled yet so a
+        photo can be added before/independent of the value."""
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT id FROM checklist_run_entries WHERE run_id=? AND item_id=?",
+                          (run_id, item_id)).fetchone()
+            if r:
+                c.execute("UPDATE checklist_run_entries SET photo=? WHERE id=?", (photo, r["id"]))
+            else:
+                c.execute("INSERT INTO checklist_run_entries (run_id, item_id, value, status,"
+                          " note, is_issue, ts, photo) VALUES (?,?,?,?,?,?,?,?)",
+                          (run_id, item_id, "", "", "", 0,
+                           datetime.now().isoformat(timespec="seconds"), photo))
 
     def checklist_entries(self, run_id: int) -> Dict[str, Dict[str, Any]]:
         with self._lock, self._conn() as c:
             rows = c.execute("SELECT * FROM checklist_run_entries WHERE run_id=?", (run_id,)).fetchall()
         return {r["item_id"]: {"value": r["value"], "status": r["status"], "note": r["note"],
-                               "is_issue": bool(r["is_issue"]), "ts": r["ts"]} for r in rows}
+                               "is_issue": bool(r["is_issue"]), "ts": r["ts"],
+                               "photo": r["photo"]} for r in rows}
+
+    # ── Tracked issues (lifecycle + photo + history) ─────────────────────
+    def create_issue(self, building_id: str, title: str, detail: str = "", *, run_id: int = None,
+                     item_id: str = "", asset: str = "", severity: str = "issue",
+                     source: str = "manual", raised_by: str = "") -> int:
+        now = datetime.now().isoformat(timespec="seconds")
+        hist = json.dumps([{"ts": now, "action": "opened", "by": raised_by, "note": ""}])
+        with self._lock, self._conn() as c:
+            cur = c.execute(
+                "INSERT INTO checklist_issues (building_id, run_id, item_id, asset, title, detail,"
+                " status, severity, source, assignee, raised_by, photo, created_at, updated_at, history)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (building_id, run_id, item_id, asset, title, detail, "open", severity, source,
+                 "", raised_by, None, now, now, hist))
+            return int(cur.lastrowid)
+
+    def get_issue(self, issue_id: int) -> Optional[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT * FROM checklist_issues WHERE id=?", (issue_id,)).fetchone()
+        if not r:
+            return None
+        d = dict(r)
+        d["history"] = json.loads(d.get("history") or "[]")
+        return d
+
+    def find_auto_issue(self, run_id: int, item_id: str) -> Optional[int]:
+        """The open auto-created issue for a flagged entry (so we don't duplicate it)."""
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT id FROM checklist_issues WHERE run_id=? AND item_id=? AND"
+                          " source='auto' AND status!='resolved' ORDER BY id DESC LIMIT 1",
+                          (run_id, item_id)).fetchone()
+            return int(r["id"]) if r else None
+
+    def list_issues(self, building_id: str, status: str = "", asset: str = "") -> List[Dict[str, Any]]:
+        q = "SELECT * FROM checklist_issues WHERE building_id=?"
+        args: List[Any] = [building_id]
+        if status:
+            q += " AND status=?"; args.append(status)
+        if asset:
+            q += " AND asset=?"; args.append(asset)
+        q += " ORDER BY id DESC"
+        with self._lock, self._conn() as c:
+            rows = c.execute(q, tuple(args)).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r); d["history"] = json.loads(d.get("history") or "[]"); out.append(d)
+        return out
+
+    def update_issue(self, issue_id: int, *, status: str = "", assignee: str = None,
+                     by: str = "", note: str = "") -> None:
+        now = datetime.now().isoformat(timespec="seconds")
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT status, assignee, history FROM checklist_issues WHERE id=?",
+                          (issue_id,)).fetchone()
+            if not r:
+                return
+            hist = json.loads(r["history"] or "[]")
+            new_status = status or r["status"]
+            new_assignee = r["assignee"] if assignee is None else assignee
+            action = f"→ {status}" if status else ("assigned" if assignee is not None else "note")
+            hist.append({"ts": now, "action": action, "by": by, "note": note})
+            c.execute("UPDATE checklist_issues SET status=?, assignee=?, updated_at=?, history=? WHERE id=?",
+                      (new_status, new_assignee, now, json.dumps(hist), issue_id))
+
+    def set_issue_photo(self, issue_id: int, photo: str) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE checklist_issues SET photo=?, updated_at=? WHERE id=?",
+                      (photo, datetime.now().isoformat(timespec="seconds"), issue_id))
 
     def submit_checklist_run(self, run_id: int) -> None:
         with self._lock, self._conn() as c:

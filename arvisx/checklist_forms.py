@@ -277,9 +277,13 @@ def entry_is_issue(item: Item, value: Any, status: str = "") -> bool:
 def run_summary(template: Template, entries: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     """Completion + issues for a run. `entries` = {item_id: {value, status, note, ts}}.
     Completion counts items that have an entry; issues are flagged entries."""
+    def _filled(e) -> bool:
+        # A photo-only stub (no value, no status) does NOT count as completed.
+        return bool(e) and (str(e.get("value", "")).strip() != "" or bool(e.get("status")))
+
     items = template.all_items()
     total = len(items)
-    done = sum(1 for it in items if it.item_id in entries)
+    done = sum(1 for it in items if _filled(entries.get(it.item_id)))
     issues = []
     for it in items:
         e = entries.get(it.item_id)
@@ -291,9 +295,24 @@ def run_summary(template: Template, entries: Dict[str, Dict[str, Any]]) -> Dict[
     return {
         "total": total, "done": done,
         "completion_pct": round(100.0 * done / total, 0) if total else 100.0,
-        "missing": [it.item_id for it in items if it.item_id not in entries],
+        "missing": [it.item_id for it in items if not _filled(entries.get(it.item_id))],
         "issues": issues,
     }
+
+
+# ── issue lifecycle ───────────────────────────────────────────────────────
+ISSUE_STATUSES = ["open", "assigned", "in_progress", "resolved"]
+# Allowed targets from each status (reopen + quick-close permitted).
+_ISSUE_NEXT = {
+    "open": {"assigned", "in_progress", "resolved"},
+    "assigned": {"in_progress", "resolved", "open"},
+    "in_progress": {"resolved", "assigned", "open"},
+    "resolved": {"open"},     # reopen
+}
+
+
+def valid_issue_transition(current: str, target: str) -> bool:
+    return target in _ISSUE_NEXT.get(current, set())
 
 
 def manager_digest(runs_view: List[Dict[str, Any]], date: str) -> str:

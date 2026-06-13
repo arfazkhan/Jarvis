@@ -39,6 +39,8 @@ FORM_HTML = r"""<!DOCTYPE html>
   .row{display:flex;gap:8px;align-items:center}
   .unit{color:var(--mute);font-size:13px;white-space:nowrap}
   .note{margin-top:6px;font-size:13px;padding:7px}
+  .photo-btn{margin-top:6px;padding:7px 10px;border-radius:9px;border:1px solid var(--line);background:#0f141a;color:var(--mute);font-size:13px}
+  .thumb{width:42px;height:42px;object-fit:cover;border-radius:7px;border:1px solid var(--line);margin-left:8px}
   footer{position:fixed;bottom:0;left:0;right:0;background:#11151a;border-top:1px solid var(--line);padding:10px 14px}
   .btn{display:block;width:100%;padding:12px;border:0;border-radius:10px;background:var(--accent);color:#03121f;font-size:15px;font-weight:600}
   .btn.ghost{background:#222;color:var(--ink)}
@@ -139,7 +141,19 @@ function renderItem(it,ro){
     ctl=`<textarea class="note" rows="2" ${dis} onchange="saveVal('${it.item_id}',this.value)"
         placeholder="notes">${e?e.value:''}</textarea>`;
   }
-  return `<div class="item"><div class="ilabel"><span class="nm">${it.label}</span>${tag}</div>${ctl}</div>`;
+  // photo evidence (any item) — camera on mobile
+  const ph=`<div class="row" style="margin-top:6px">
+    <button class="photo-btn" ${dis} onclick="document.getElementById('ph_${it.item_id}').click()">📷 ${e&&e.photo?'Retake':'Photo'}</button>
+    <input id="ph_${it.item_id}" type="file" accept="image/*" capture="environment" class="hide" onchange="upPhoto('${it.item_id}',this)">
+    ${e&&e.photo?`<img class="thumb" src="/api/v1/photos/${e.photo}">`:''}</div>`;
+  return `<div class="item"><div class="ilabel"><span class="nm">${it.label}</span>${tag}</div>${ctl}${ro&&!(e&&e.photo)?'':ph}</div>`;
+}
+
+async function upPhoto(id,inp){
+  const f=inp.files&&inp.files[0]; if(!f) return;
+  await fetch(API+"/run/"+RUN.run.id+"/photo?item_id="+encodeURIComponent(id)+"&filename="+encodeURIComponent(f.name||"photo.jpg"),
+    {method:"POST",headers:{"Content-Type":f.type||"image/jpeg"},body:f});
+  RUN=await jget(API+"/run/"+RUN.run.id); TPL=RUN.template; renderForm();
 }
 
 async function saveTick(id,status){ await save(id,status,status); }

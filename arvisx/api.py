@@ -901,9 +901,22 @@ def create_app():
             raise HTTPException(400, f"unknown item '{item_id}'")
         value = p.get("value", "")
         status = str(p.get("status", "")).strip().lower()
+        note = str(p.get("note", ""))
         flagged = entry_is_issue(item, value, status)
         state.db.save_checklist_entry(rid, item_id, value=str(value), status=status,
-                                      note=str(p.get("note", "")), is_issue=flagged)
+                                      note=note, is_issue=flagged)
+        # Auto issue lifecycle: a flagged entry opens a tracked issue (once); correcting
+        # it back to OK auto-resolves the auto-opened issue. Manual issues are untouched.
+        if flagged:
+            if state.db.find_auto_issue(rid, item_id) is None:
+                state.db.create_issue(
+                    run["building_id"], title=f"{item.label}: {value}", detail=note,
+                    run_id=rid, item_id=item_id, asset=run.get("asset", ""),
+                    severity="issue", source="auto", raised_by=run.get("technician", ""))
+        else:
+            aid = state.db.find_auto_issue(rid, item_id)
+            if aid is not None:
+                state.db.update_issue(aid, status="resolved", by="system", note="entry corrected to OK")
         return {"saved": True, "item_id": item_id, "is_issue": flagged,
                 "summary": _run_view(rid)["summary"]}
 
@@ -942,6 +955,87 @@ def create_app():
                         "completion_pct": summ["completion_pct"], "issues": summ["issues"],
                         "signoffs": [s["role"] for s in state.db.checklist_signoffs(run["id"])]})
         return {"building": building, "date": date, "runs": out}
+
+    # ── Issue logging (lifecycle) + photo evidence ──────────────────────
+    @app.get("/api/v1/issues")
+    async def issues_list(building: str = "one-anthem", status: str = "", asset: str = ""):
+        return {"building": building, "issues": _jsonable(state.db.list_issues(building, status, asset))}
+
+    @app.get("/api/v1/issues/{issue_id}")
+    async def issue_get(issue_id: int):
+        iss = state.db.get_issue(issue_id)
+        if not iss:
+            raise HTTPException(404, f"unknown issue {issue_id}")
+        return _jsonable(iss)
+
+    @app.post("/api/v1/issues")
+    async def issue_create(payload: Dict[str, Any] = Body(...)):
+        """Log an issue directly (not from a checklist entry)."""
+        p = payload or {}
+        title = str(p.get("title", "")).strip()
+        if not title:
+            raise HTTPException(400, "provide 'title'")
+        iid = state.db.create_issue(
+            str(p.get("building", "one-anthem")).strip() or "one-anthem", title,
+            detail=str(p.get("detail", "")), asset=str(p.get("asset", "")),
+            severity=str(p.get("severity", "issue")), source="manual",
+            raised_by=str(p.get("by", "")))
+        return _jsonable(state.db.get_issue(iid))
+
+    @app.post("/api/v1/issues/{issue_id}/transition")
+    async def issue_transition(issue_id: int, payload: Dict[str, Any] = Body(...)):
+        from arvisx.checklist_forms import valid_issue_transition, ISSUE_STATUSES
+        iss = state.db.get_issue(issue_id)
+        if not iss:
+            raise HTTPException(404, f"unknown issue {issue_id}")
+        p = payload or {}
+        status = str(p.get("status", "")).strip().lower()
+        assignee = p.get("assignee")
+        if status:
+            if status not in ISSUE_STATUSES:
+                raise HTTPException(400, f"status must be one of {ISSUE_STATUSES}")
+            if not valid_issue_transition(iss["status"], status):
+                raise HTTPException(409, f"cannot go {iss['status']} → {status}")
+        state.db.update_issue(issue_id, status=status,
+                              assignee=(str(assignee) if assignee is not None else None),
+                              by=str(p.get("by", "")), note=str(p.get("note", "")))
+        return _jsonable(state.db.get_issue(issue_id))
+
+    async def _save_photo_body(request, filename: str):
+        from arvisx.uploads import save_photo
+        data = await request.body()
+        try:
+            return save_photo(data, filename=filename,
+                              content_type=request.headers.get("content-type", ""))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/v1/forms/run/{rid}/photo")
+    async def forms_entry_photo(rid: int, request: Request, item_id: str, filename: str = ""):
+        """Attach a photo to a checklist entry. Raw image bytes in the body (Content-Type
+        image/jpeg|png|webp) — no multipart dependency."""
+        if not state.db.get_checklist_run(rid):
+            raise HTTPException(404, f"unknown run {rid}")
+        name, _mt = await _save_photo_body(request, filename)
+        state.db.set_checklist_entry_photo(rid, item_id, name)
+        return {"saved": True, "item_id": item_id, "photo": name}
+
+    @app.post("/api/v1/issues/{issue_id}/photo")
+    async def issue_photo(issue_id: int, request: Request, filename: str = ""):
+        if not state.db.get_issue(issue_id):
+            raise HTTPException(404, f"unknown issue {issue_id}")
+        name, _mt = await _save_photo_body(request, filename)
+        state.db.set_issue_photo(issue_id, name)
+        return {"saved": True, "issue_id": issue_id, "photo": name}
+
+    @app.get("/api/v1/photos/{name}")
+    async def photo_get(name: str):
+        from fastapi.responses import Response
+        from arvisx.uploads import photo_path, media_type_of
+        p = photo_path(name)
+        if p is None:
+            raise HTTPException(404, "photo not found")
+        return Response(content=p.read_bytes(), media_type=media_type_of(name))
 
     @app.get("/api/v1/forms/digest")
     async def forms_digest(building: str = "one-anthem", date: str = ""):
