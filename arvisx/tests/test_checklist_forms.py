@@ -173,6 +173,40 @@ def test_photo_rejects_bad_type_and_traversal(tmp_path, monkeypatch):
     assert photo_path("../secret") is None                    # traversal rejected
 
 
+# ── technician roster + run assignment ──────────────────────────────────
+def test_roster_add_list_reactivate_deactivate(tmp_path):
+    db = ArvisxDb(str(tmp_path / "r.db"))
+    a = db.add_technician("one-anthem", "Ajith", "9111")
+    db.add_technician("one-anthem", "Suresh")
+    assert {t["name"] for t in db.list_technicians("one-anthem")} == {"Ajith", "Suresh"}
+    db.set_technician_active(a, False)
+    assert {t["name"] for t in db.list_technicians("one-anthem")} == {"Suresh"}
+    # re-adding a soft-deleted name reactivates (no duplicate)
+    a2 = db.add_technician("one-anthem", "Ajith", "9222")
+    assert a2 == a
+    assert len(db.list_technicians("one-anthem")) == 2
+
+
+def test_run_assignment_and_my_tasks(tmp_path):
+    db = ArvisxDb(str(tmp_path / "as.db"))
+    rid = db.create_checklist_run("one-anthem", "ANTHEM-SHIFT-2", "2026-06-14", assignee="Ajith")
+    assert db.get_checklist_run(rid)["assignee"] == "Ajith"
+    # reassign — task isn't bound to one person
+    db.assign_checklist_run(rid, "Suresh")
+    assert db.get_checklist_run(rid)["assignee"] == "Suresh"
+    mine = db.runs_assigned_to("one-anthem", "Suresh", "2026-06-14")
+    assert len(mine) == 1 and mine[0]["id"] == rid
+    assert db.runs_assigned_to("one-anthem", "Ajith", "2026-06-14") == []
+
+
+def test_digest_flags_unassigned():
+    runs = [{"template_id": "ANTHEM-SHIFT-1", "name": "Shift I", "status": "open",
+             "completion_pct": 0, "issues": [], "signoffs": [], "assignee": ""}]
+    assert "unassigned" in manager_digest(runs, "2026-06-14").lower()
+    runs[0]["assignee"] = "Ajith"
+    assert "Ajith" in manager_digest(runs, "2026-06-14")
+
+
 if __name__ == "__main__":
     import sys, tempfile, pathlib
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

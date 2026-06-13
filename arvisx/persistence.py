@@ -84,8 +84,14 @@ class ArvisxDb:
             CREATE TABLE IF NOT EXISTS checklist_runs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, template_id TEXT,
                 asset TEXT, shift_date TEXT, technician TEXT, status TEXT,
-                started_at TEXT, submitted_at TEXT);
+                started_at TEXT, submitted_at TEXT, assignee TEXT);
             CREATE INDEX IF NOT EXISTS ix_cl_runs ON checklist_runs(building_id, shift_date, template_id);
+            -- Technician roster: the manager assigns shift-rounds/issues to a named tech
+            -- from this list, so a task is owned by its assignee, not bound to one person.
+            CREATE TABLE IF NOT EXISTS technicians (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, name TEXT,
+                phone TEXT, active INTEGER, created_at TEXT);
+            CREATE INDEX IF NOT EXISTS ix_techs ON technicians(building_id, active);
             CREATE TABLE IF NOT EXISTS checklist_run_entries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER, item_id TEXT,
                 value TEXT, status TEXT, note TEXT, is_issue INTEGER, ts TEXT, photo TEXT);
@@ -104,6 +110,10 @@ class ArvisxDb:
                 created_at TEXT, updated_at TEXT, history TEXT);
             CREATE INDEX IF NOT EXISTS ix_cl_issues ON checklist_issues(building_id, status);
             """)
+            # Defensive migration for DBs created before `assignee` existed.
+            cols = [r[1] for r in c.execute("PRAGMA table_info(checklist_runs)").fetchall()]
+            if "assignee" not in cols:
+                c.execute("ALTER TABLE checklist_runs ADD COLUMN assignee TEXT")
         self._siglog_last: Dict[tuple, datetime] = {}   # (asset, signal) → last logged ts
 
     # ── Building commissioning config ────────────────────────────────────
@@ -337,14 +347,50 @@ class ArvisxDb:
 
     # ── Phase-0 checklist runs / entries / sign-offs ─────────────────────
     def create_checklist_run(self, building_id: str, template_id: str, shift_date: str,
-                             technician: str = "", asset: str = "") -> int:
+                             technician: str = "", asset: str = "", assignee: str = "") -> int:
         with self._lock, self._conn() as c:
             cur = c.execute(
                 "INSERT INTO checklist_runs (building_id, template_id, asset, shift_date,"
-                " technician, status, started_at, submitted_at) VALUES (?,?,?,?,?,?,?,?)",
+                " technician, status, started_at, submitted_at, assignee) VALUES (?,?,?,?,?,?,?,?,?)",
                 (building_id, template_id, asset, shift_date, technician, "open",
-                 datetime.now().isoformat(timespec="seconds"), None))
+                 datetime.now().isoformat(timespec="seconds"), None, assignee))
             return int(cur.lastrowid)
+
+    def assign_checklist_run(self, run_id: int, assignee: str) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE checklist_runs SET assignee=? WHERE id=?", (assignee, run_id))
+
+    def runs_assigned_to(self, building_id: str, assignee: str, shift_date: str) -> List[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            rows = c.execute("SELECT * FROM checklist_runs WHERE building_id=? AND assignee=? AND"
+                             " shift_date=? ORDER BY id", (building_id, assignee, shift_date)).fetchall()
+            return [dict(r) for r in rows]
+
+    # ── Technician roster ────────────────────────────────────────────────
+    def add_technician(self, building_id: str, name: str, phone: str = "") -> int:
+        with self._lock, self._conn() as c:
+            # reactivate if the same name exists (soft-deleted), else insert
+            r = c.execute("SELECT id FROM technicians WHERE building_id=? AND name=?",
+                          (building_id, name)).fetchone()
+            if r:
+                c.execute("UPDATE technicians SET active=1, phone=? WHERE id=?", (phone, r["id"]))
+                return int(r["id"])
+            cur = c.execute("INSERT INTO technicians (building_id, name, phone, active, created_at)"
+                            " VALUES (?,?,?,1,?)",
+                            (building_id, name, phone, datetime.now().isoformat(timespec="seconds")))
+            return int(cur.lastrowid)
+
+    def list_technicians(self, building_id: str, active_only: bool = True) -> List[Dict[str, Any]]:
+        q = "SELECT * FROM technicians WHERE building_id=?"
+        if active_only:
+            q += " AND active=1"
+        q += " ORDER BY name"
+        with self._lock, self._conn() as c:
+            return [dict(r) for r in c.execute(q, (building_id,)).fetchall()]
+
+    def set_technician_active(self, tech_id: int, active: bool) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE technicians SET active=? WHERE id=?", (1 if active else 0, tech_id))
 
     def find_open_run(self, building_id: str, template_id: str, shift_date: str,
                       asset: str = "") -> Optional[int]:

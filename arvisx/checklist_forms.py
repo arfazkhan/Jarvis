@@ -330,7 +330,8 @@ def manager_digest(runs_view: List[Dict[str, Any]], date: str) -> str:
         signed = len(r.get("signoffs", []))
         tail = f" · {len(r['issues'])} issue(s)" if r["issues"] else ""
         sign = f" · {signed} sign-off(s)" if signed else " · unsigned"
-        L.append(f"{emoji} {r['name']}: {r['completion_pct']:.0f}% ({r['status']}){tail}{sign}")
+        who = f" · 👤 {r['assignee']}" if r.get("assignee") else " · ⚠️ unassigned"
+        L.append(f"{emoji} {r['name']}: {r['completion_pct']:.0f}% ({r['status']}){who}{tail}{sign}")
         all_issues += [f"• {i['label']}" + (f": {i['value']}" if i.get('value') else "")
                        for i in r["issues"]]
     if all_issues:

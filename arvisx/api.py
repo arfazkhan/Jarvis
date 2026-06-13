@@ -875,10 +875,14 @@ def create_app():
             raise HTTPException(400, f"unknown template '{tid}'")
         date = str(p.get("date", "")).strip() or _today_str()
         asset = str(p.get("asset", "")).strip()
+        assignee = str(p.get("assignee", "")).strip()
         rid = state.db.find_open_run(building, tid, date, asset)
         if rid is None:
             rid = state.db.create_checklist_run(building, tid, date,
-                                                technician=str(p.get("technician", "")).strip(), asset=asset)
+                                                technician=str(p.get("technician", "")).strip(),
+                                                asset=asset, assignee=assignee)
+        elif assignee:
+            state.db.assign_checklist_run(rid, assignee)
         return _run_view(rid)
 
     @app.get("/api/v1/forms/run/{rid}")
@@ -940,7 +944,7 @@ def create_app():
 
     @app.get("/api/v1/forms/today")
     async def forms_today(building: str = "one-anthem", date: str = ""):
-        """Manager view: every run for the day with completion % + open issues."""
+        """Manager view: every run for the day with completion % + open issues + assignee."""
         from arvisx.checklist_forms import get_template, run_summary
         date = date or _today_str()
         out = []
@@ -951,10 +955,57 @@ def create_app():
             summ = run_summary(tmpl, state.db.checklist_entries(run["id"]))
             out.append({"run_id": run["id"], "template_id": run["template_id"],
                         "name": tmpl.name, "status": run["status"],
-                        "technician": run["technician"], "asset": run["asset"],
-                        "completion_pct": summ["completion_pct"], "issues": summ["issues"],
+                        "assignee": run.get("assignee") or "", "technician": run["technician"],
+                        "asset": run["asset"], "completion_pct": summ["completion_pct"],
+                        "issues": summ["issues"],
                         "signoffs": [s["role"] for s in state.db.checklist_signoffs(run["id"])]})
         return {"building": building, "date": date, "runs": out}
+
+    # ── Technician roster + assignment (manager assigns; the task has an owner) ──
+    @app.get("/api/v1/technicians")
+    async def technicians_list(building: str = "one-anthem", all: bool = False):
+        return {"building": building,
+                "technicians": state.db.list_technicians(building, active_only=not all)}
+
+    @app.post("/api/v1/technicians")
+    async def technician_add(payload: Dict[str, Any] = Body(...)):
+        p = payload or {}
+        name = str(p.get("name", "")).strip()
+        if not name:
+            raise HTTPException(400, "provide 'name'")
+        building = str(p.get("building", "one-anthem")).strip() or "one-anthem"
+        tid = state.db.add_technician(building, name, str(p.get("phone", "")).strip())
+        return {"id": tid, "name": name}
+
+    @app.post("/api/v1/technicians/{tech_id}/deactivate")
+    async def technician_deactivate(tech_id: int):
+        state.db.set_technician_active(tech_id, False)
+        return {"id": tech_id, "active": False}
+
+    @app.post("/api/v1/forms/run/{rid}/assign")
+    async def forms_assign_run(rid: int, payload: Dict[str, Any] = Body(...)):
+        """Manager assigns (or reassigns) a shift-round to a technician from the roster."""
+        if not state.db.get_checklist_run(rid):
+            raise HTTPException(404, f"unknown run {rid}")
+        assignee = str((payload or {}).get("assignee", "")).strip()
+        state.db.assign_checklist_run(rid, assignee)
+        return _run_view(rid)
+
+    @app.get("/api/v1/forms/assigned")
+    async def forms_assigned(technician: str, building: str = "one-anthem", date: str = ""):
+        """A technician's task list for the day — the rounds the manager assigned to them."""
+        from arvisx.checklist_forms import get_template, run_summary
+        date = date or _today_str()
+        out = []
+        for run in state.db.runs_assigned_to(building, technician, date):
+            tmpl = get_template(run["template_id"], building)
+            if tmpl is None:
+                continue
+            summ = run_summary(tmpl, state.db.checklist_entries(run["id"]))
+            out.append({"run_id": run["id"], "name": tmpl.name, "status": run["status"],
+                        "asset": run["asset"], "completion_pct": summ["completion_pct"],
+                        "open_items": summ["total"] - summ["done"], "issues": len(summ["issues"])})
+        return {"technician": technician, "date": date, "assigned": out}
 
     # ── Issue logging (lifecycle) + photo evidence ──────────────────────
     @app.get("/api/v1/issues")

@@ -62,7 +62,7 @@ FORM_HTML = r"""<!DOCTYPE html>
 
 <script>
 const API="/api/v1/forms";
-let TPL=null, RUN=null, BUILDING="one-anthem";
+let TPL=null, RUN=null, BUILDING="one-anthem", TECHS=[];
 const $=(id)=>document.getElementById(id);
 
 async function jget(u){const r=await fetch(u);if(!r.ok)throw new Error(await r.text());return r.json();}
@@ -73,8 +73,13 @@ function setProgress(s){
   $("metaR").textContent=s.done+"/"+s.total+" · "+(s.issues?s.issues.length:0)+" issue(s)";
 }
 
+async function loadTechs(){
+  try{ TECHS=(await jget("/api/v1/technicians?building="+BUILDING)).technicians||[]; }catch(e){ TECHS=[]; }
+}
+
 async function showPicker(){
   $("foot").classList.add("hide");
+  await loadTechs();
   const d=await jget(API+"/templates?building="+BUILDING);
   $("title").textContent="ArvisX — "+(d.building||"").replace(/-/g," ");
   $("metaL").textContent="Pick a checklist";
@@ -102,6 +107,12 @@ function renderForm(){
   $("metaL").textContent=(RUN.run.technician||"—")+" · "+RUN.run.shift_date;
   const submitted=RUN.run.status!=="open";
   let h="";
+  // assignment (manager): who owns this round
+  const cur=RUN.run.assignee||"";
+  let opts='<option value="">— unassigned —</option>'+TECHS.map(t=>`<option ${t.name===cur?'selected':''}>${t.name}</option>`).join("");
+  h+=`<div class="card"><div class="muted">👤 Assigned technician</div>
+      <select onchange="assignRun(this.value)">${opts}</select>
+      ${cur?'':'<div class="muted" style="color:var(--warn);margin-top:4px">Unassigned — pick who is responsible.</div>'}</div>`;
   if(submitted) h+='<div class="banner" style="background:rgba(39,192,138,.12);border-color:var(--ok);color:#9ff0cf">Submitted — read-only. Sign-off below.</div>';
   const iss=RUN.summary.issues||[];
   if(iss.length) h+=`<div class="banner">⚠️ ${iss.length} issue(s) flagged: ${iss.map(i=>i.label).join(', ')}</div>`;
@@ -162,6 +173,10 @@ async function save(id,value,status){
   const r=await jpost(API+"/run/"+RUN.run.id+"/entry",{item_id:id,value:value,status:status});
   RUN=await jget(API+"/run/"+RUN.run.id);   // refresh entries+summary
   TPL=RUN.template; renderForm();
+}
+
+async function assignRun(name){
+  RUN=await jpost(API+"/run/"+RUN.run.id+"/assign",{assignee:name}); TPL=RUN.template; renderForm();
 }
 
 async function submitRun(){
