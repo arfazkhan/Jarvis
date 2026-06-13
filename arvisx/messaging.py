@@ -130,16 +130,7 @@ def answer(text: str, report: CommunityReport, assets: Optional[list] = None,
         from arvisx.economics import community_cost_message
         return {"intent": intent, "text": community_cost_message(report, assets or [], baselines)}
     if intent == "issues":
-        if not report.risks:
-            return {"intent": intent, "text": "✅ No active issues. All services nominal."}
-        ranked = sorted(report.risks, key=_risk_rank)        # worst first
-        shown = ranked[:10]
-        lines = [f"{_SEV_EMOJI.get(r.severity, '•')} {_manager_phrasing(r)}  [{r.confidence}]" for r in shown]
-        text = f"*{len(report.risks)} active issue(s)* (top {len(shown)}):\n" + "\n".join(lines)
-        extra = len(report.risks) - len(shown)
-        if extra > 0:
-            text += f"\n\n…and {extra} more (ask e.g. 'show water status' to filter, or 'how to fix')."
-        return {"intent": intent, "text": text}
+        return {"intent": intent, "text": _issues_text(report, tech=False)}
     if intent == "fix":
         return {"intent": intent, "text": _how_to_fix(report)}
     if intent == "why":
@@ -221,17 +212,7 @@ def _answer_tech(intent: str, text: str, report: CommunityReport,
     if intent == "status":
         return {"intent": intent, "text": _tech_digest(report)}
     if intent == "issues":
-        if not report.risks:
-            return {"intent": intent, "text": "✅ No active issues."}
-        ranked = sorted(report.risks, key=_risk_rank)
-        shown = ranked[:10]
-        lines = [f"{_SEV_EMOJI.get(r.severity,'•')} [{r.asset_id}] {r.message}  [{r.confidence}]  → {r.detail or 'inspect on site'}"
-                 for r in shown]
-        body = f"*{len(report.risks)} issue(s)* (top {len(shown)}):\n" + "\n".join(lines)
-        extra = len(report.risks) - len(shown)
-        if extra > 0:
-            body += f"\n…and {extra} more."
-        return {"intent": intent, "text": body}
+        return {"intent": intent, "text": _issues_text(report, tech=True)}
     if intent == "fix":
         return {"intent": intent, "text": _how_to_fix(report, soften=False)}
     if intent in _RESIDENT_INTENT_SVC:   # same intent→service map; raw voice here
@@ -242,20 +223,18 @@ def _answer_tech(intent: str, text: str, report: CommunityReport,
 
 
 def _tech_digest(report: CommunityReport) -> str:
-    """Technician digest: all services + worst risk per service + action."""
-    L = ["*ARVIS Tech Summary*", "",
-         f"{_BAND_EMOJI.get(report.readiness_band,'•')} Community Readiness: *{report.readiness:.0f}%*", ""]
-    for s in report.services:
-        band_e = _BAND_EMOJI.get(s.band.value, "•")
-        L.append(f"{band_e} {OUTCOME_LABEL.get(s.service, s.service.value)} ({s.score:.0f}%)")
-        svc_risks = sorted([r for r in report.risks if r.service == s.service], key=_risk_rank)
-        for r in svc_risks[:2]:
-            L.append(f"   {_SEV_EMOJI.get(r.severity,'•')} [{r.asset_id}] {r.message}  [{r.confidence}]")
-            if r.detail:
-                L.append(f"      → {r.detail}")
+    """Ops digest — clean overview, NOT a wall of risks. Service tiles + a one-line
+    worst-issue teaser; detail lives in 'issues' / 'fix' so the digest stays scannable."""
+    L = [_vary(_TECH_HEADERS), "", _readiness_headline(report), ""]
+    L += _service_tiles(report)
     n = len(report.risks)
     L.append("")
-    L.append(f"{n} active issue(s). Reply 'issues' for full list." if n else "No active issues.")
+    if n:
+        worst = sorted(report.risks, key=_risk_rank)[0]
+        L.append(f"📋 {n} active issue(s). Top: {worst.message}")
+        L.append("Reply *issues* for the list · *fix* for what to do.")
+    else:
+        L.append("✅ No active issues.")
     return "\n".join(L)
 
 
@@ -305,15 +284,13 @@ def _how_to_fix(report: CommunityReport, soften: bool = True) -> str:
     if not report.risks:
         return "✅ Nothing to fix — all services nominal."
     ranked = sorted(report.risks, key=_risk_rank)[:5]
-    lines = ["*What to do — top priorities:*", ""]
+    cards = []
     for r in ranked:
         action = (r.detail or "Inspect on site.").strip()
         msg = _manager_phrasing(r) if soften else r.message
-        lines.append(f"{_SEV_EMOJI.get(r.severity, '•')} *{msg}*  [{r.confidence}]")
-        lines.append(f"   → {action}")
-    lines.append("")
-    lines.append("Reply 'create work order' to raise a ticket.")
-    return "\n".join(lines)
+        cards.append(f"{_SEV_EMOJI.get(r.severity, '•')} *{msg}*  [{r.confidence}]\n   → {action}")
+    return "*What to do — top priorities:*\n\n" + "\n\n".join(cards) + \
+           "\n\nReply *create work order* to log one."
 
 
 def _why_readiness(report: CommunityReport) -> str:
@@ -338,6 +315,8 @@ def _why_readiness(report: CommunityReport) -> str:
 # don't pattern-match as broadcast spam, and tests pin their exact text.
 _DIGEST_HEADERS = ("*ARVIS Daily Summary*", "*ARVIS Morning Brief*",
                    "*Daily Building Report*", "*ARVIS Daily Status*")
+_TECH_HEADERS = ("*ARVIS Ops Brief*", "*ARVIS Status*", "*Building Status — ops*",
+                 "*ARVIS Tech Summary*")
 _DIGEST_FOOT_OK = ("No active issues.", "All clear — no active issues.",
                    "Nothing needs attention today.", "No issues on the board.")
 _DIGEST_FOOT_N = ("{n} active issue(s).", "{n} issue(s) on the board.",
@@ -355,15 +334,56 @@ def _vary(options) -> str:
     return random.choice(options)
 
 
+# ── shared rendering helpers (clean visual hierarchy) ────────────────────
+def _readiness_headline(report: CommunityReport) -> str:
+    tag = {"Healthy": "all good", "Attention Required": "needs attention",
+           "Critical": "action needed"}.get(report.readiness_band, "")
+    e = _BAND_EMOJI.get(report.readiness_band, "•")
+    dash = f" — {tag}" if tag else ""
+    return f"{e} Community Readiness: *{report.readiness:.0f}%*{dash}"
+
+
+def _service_tiles(report: CommunityReport) -> List[str]:
+    """One clean line per service — the reassuring at-a-glance grid."""
+    return [f"{_BAND_EMOJI.get(s.band.value, '•')} {OUTCOME_LABEL.get(s.service, s.service.value)}"
+            for s in report.services]
+
+
+def _issues_text(report: CommunityReport, tech: bool) -> str:
+    """Worst-first issues as clean cards: a title line, the action below, asset tag
+    last (tech only). tech=raw message, else softened plain language."""
+    if not report.risks:
+        return "✅ No active issues. All services nominal."
+    ranked = sorted(report.risks, key=_risk_rank)
+    shown = ranked[:10]
+    cards = []
+    for r in shown:
+        title = r.message if tech else _manager_phrasing(r)
+        seg = [f"{_SEV_EMOJI.get(r.severity, '•')} {title}  [{r.confidence}]"]
+        if r.detail:
+            seg.append(f"   → {r.detail.strip()}")
+        if tech and r.asset_id:
+            seg.append(f"   ({r.asset_id})")
+        cards.append("\n".join(seg))
+    # header, then the worst card immediately (keeps it on line 2), blank between cards
+    text = f"*{len(report.risks)} active issue(s)* (worst first):\n" + "\n\n".join(cards)
+    extra = len(report.risks) - len(shown)
+    if extra > 0:
+        text += f"\n\n…and {extra} more."
+    text += "\n\nReply *fix* for what to do · *create work order* to log one."
+    return text
+
+
 # ── daily digest ─────────────────────────────────────────────────────────
 def daily_digest(report: CommunityReport) -> str:
-    L = [_vary(_DIGEST_HEADERS), f"", f"{_BAND_EMOJI.get(report.readiness_band, '•')} "
-         f"Community Readiness: *{report.readiness:.0f}%*", ""]
-    for s in report.services:
-        L.append(f"{_BAND_EMOJI.get(s.band.value, '•')} {OUTCOME_LABEL.get(s.service, s.service.value)}")
+    L = [_vary(_DIGEST_HEADERS), "", _readiness_headline(report), ""]
+    L += _service_tiles(report)
     n = len(report.risks)
     L.append("")
-    L.append(_vary(_DIGEST_FOOT_N).format(n=n) if n else _vary(_DIGEST_FOOT_OK))
+    if n:
+        L.append(f"📋 {_vary(_DIGEST_FOOT_N).format(n=n)} Reply *issues* for detail.")
+    else:
+        L.append(f"✅ {_vary(_DIGEST_FOOT_OK)}")
     return "\n".join(L)
 
 
@@ -381,17 +401,23 @@ def _alert_signature(r) -> str:
 
 
 def format_alert(r, asset=None, baselines=None) -> str:
-    impact = f"\nPotential impact: {r.detail}" if r.detail else ""
-    money = ""
+    """Clean ops alert card: title, what's wrong, the action, the money, a small
+    confidence tag, then the CTA — one item per line, no duplicated 'impact' block."""
+    head = _vary(_ALERT_HEAD).format(label=OUTCOME_LABEL.get(r.service, r.service.value))
+    lines = [f"{_SEV_EMOJI.get(r.severity, '🚨')} {head}", "", r.message]
+    if r.detail:
+        lines.append(f"→ {r.detail.strip()}")
     try:
         from arvisx.economics import estimate, money_line
         ml = money_line(estimate(r, asset, baselines))
-        money = f"\n{ml}" if ml else ""
+        if ml:
+            lines.append(ml)
     except Exception:
         pass
-    head = _vary(_ALERT_HEAD).format(label=OUTCOME_LABEL.get(r.service, r.service.value))
-    return (f"{_SEV_EMOJI.get(r.severity, '🚨')} {head}\n\n"
-            f"{r.message}\nConfidence: {r.confidence}{money}{impact}\n\n{_vary(_ALERT_CTA)}")
+    lines.append(f"Confidence: {r.confidence}")
+    lines.append("")
+    lines.append(_vary(_ALERT_CTA))
+    return "\n".join(lines)
 
 
 def format_alert_resident(r) -> str:

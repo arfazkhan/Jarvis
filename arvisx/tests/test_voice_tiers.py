@@ -122,23 +122,27 @@ def test_viewer_same_as_manager():
 
 # ── Technician / FM / Owner tier ──────────────────────────────────────────
 
-def test_tech_digest_shows_asset_id():
+def test_tech_digest_is_clean_overview():
+    # The ops digest is a scannable overview — readiness + tiles + a worst-issue
+    # teaser + a prompt — NOT a wall of per-asset detail (that lives in 'issues').
     report = _make_report(critical_service=ServiceType.WATER)
     t = _tech_digest(report)
+    assert "Community Readiness" in t
+    assert "Reply" in t and ("issues" in t.lower())
+
+
+def test_tech_issues_show_asset_id_and_action():
+    report = _make_report(critical_service=ServiceType.WATER)
+    t = answer("issues", report, role="fm")["text"]
     assert "XFER-PUMP-01" in t
-
-
-def test_tech_digest_shows_action():
-    report = _make_report(critical_service=ServiceType.WATER)
-    t = _tech_digest(report)
     assert "Inspect" in t or "inspect" in t or "MCB" in t
 
 
 def test_fm_role_gets_tech_voice():
+    # FM 'issues' is the raw tech view (asset id present); the digest is the overview.
     report = _make_report(critical_service=ServiceType.WATER)
-    res = answer("status", report, role="fm")
-    t = res["text"]
-    assert "XFER-PUMP-01" in t
+    assert "XFER-PUMP-01" in answer("issues", report, role="fm")["text"]
+    assert "Community Readiness" in answer("status", report, role="fm")["text"]
 
 
 def test_owner_role_gets_tech_voice():

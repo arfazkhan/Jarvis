@@ -30,6 +30,13 @@ RECENT_WINDOW = 5         # judge drift on the last N obs (sustained, not a spik
 MIN_RECENT = 3
 DRIFT_Z = 3.0             # robust-z to flag drift
 _MAD_K = 1.4826           # MAD → std-equivalent
+# A near-flat history has MAD≈0; without a floor, drift-z explodes (a 0.2% wobble
+# read as 10^7 σ). Floor MAD to a fraction of the signal's own scale (+ tiny absolute
+# floor for signals that sit near zero), so drift is judged against a sane spread and
+# only a real move (~3% of value at this floor) can reach DRIFT_Z.
+_MAD_REL_FLOOR = 0.01     # ≥ 1% of |median|
+_MAD_ABS_FLOOR = 1e-6
+_Z_CAP = 12.0             # clamp reported z so a low-variance signal never shows absurd σ
 
 # Signals we do NOT drift-check: cumulative (monotonic), config, schedules/dates.
 _SKIP = re.compile(r"runtime_hours$|_threshold$|^expected_|_due$|_date$|setpoint|_total_m3$", re.I)
@@ -69,7 +76,8 @@ class BaselineStore:
                 return None
             data = list(h)
         med = statistics.median(data)
-        mad = statistics.median([abs(x - med) for x in data]) or 1e-9
+        raw_mad = statistics.median([abs(x - med) for x in data])
+        mad = max(raw_mad, abs(med) * _MAD_REL_FLOOR, _MAD_ABS_FLOOR)
         return med, mad, len(data)
 
     def drift_z(self, asset_id: str, signal: str) -> Optional[float]:
@@ -85,7 +93,8 @@ class BaselineStore:
         if len(recent) < MIN_RECENT:
             return None
         rmed = statistics.median(recent)
-        return (rmed - med) / (_MAD_K * mad)
+        z = (rmed - med) / (_MAD_K * mad)
+        return max(-_Z_CAP, min(_Z_CAP, z))      # clamp — never report absurd σ
 
     def save_to(self, db) -> int:
         """Persist each (asset, signal) history so drift learning survives a restart."""
