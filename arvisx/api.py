@@ -1274,6 +1274,23 @@ def create_app():
             state.db.enqueue_notification(building, res["text"], to_number=to, kind="handover")
         return res
 
+    # ── Phase C-2: Root-Cause Investigator ──────────────────────────────
+    @app.get("/api/v1/agents/rca")
+    async def agent_rca(asset: str, building: str = "one-anthem", notify: bool = False, to: str = ""):
+        """Grounded root-cause for an asset from its checklist/issue history. LLM if
+        configured + grounded, else deterministic observations + inferred cause."""
+        from arvisx.checklist_skills import run_rca
+        llm = None
+        try:
+            from arvisx.llm_client import make_llm
+            llm = make_llm()
+        except Exception:
+            llm = None
+        res = await run_rca(llm, state.db, building, asset, _today_str())
+        if notify:
+            state.db.enqueue_notification(building, res["text"], to_number=to, kind="rca")
+        return res
+
     @app.get("/forms")
     async def forms_page():
         from fastapi.responses import HTMLResponse

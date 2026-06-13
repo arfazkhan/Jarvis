@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 
-from arvisx.checklist_skills import gather_handover, render_handover, run_handover
+from arvisx.checklist_skills import (gather_handover, render_handover, run_handover,
+                                     gather_rca, render_rca, run_rca)
 from arvisx.persistence import ArvisxDb
 
 T = "2026-06-14"
@@ -73,6 +74,52 @@ def test_run_handover_falls_back_on_fabricated_number(tmp_path):
     res = asyncio.run(run_handover(llm, db, "one-anthem", T))
     assert res["source"] == "deterministic-fallback"
     assert "82" not in res["text"]
+
+
+# ── C-2 Root-Cause Investigator ─────────────────────────────────────────
+def _seed_declining_battery(tmp_path):
+    db = ArvisxDb(str(tmp_path / "rca.db"))
+    for v in (25.0, 24.0, 23.0, 22.0):          # steady decline across shifts → trend
+        rid = db.create_checklist_run("one-anthem", "ANTHEM-SHIFT-3", T)
+        db.save_checklist_entry(rid, "dg_battery_v", value=str(v))
+    return db
+
+
+def test_rca_infers_battery_cause(tmp_path):
+    db = _seed_declining_battery(tmp_path)
+    data = gather_rca(db, "one-anthem", "DG-1", T)
+    assert data["probable_cause"] and "Battery" in data["probable_cause"]
+    assert any("declining" in o for o in data["observations"])
+    txt = render_rca(data)
+    assert "Root Cause — DG-1" in txt and "Recommended:" in txt and "Confidence:" in txt
+
+
+def test_rca_recurring_detected(tmp_path):
+    db = ArvisxDb(str(tmp_path / "rec.db"))
+    db.create_issue("one-anthem", "STP blower: FAULT", asset="STP", source="auto")
+    db.create_issue("one-anthem", "STP blower: FAULT", asset="STP", source="auto")
+    data = gather_rca(db, "one-anthem", "STP", T)
+    assert data["recurring"] and any("recurring" in o for o in data["observations"])
+
+
+def test_rca_abstains_without_pattern(tmp_path):
+    db = ArvisxDb(str(tmp_path / "thin.db"))
+    data = gather_rca(db, "one-anthem", "LIFT", T)
+    assert data["probable_cause"] is None
+    assert "inspect on site" in render_rca(data).lower()
+
+
+def test_run_rca_deterministic_without_llm(tmp_path):
+    db = _seed_declining_battery(tmp_path)
+    res = asyncio.run(run_rca(None, db, "one-anthem", "DG-1", T))
+    assert res["source"] == "deterministic" and "Battery" in res["text"]
+
+
+def test_run_rca_falls_back_on_fabricated_number(tmp_path):
+    db = _seed_declining_battery(tmp_path)
+    llm = _FakeLLM("Root cause: failure probability 73% over 40 days.")
+    res = asyncio.run(run_rca(llm, db, "one-anthem", "DG-1", T))
+    assert res["source"] == "deterministic-fallback" and "73" not in res["text"]
 
 
 if __name__ == "__main__":

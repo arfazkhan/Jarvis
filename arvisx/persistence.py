@@ -469,7 +469,7 @@ class ArvisxDb:
              f" r.shift_date, r.template_id FROM checklist_run_entries e"
              f" JOIN checklist_runs r ON e.run_id=r.id"
              f" WHERE r.building_id=? AND e.item_id IN ({ph})"
-             f" ORDER BY e.ts DESC LIMIT ?")
+             f" ORDER BY e.ts DESC, e.id DESC LIMIT ?")
         with self._lock, self._conn() as c:
             rows = c.execute(q, (building_id, *item_ids, limit)).fetchall()
             return [dict(r) for r in rows]
