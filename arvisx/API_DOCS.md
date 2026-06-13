@@ -333,6 +333,63 @@ With a model wired, `available:true` and e.g. `"extracted":{"readings":{"voltage
 
 ---
 
+## 10b. SLA, escalation & vendor accountability
+
+Every issue carries a **priority** → an SLA clock → a timed escalation ladder
+(reminder → supervisor → facility manager → committee). Vendors can own the fix and have
+their response/resolution measured. Deterministic; escalations ride the notification queue.
+
+### Priority & SLA defaults (hours, per-building configurable)
+| priority | response | resolution |
+|---|---|---|
+| critical | 1 | 4 |
+| high | 4 | 24 |
+| medium | 24 | 72 |
+| low | 48 | 168 |
+Escalation level by age: ≥response → reminder, ≥resolution → supervisor, ≥2× → facility
+manager, ≥3× → committee. Issues with no `priority` fall back to severity (critical→critical, issue→medium).
+
+### GET /sla/config?building=
+```json
+{ "building":"one-anthem","sla":{
+    "critical":{"response_hours":1,"resolution_hours":4,"default":true},
+    "high":{"response_hours":4,"resolution_hours":24,"default":true}, "...":{} } }
+```
+### POST /sla/config  `{"priority":"critical","response_hours":1,"resolution_hours":4,"building":"one-anthem"}` → `{"saved":true,"priority":"critical"}`
+
+### GET /issues/{id}/sla
+```json
+{ "priority":"high","age_hours":30.0,"response_hours":4,"resolution_hours":24,
+  "breached_resolution":true,"escalation_level":2,"target":"supervisor" }
+```
+
+### POST /escalations/run?building=  — the sweep (bot calls each poll)
+Escalates any open issue past its SLA, one notification per new level. → `{"building":"one-anthem","fired":[{"issue_id":3,"level":2,"target":"supervisor"}]}`
+
+### Vendors
+- `GET /vendors?building=&all=false` → `{"building":"one-anthem","vendors":[{"id":1,"name":"ABC Power","category":"DG","contact":"98xx","active":1}]}`
+- `POST /vendors` `{"name":"ABC Power","category":"DG","contact":"98xx","building":"one-anthem"}` → `{"id":1,"name":"ABC Power"}`
+- `POST /vendors/{id}/deactivate`
+
+### Assigning a vendor / priority to an issue
+Via `POST /issues/{id}/transition` (section 5) with extra fields:
+```json
+{ "status":"assigned", "assignee":"ABC Power", "vendor":"ABC Power", "priority":"high", "by":"Athul" }
+```
+
+### POST /issues/{id}/visited  `{"by":"Athul"}` — vendor site-visit milestone (feeds response-time analytics) → the issue object.
+
+### GET /analyzers/vendors?building=  — vendor performance (slowest resolution first)
+```json
+{ "building":"one-anthem",
+  "vendors":[{"vendor":"SlowCo","jobs":4,"resolved":3,"escalations":2,
+              "avg_response_hours":18.0,"avg_resolution_hours":52.0},
+             {"vendor":"ABC Power","jobs":6,"resolved":6,"escalations":0,
+              "avg_response_hours":2.5,"avg_resolution_hours":9.0}] }
+```
+
+---
+
 ## 11. WhatsApp integration queue (for the bot)
 
 The bot polls these; you usually don't call them directly.
