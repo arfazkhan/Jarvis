@@ -1143,6 +1143,64 @@ def create_app():
         runs = (await forms_today(building, date))["runs"]
         return {"date": date, "text": manager_digest(runs, date)}
 
+    # ── Phase-S substrate: asset registry, asset history, PPM scheduling ──
+    def _latest_run_hours(building: str, asset: str):
+        """Newest logged run-hours reading for an asset (condition-based PPM input)."""
+        from arvisx.checklist_forms import items_for_asset
+        ids = [it.item_id for _tid, it in items_for_asset(building, asset)
+               if it.kind == "reading" and it.unit == "hrs"]
+        for e in state.db.asset_entries(building, ids, limit=50):
+            try:
+                return float(e["value"])
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    @app.get("/api/v1/assets")
+    async def assets_registry(building: str = "one-anthem"):
+        from arvisx.checklist_forms import assets_in
+        return {"building": building, "assets": assets_in(building)}
+
+    @app.get("/api/v1/assets/{asset}/history")
+    async def asset_history(asset: str, building: str = "one-anthem", limit: int = 100):
+        """Per-asset timeline: checklist entries (newest first) + issues + PPM status."""
+        from arvisx.checklist_forms import items_for_asset, ppm_status
+        ids = [it.item_id for _tid, it in items_for_asset(building, asset)]
+        entries = state.db.asset_entries(building, ids, limit=limit)
+        issues = [i for i in state.db.list_issues(building, asset=asset)]
+        sched = state.db.get_ppm_schedule(building, asset)
+        ppm = ppm_status(sched, _today_str(), _latest_run_hours(building, asset)) if sched else None
+        return {"building": building, "asset": asset, "entries": _jsonable(entries),
+                "issues": _jsonable(issues), "ppm": ppm}
+
+    @app.get("/api/v1/ppm/schedule")
+    async def ppm_schedule_list(building: str = "one-anthem"):
+        from arvisx.checklist_forms import ppm_status
+        out = []
+        for s in state.db.list_ppm_schedules(building):
+            out.append(ppm_status(s, _today_str(), _latest_run_hours(building, s["asset"])))
+        return {"building": building, "schedules": out}
+
+    @app.post("/api/v1/ppm/schedule")
+    async def ppm_schedule_set(payload: Dict[str, Any] = Body(...)):
+        p = payload or {}
+        asset = str(p.get("asset", "")).strip()
+        if not asset:
+            raise HTTPException(400, "provide 'asset'")
+        state.db.set_ppm_schedule(
+            str(p.get("building", "one-anthem")).strip() or "one-anthem", asset,
+            interval_days=(int(p["interval_days"]) if p.get("interval_days") is not None else None),
+            last_done=(str(p["last_done"]) if p.get("last_done") else None),
+            run_hours_limit=(float(p["run_hours_limit"]) if p.get("run_hours_limit") is not None else None))
+        return {"saved": True, "asset": asset}
+
+    @app.post("/api/v1/ppm/{asset}/done")
+    async def ppm_mark_done(asset: str, payload: Dict[str, Any] = Body(default={})):
+        p = payload or {}
+        building = str(p.get("building", "one-anthem")).strip() or "one-anthem"
+        state.db.mark_ppm_done(building, asset, str(p.get("date", "")).strip() or _today_str())
+        return {"asset": asset, "last_done": p.get("date") or _today_str()}
+
     @app.get("/forms")
     async def forms_page():
         from fastapi.responses import HTMLResponse

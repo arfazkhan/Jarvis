@@ -41,10 +41,12 @@ class Item:
     unit: str = ""                         # reading unit (%, V, hrs, bar…)
     options: List[str] = field(default_factory=list)   # state choices
     alert_states: List[str] = field(default_factory=list)  # values that auto-flag an issue
+    asset: str = ""                        # canonical asset this item is about (Phase-S tagging)
 
     def to_dict(self) -> Dict[str, Any]:
         return {"item_id": self.item_id, "label": self.label, "kind": self.kind,
-                "unit": self.unit, "options": self.options, "alert_states": self.alert_states}
+                "unit": self.unit, "options": self.options, "alert_states": self.alert_states,
+                "asset": self.asset}
 
 
 @dataclass
@@ -248,14 +250,64 @@ def _ppm() -> Template:
         ])
 
 
+# Phase-S asset tagging: map item_id → the canonical asset it's about, so readings/issues
+# can be rolled up into per-asset history + health. (Shared DG readings → DG-1 primary.)
+_ANTHEM_ASSET_MAP: Dict[str, str] = {
+    # Shift I
+    "fp_diesel_fuel": "FIRE-PUMP", "fp_coolant": "FIRE-PUMP", "fp_oil": "FIRE-PUMP",
+    "fp_main_pump": "FIRE-PUMP", "fp_standby_pump": "FIRE-PUMP", "fp_jockey_pump": "FIRE-PUMP",
+    "pool_vacuum": "POOL", "pool_ph": "POOL", "pool_backwash": "POOL",
+    "pool_filtration": "POOL", "pool_chlorination": "POOL",
+    "gen_fire_alarm": "FIRE-PANEL", "gen_oh_tank": "OH-TANK", "gen_borewell": "BOREWELL",
+    # Shift II
+    "wtp_backwash": "WTP", "wtp_chemical": "WTP", "wtp_filtration": "WTP", "wtp_leakage": "WTP",
+    "el_transformer": "TRANSFORMER", "el_dg1_panel": "DG-1", "el_dg2_panel": "DG-2",
+    "g2_fire_alarm": "FIRE-PANEL", "g2_lift": "LIFT", "g2_gf_raw_tank": "GF-RAW-TANK",
+    "g2_gf_filter_tank": "GF-FILTER-TANK", "g2_oh_tank": "OH-TANK", "g2_borewell": "BOREWELL",
+    # Shift III
+    "dg1_status": "DG-1", "dg2_status": "DG-2", "dg_run_hours": "DG-1", "dg_battery_v": "DG-1",
+    "dg_oil": "DG-1", "dg_coolant": "DG-1", "dg_fuel": "DG-1",
+    "stp_psf_backwash": "STP", "stp_acf_backwash": "STP", "stp_chemical": "STP",
+    "stp_blower": "STP", "stp_sludge": "STP", "stp_leakage": "STP", "stp_overflow": "STP",
+}
+
+
+def _tag_assets(templates: List[Template], amap: Dict[str, str]) -> List[Template]:
+    for t in templates:
+        for it in t.all_items():
+            if it.item_id in amap:
+                it.asset = amap[it.item_id]
+    return templates
+
+
 # building_id → its templates. Add new buildings here as they onboard.
 _BUILDING_TEMPLATES: Dict[str, List[Template]] = {
-    "one-anthem": [_shift1(), _shift2(), _shift3(), _ppm()],
+    "one-anthem": _tag_assets([_shift1(), _shift2(), _shift3(), _ppm()], _ANTHEM_ASSET_MAP),
 }
 
 
 def templates_for(building_id: str = "one-anthem") -> List[Template]:
     return _BUILDING_TEMPLATES.get(building_id, [])
+
+
+def assets_in(building_id: str = "one-anthem") -> List[str]:
+    """Distinct assets the checklists touch — the building's asset registry (Phase S)."""
+    seen: List[str] = []
+    for t in templates_for(building_id):
+        for it in t.all_items():
+            if it.asset and it.asset not in seen:
+                seen.append(it.asset)
+    return sorted(seen)
+
+
+def items_for_asset(building_id: str, asset: str) -> List[tuple]:
+    """(template_id, Item) for every item about this asset — drives asset history."""
+    out = []
+    for t in templates_for(building_id):
+        for it in t.all_items():
+            if it.asset == asset:
+                out.append((t.template_id, it))
+    return out
 
 
 def get_template(template_id: str, building_id: str = "one-anthem") -> Optional[Template]:
@@ -298,6 +350,35 @@ def run_summary(template: Template, entries: Dict[str, Dict[str, Any]]) -> Dict[
         "missing": [it.item_id for it in items if not _filled(entries.get(it.item_id))],
         "issues": issues,
     }
+
+
+# ── PPM planner (Phase S) — date-based + condition-based (run hours) ──────
+def ppm_status(sched: Dict[str, Any], today: str, latest_run_hours: float = None) -> Dict[str, Any]:
+    """Compute due/overdue for one asset's PPM. Date-based from interval_days+last_done;
+    condition-based from run_hours_limit+latest_run_hours. status ∈ ok|due_soon|overdue|unscheduled."""
+    from datetime import date, timedelta
+    out: Dict[str, Any] = {"asset": sched.get("asset"), "interval_days": sched.get("interval_days"),
+                           "last_done": sched.get("last_done"), "run_hours_limit": sched.get("run_hours_limit"),
+                           "latest_run_hours": latest_run_hours, "due_date": None, "days_remaining": None,
+                           "hours_remaining": None, "overdue": False, "status": "unscheduled"}
+    today_d = date.fromisoformat(today)
+    statuses = []
+    iv, ld = sched.get("interval_days"), sched.get("last_done")
+    if iv and ld:
+        due = date.fromisoformat(ld[:10]) + timedelta(days=int(iv))
+        dr = (due - today_d).days
+        out["due_date"] = due.isoformat(); out["days_remaining"] = dr
+        statuses.append("overdue" if dr < 0 else ("due_soon" if dr <= 7 else "ok"))
+    lim = sched.get("run_hours_limit")
+    if lim and latest_run_hours is not None:
+        hr = float(lim) - float(latest_run_hours)
+        out["hours_remaining"] = round(hr, 1)
+        statuses.append("overdue" if hr < 0 else ("due_soon" if hr <= 25 else "ok"))
+    if statuses:
+        out["status"] = "overdue" if "overdue" in statuses else (
+            "due_soon" if "due_soon" in statuses else "ok")
+        out["overdue"] = out["status"] == "overdue"
+    return out
 
 
 # ── issue lifecycle ───────────────────────────────────────────────────────

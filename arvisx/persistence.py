@@ -98,6 +98,11 @@ class ArvisxDb:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, to_number TEXT,
                 kind TEXT, text TEXT, status TEXT, created_at TEXT);
             CREATE INDEX IF NOT EXISTS ix_notif ON notifications(status, id);
+            -- PPM schedule per asset: date-based (interval_days) and/or condition-based
+            -- (run_hours_limit). Phase-S — drives the PPM planner + compliance.
+            CREATE TABLE IF NOT EXISTS ppm_schedule (
+                building_id TEXT, asset TEXT, interval_days INTEGER, last_done TEXT,
+                run_hours_limit REAL, updated_at TEXT, PRIMARY KEY (building_id, asset));
             CREATE TABLE IF NOT EXISTS checklist_run_entries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER, item_id TEXT,
                 value TEXT, status TEXT, note TEXT, is_issue INTEGER, ts TEXT, photo TEXT);
@@ -426,6 +431,48 @@ class ArvisxDb:
         with self._lock, self._conn() as c:
             c.executemany("UPDATE notifications SET status='sent' WHERE id=?",
                           [(int(i),) for i in ids])
+
+    # ── PPM schedule (Phase S) ───────────────────────────────────────────
+    def set_ppm_schedule(self, building_id: str, asset: str, interval_days: int = None,
+                         last_done: str = None, run_hours_limit: float = None) -> None:
+        with self._lock, self._conn() as c:
+            cur = c.execute("SELECT interval_days, last_done, run_hours_limit FROM ppm_schedule"
+                            " WHERE building_id=? AND asset=?", (building_id, asset)).fetchone()
+            iv = interval_days if interval_days is not None else (cur["interval_days"] if cur else None)
+            ld = last_done if last_done is not None else (cur["last_done"] if cur else None)
+            rh = run_hours_limit if run_hours_limit is not None else (cur["run_hours_limit"] if cur else None)
+            c.execute("INSERT OR REPLACE INTO ppm_schedule (building_id, asset, interval_days,"
+                      " last_done, run_hours_limit, updated_at) VALUES (?,?,?,?,?,?)",
+                      (building_id, asset, iv, ld, rh, datetime.now().isoformat(timespec="seconds")))
+
+    def get_ppm_schedule(self, building_id: str, asset: str) -> Optional[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT * FROM ppm_schedule WHERE building_id=? AND asset=?",
+                          (building_id, asset)).fetchone()
+            return dict(r) if r else None
+
+    def list_ppm_schedules(self, building_id: str) -> List[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            rows = c.execute("SELECT * FROM ppm_schedule WHERE building_id=? ORDER BY asset",
+                             (building_id,)).fetchall()
+            return [dict(r) for r in rows]
+
+    def mark_ppm_done(self, building_id: str, asset: str, done_date: str) -> None:
+        self.set_ppm_schedule(building_id, asset, last_done=done_date)
+
+    # ── Asset history (Phase S): entries about an asset, newest first ────
+    def asset_entries(self, building_id: str, item_ids: List[str], limit: int = 200) -> List[Dict[str, Any]]:
+        if not item_ids:
+            return []
+        ph = ",".join("?" for _ in item_ids)
+        q = (f"SELECT e.item_id, e.value, e.status, e.note, e.is_issue, e.ts, e.photo,"
+             f" r.shift_date, r.template_id FROM checklist_run_entries e"
+             f" JOIN checklist_runs r ON e.run_id=r.id"
+             f" WHERE r.building_id=? AND e.item_id IN ({ph})"
+             f" ORDER BY e.ts DESC LIMIT ?")
+        with self._lock, self._conn() as c:
+            rows = c.execute(q, (building_id, *item_ids, limit)).fetchall()
+            return [dict(r) for r in rows]
 
     def find_open_run(self, building_id: str, template_id: str, shift_date: str,
                       asset: str = "") -> Optional[int]:

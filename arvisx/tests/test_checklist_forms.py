@@ -6,7 +6,7 @@ from datetime import datetime
 
 from arvisx.checklist_forms import (templates_for, get_template, entry_is_issue,
                                      run_summary, manager_digest, valid_issue_transition,
-                                     ISSUE_STATUSES, Item)
+                                     ISSUE_STATUSES, assets_in, items_for_asset, ppm_status, Item)
 from arvisx.persistence import ArvisxDb
 
 
@@ -218,6 +218,58 @@ def test_notification_queue_roundtrip(tmp_path):
     db.mark_notifications_sent([a])
     pend2 = db.pending_notifications()
     assert len(pend2) == 1 and pend2[0]["id"] == b           # acked one stays gone
+
+
+# ── Phase S: asset tagging / registry / history / PPM ───────────────────
+def test_asset_tagging_and_registry():
+    regs = assets_in("one-anthem")
+    for a in ("DG-1", "DG-2", "FIRE-PUMP", "WTP", "STP", "TRANSFORMER", "OH-TANK"):
+        assert a in regs, a
+    # items map to assets
+    dg1_items = {it.item_id for _t, it in items_for_asset("one-anthem", "DG-1")}
+    assert "dg1_status" in dg1_items and "dg_run_hours" in dg1_items
+    assert "el_dg1_panel" in dg1_items                       # the Shift-II panel too
+
+
+def test_ppm_status_date_based():
+    s = {"asset": "MSB", "interval_days": 90, "last_done": "2026-03-01", "run_hours_limit": None}
+    st = ppm_status(s, "2026-06-14")
+    assert st["overdue"] is True and st["status"] == "overdue"   # 90d from Mar 1 = May 30
+    st2 = ppm_status(s, "2026-05-01")
+    assert st2["status"] in ("ok", "due_soon") and not st2["overdue"]
+
+
+def test_ppm_status_condition_based_run_hours():
+    s = {"asset": "DG-1", "interval_days": None, "last_done": None, "run_hours_limit": 250}
+    near = ppm_status(s, "2026-06-14", latest_run_hours=243)
+    assert near["hours_remaining"] == 7.0 and near["status"] == "due_soon"
+    over = ppm_status(s, "2026-06-14", latest_run_hours=260)
+    assert over["overdue"] is True
+
+
+def test_ppm_unscheduled():
+    assert ppm_status({"asset": "X"}, "2026-06-14")["status"] == "unscheduled"
+
+
+def test_ppm_persistence_and_partial_update(tmp_path):
+    db = ArvisxDb(str(tmp_path / "ppm.db"))
+    db.set_ppm_schedule("one-anthem", "DG-1", interval_days=90, last_done="2026-03-01")
+    db.set_ppm_schedule("one-anthem", "DG-1", run_hours_limit=250)   # partial — keeps interval/last_done
+    s = db.get_ppm_schedule("one-anthem", "DG-1")
+    assert s["interval_days"] == 90 and s["last_done"] == "2026-03-01" and s["run_hours_limit"] == 250
+    db.mark_ppm_done("one-anthem", "DG-1", "2026-06-14")
+    assert db.get_ppm_schedule("one-anthem", "DG-1")["last_done"] == "2026-06-14"
+    assert len(db.list_ppm_schedules("one-anthem")) == 1
+
+
+def test_asset_entries_history(tmp_path):
+    db = ArvisxDb(str(tmp_path / "hist.db"))
+    rid = db.create_checklist_run("one-anthem", "ANTHEM-SHIFT-3", "2026-06-14")
+    db.save_checklist_entry(rid, "dg_battery_v", value="24.9")
+    db.save_checklist_entry(rid, "dg_run_hours", value="243")
+    hist = db.asset_entries("one-anthem", ["dg_battery_v", "dg_run_hours"])
+    assert {h["item_id"] for h in hist} == {"dg_battery_v", "dg_run_hours"}
+    assert all("shift_date" in h for h in hist)               # joined run date for the timeline
 
 
 if __name__ == "__main__":
