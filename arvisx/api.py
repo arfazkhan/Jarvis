@@ -215,6 +215,12 @@ def create_app():
     state = _State()
     app.state.community = state
 
+    # Checklist builder: make DB custom templates visible everywhere templates_for is used.
+    from arvisx.checklist_forms import set_custom_loader, Template as _Tmpl
+    def _load_custom(building: str):
+        return [_Tmpl.from_dict(d) for d in state.db.list_templates(building)]
+    set_custom_loader(_load_custom)
+
     # Auth: API key (server) OR user Bearer token (browser). Writes (non-GET) require
     # an owner/fm role; reads need any authenticated identity. Login is exempt.
     from arvisx import auth as _auth_mod
@@ -891,6 +897,30 @@ def create_app():
         if t is None:
             raise HTTPException(404, f"unknown template {tid}")
         return t.to_dict()
+
+    # ── Checklist builder: create / edit / delete custom templates ───────
+    @app.post("/api/v1/forms/templates")
+    async def forms_save_template(payload: Dict[str, Any] = Body(...)):
+        """Create or update a building's checklist template (the builder). Validated, then
+        layered over the code defaults; same template_id overrides the default."""
+        from arvisx.checklist_forms import validate_template_dict, Template
+        p = payload or {}
+        building = str(p.get("building", "one-anthem")).strip() or "one-anthem"
+        tmpl = p.get("template") or p
+        try:
+            validate_template_dict(tmpl)
+            Template.from_dict(tmpl)              # parse-check
+        except (ValueError, KeyError) as e:
+            raise HTTPException(400, f"invalid template: {e}")
+        state.db.save_template(building, str(tmpl["template_id"]), tmpl)
+        return {"saved": True, "template_id": tmpl["template_id"], "building": building}
+
+    @app.delete("/api/v1/forms/template/{tid}")
+    async def forms_delete_template(tid: str, building: str = "one-anthem"):
+        ok = state.db.delete_template(building, tid)
+        if not ok:
+            raise HTTPException(404, f"no custom template {tid} for {building}")
+        return {"deleted": tid, "building": building}
 
     @app.post("/api/v1/forms/run")
     async def forms_start_run(payload: Dict[str, Any] = Body(...)):

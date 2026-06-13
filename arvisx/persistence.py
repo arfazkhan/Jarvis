@@ -103,6 +103,11 @@ class ArvisxDb:
             CREATE TABLE IF NOT EXISTS ppm_schedule (
                 building_id TEXT, asset TEXT, interval_days INTEGER, last_done TEXT,
                 run_hours_limit REAL, updated_at TEXT, PRIMARY KEY (building_id, asset));
+            -- Checklist builder: manager-defined custom templates (full Template JSON),
+            -- layered over the code defaults by checklist_forms.templates_for.
+            CREATE TABLE IF NOT EXISTS checklist_templates (
+                building_id TEXT, template_id TEXT, data TEXT, updated_at TEXT,
+                PRIMARY KEY (building_id, template_id));
             -- Vision (Phase D): an extraction PROPOSAL from a photo, pending operator
             -- confirmation before it's written to a checklist entry (verify pattern).
             CREATE TABLE IF NOT EXISTS vision_suggestions (
@@ -466,6 +471,26 @@ class ArvisxDb:
 
     def mark_ppm_done(self, building_id: str, asset: str, done_date: str) -> None:
         self.set_ppm_schedule(building_id, asset, last_done=done_date)
+
+    # ── Checklist builder: custom templates ──────────────────────────────
+    def save_template(self, building_id: str, template_id: str, data: Dict[str, Any]) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("INSERT OR REPLACE INTO checklist_templates (building_id, template_id,"
+                      " data, updated_at) VALUES (?,?,?,?)",
+                      (building_id, template_id, json.dumps(data, default=str),
+                       datetime.now().isoformat(timespec="seconds")))
+
+    def list_templates(self, building_id: str) -> List[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            rows = c.execute("SELECT data FROM checklist_templates WHERE building_id=? ORDER BY template_id",
+                             (building_id,)).fetchall()
+            return [json.loads(r["data"]) for r in rows]
+
+    def delete_template(self, building_id: str, template_id: str) -> bool:
+        with self._lock, self._conn() as c:
+            cur = c.execute("DELETE FROM checklist_templates WHERE building_id=? AND template_id=?",
+                            (building_id, template_id))
+            return cur.rowcount > 0
 
     # ── Vision suggestions (Phase D) ─────────────────────────────────────
     def create_vision_suggestion(self, building_id: str, photo: str, kind: str,

@@ -272,6 +272,59 @@ def test_asset_entries_history(tmp_path):
     assert all("shift_date" in h for h in hist)               # joined run date for the timeline
 
 
+# ── checklist builder (custom templates) ────────────────────────────────
+def test_template_from_dict_roundtrip():
+    from arvisx.checklist_forms import Template
+    d = get_template("ANTHEM-SHIFT-2").to_dict()
+    t2 = Template.from_dict(d)
+    assert t2.template_id == "ANTHEM-SHIFT-2"
+    assert {i.item_id for i in t2.all_items()} == {i["item_id"] for s in d["sections"] for i in s["items"]}
+
+
+def test_validate_template_rejects_bad():
+    from arvisx.checklist_forms import validate_template_dict
+    import pytest
+    with pytest.raises(ValueError):
+        validate_template_dict({"name": "x", "sections": [{"items": [{"item_id": "a"}]}]})  # no template_id
+    with pytest.raises(ValueError):
+        validate_template_dict({"template_id": "T", "name": "x", "sections": []})           # no sections
+    with pytest.raises(ValueError):
+        validate_template_dict({"template_id": "T", "name": "x",
+                                "sections": [{"items": [{"item_id": "a"}, {"item_id": "a"}]}]})  # dup
+    with pytest.raises(ValueError):
+        validate_template_dict({"template_id": "T", "name": "x",
+                                "sections": [{"items": [{"item_id": "a", "kind": "bogus"}]}]})  # bad kind
+    # valid passes
+    validate_template_dict({"template_id": "T", "name": "x",
+                            "sections": [{"name": "S", "items": [{"item_id": "a", "kind": "tick"}]}]})
+
+
+def test_custom_template_persistence(tmp_path):
+    db = ArvisxDb(str(tmp_path / "tmpl.db"))
+    tmpl = {"template_id": "MY-DAILY", "name": "My Daily", "cadence": "daily",
+            "sections": [{"name": "S", "items": [{"item_id": "x1", "label": "X", "kind": "reading", "unit": "V"}]}]}
+    db.save_template("bldg-x", "MY-DAILY", tmpl)
+    assert db.list_templates("bldg-x")[0]["template_id"] == "MY-DAILY"
+    assert db.delete_template("bldg-x", "MY-DAILY") is True
+    assert db.list_templates("bldg-x") == []
+
+
+def test_custom_loader_merges_and_overrides():
+    from arvisx.checklist_forms import set_custom_loader, templates_for, Template
+    custom = Template.from_dict({"template_id": "CUSTOM-1", "name": "Custom", "cadence": "daily",
+                                 "sections": [{"name": "S", "items": [{"item_id": "x1", "label": "X"}]}]})
+    override = Template.from_dict({"template_id": "ANTHEM-SHIFT-1", "name": "Overridden", "cadence": "daily",
+                                   "sections": [{"name": "S", "items": [{"item_id": "y1", "label": "Y"}]}]})
+    set_custom_loader(lambda b: [custom, override])
+    try:
+        ids = {t.template_id for t in templates_for("one-anthem")}
+        assert "CUSTOM-1" in ids                                  # new custom added
+        s1 = get_template("ANTHEM-SHIFT-1", "one-anthem")
+        assert s1.name == "Overridden"                           # same id overrides code default
+    finally:
+        set_custom_loader(None)
+
+
 if __name__ == "__main__":
     import sys, tempfile, pathlib
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

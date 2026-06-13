@@ -48,6 +48,13 @@ class Item:
                 "unit": self.unit, "options": self.options, "alert_states": self.alert_states,
                 "asset": self.asset}
 
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "Item":
+        return cls(item_id=str(d["item_id"]), label=str(d.get("label", d["item_id"])),
+                   kind=str(d.get("kind", "tick")), unit=str(d.get("unit", "")),
+                   options=list(d.get("options", [])), alert_states=list(d.get("alert_states", [])),
+                   asset=str(d.get("asset", "")))
+
 
 @dataclass
 class Section:
@@ -56,6 +63,10 @@ class Section:
 
     def to_dict(self) -> Dict[str, Any]:
         return {"name": self.name, "items": [i.to_dict() for i in self.items]}
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "Section":
+        return cls(name=str(d.get("name", "")), items=[Item.from_dict(i) for i in d.get("items", [])])
 
 
 @dataclass
@@ -75,6 +86,38 @@ class Template:
         return {"template_id": self.template_id, "name": self.name, "cadence": self.cadence,
                 "timing": self.timing, "signoff_roles": self.signoff_roles,
                 "per_asset": self.per_asset, "sections": [s.to_dict() for s in self.sections]}
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "Template":
+        return cls(template_id=str(d["template_id"]), name=str(d.get("name", "")),
+                   cadence=str(d.get("cadence", "daily")),
+                   sections=[Section.from_dict(s) for s in d.get("sections", [])],
+                   timing=str(d.get("timing", "")), signoff_roles=list(d.get("signoff_roles", [])),
+                   per_asset=list(d.get("per_asset", [])))
+
+
+def validate_template_dict(d: Dict[str, Any]) -> None:
+    """Reject malformed builder input before it's saved."""
+    if not isinstance(d, dict) or not str(d.get("template_id", "")).strip():
+        raise ValueError("template_id required")
+    if not str(d.get("name", "")).strip():
+        raise ValueError("name required")
+    secs = d.get("sections")
+    if not isinstance(secs, list) or not secs:
+        raise ValueError("at least one section required")
+    seen = set()
+    for s in secs:
+        for it in s.get("items", []):
+            iid = str(it.get("item_id", "")).strip()
+            if not iid:
+                raise ValueError("every item needs an item_id")
+            if iid in seen:
+                raise ValueError(f"duplicate item_id '{iid}'")
+            seen.add(iid)
+            if it.get("kind", "tick") not in ("tick", "reading", "state", "note"):
+                raise ValueError(f"bad kind for '{iid}'")
+    if not seen:
+        raise ValueError("at least one item required")
 
 
 # convenience builders
@@ -286,8 +329,33 @@ _BUILDING_TEMPLATES: Dict[str, List[Template]] = {
 }
 
 
+# Custom (builder-created) templates live in the DB. The API sets this loader at startup so
+# DB templates are visible EVERYWHERE templates_for is used (forms, analyzers, agents) — a
+# custom template with the same id overrides the code default. Loader unset → code only.
+_CUSTOM_LOADER = None
+
+
+def set_custom_loader(loader) -> None:
+    """loader(building_id) -> List[Template] (from the DB). Pass None to disable."""
+    global _CUSTOM_LOADER
+    _CUSTOM_LOADER = loader
+
+
 def templates_for(building_id: str = "one-anthem") -> List[Template]:
-    return _BUILDING_TEMPLATES.get(building_id, [])
+    code = list(_BUILDING_TEMPLATES.get(building_id, []))
+    if _CUSTOM_LOADER is None:
+        return code
+    try:
+        custom = _CUSTOM_LOADER(building_id) or []
+    except Exception:
+        custom = []
+    by_id = {t.template_id: t for t in code}
+    for t in custom:                       # custom overrides a same-id code template
+        by_id[t.template_id] = t
+    # keep code order first, then any new custom ones
+    ordered = [by_id[t.template_id] for t in code]
+    ordered += [t for t in custom if t.template_id not in {c.template_id for c in code}]
+    return ordered
 
 
 def assets_in(building_id: str = "one-anthem") -> List[str]:
