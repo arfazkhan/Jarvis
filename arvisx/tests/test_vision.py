@@ -66,6 +66,53 @@ def test_confirm_unknown_returns_none(tmp_path):
     assert confirm_suggestion(db, 999, value="1") is None
 
 
+# ── prompts + reference OpenAI-compatible provider (fake client) ──────────
+def test_prompts_exist_per_kind():
+    from arvisx.vision import KIND_PROMPTS, VISION_SYSTEM
+    for k in ("gauge", "panel", "level", "condition", "auto"):
+        assert k in KIND_PROMPTS and "JSON" in KIND_PROMPTS[k]
+    assert "NEVER guess" in VISION_SYSTEM
+
+
+def test_data_url_mime_sniff():
+    from arvisx.vision import _data_url
+    assert _data_url(b"\x89PNG\r\n\x1a\n....").startswith("data:image/png;base64,")
+    assert _data_url(b"\xff\xd8\xff\xe0 jpeg").startswith("data:image/jpeg;base64,")
+
+
+class _FakeClient:
+    """Minimal OpenAI-compatible stub returning a JSON content string."""
+    def __init__(self, content):
+        self._content = content
+        self.chat = self  # chat.completions.create chain → self
+        self.completions = self
+
+    def create(self, **kwargs):
+        class _M:  # noqa
+            pass
+        msg = _M(); msg.content = self._content
+        choice = _M(); choice.message = msg
+        resp = _M(); resp.choices = [choice]
+        return resp
+
+
+def test_openai_compat_provider_parses_readings():
+    from arvisx.vision import OpenAICompatVisionProvider
+    client = _FakeClient('{"readings":{"voltage":415,"current":118,"frequency":50},"confidence":0.9}')
+    p = OpenAICompatVisionProvider(client=client, model="fake")
+    out = p.extract(b"\xff\xd8\xff img", kind="gauge")
+    assert out["available"] is True
+    assert out["extracted"]["readings"]["voltage"] == 415 and out["confidence"] == 0.9
+
+
+def test_get_provider_env_without_key_falls_back_null(monkeypatch):
+    register_vision_provider(None)
+    monkeypatch.setenv("ARVISX_VISION_PROVIDER", "openai")
+    monkeypatch.delenv("ARVISX_VISION_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert get_provider().name == "null"        # no key → graceful Null
+
+
 if __name__ == "__main__":
     import tempfile, pathlib
     fns = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_")]
