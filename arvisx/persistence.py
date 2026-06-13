@@ -92,6 +92,12 @@ class ArvisxDb:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, name TEXT,
                 phone TEXT, active INTEGER, created_at TEXT);
             CREATE INDEX IF NOT EXISTS ix_techs ON technicians(building_id, active);
+            -- Outbound WhatsApp notifications the bot polls + delivers. to_number set =
+            -- DM that number (e.g. assigned technician); blank = broadcast to ops (manager).
+            CREATE TABLE IF NOT EXISTS notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, to_number TEXT,
+                kind TEXT, text TEXT, status TEXT, created_at TEXT);
+            CREATE INDEX IF NOT EXISTS ix_notif ON notifications(status, id);
             CREATE TABLE IF NOT EXISTS checklist_run_entries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER, item_id TEXT,
                 value TEXT, status TEXT, note TEXT, is_issue INTEGER, ts TEXT, photo TEXT);
@@ -391,6 +397,35 @@ class ArvisxDb:
     def set_technician_active(self, tech_id: int, active: bool) -> None:
         with self._lock, self._conn() as c:
             c.execute("UPDATE technicians SET active=? WHERE id=?", (1 if active else 0, tech_id))
+
+    def get_technician(self, building_id: str, name: str) -> Optional[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT * FROM technicians WHERE building_id=? AND name=?",
+                          (building_id, name)).fetchone()
+            return dict(r) if r else None
+
+    # ── Outbound WhatsApp notification queue (bot polls + delivers + acks) ─
+    def enqueue_notification(self, building_id: str, text: str, to_number: str = "",
+                             kind: str = "info") -> int:
+        with self._lock, self._conn() as c:
+            cur = c.execute("INSERT INTO notifications (building_id, to_number, kind, text,"
+                            " status, created_at) VALUES (?,?,?,?,?,?)",
+                            (building_id, to_number, kind, text, "pending",
+                             datetime.now().isoformat(timespec="seconds")))
+            return int(cur.lastrowid)
+
+    def pending_notifications(self) -> List[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            rows = c.execute("SELECT id, building_id, to_number, kind, text FROM notifications"
+                             " WHERE status='pending' ORDER BY id").fetchall()
+            return [dict(r) for r in rows]
+
+    def mark_notifications_sent(self, ids: List[int]) -> None:
+        if not ids:
+            return
+        with self._lock, self._conn() as c:
+            c.executemany("UPDATE notifications SET status='sent' WHERE id=?",
+                          [(int(i),) for i in ids])
 
     def find_open_run(self, building_id: str, template_id: str, shift_date: str,
                       asset: str = "") -> Optional[int]:

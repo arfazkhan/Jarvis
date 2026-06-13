@@ -833,6 +833,35 @@ def create_app():
     def _today_str() -> str:
         return datetime.now().strftime("%Y-%m-%d")
 
+    _FORM_URL = (os.environ.get("ARVISX_PUBLIC_URL", "").rstrip("/") + "/forms") \
+        if os.environ.get("ARVISX_PUBLIC_URL") else ""
+
+    def _notify_assignment(rid: int) -> None:
+        """DM the assigned technician their round (needs a roster phone; else skip —
+        the assignment still shows in the app/manager view)."""
+        from arvisx.checklist_forms import get_template, run_summary
+        run = state.db.get_checklist_run(rid)
+        if not run or not run.get("assignee"):
+            return
+        tech = state.db.get_technician(run["building_id"], run["assignee"])
+        phone = (tech or {}).get("phone", "")
+        if not phone:
+            return
+        tmpl = get_template(run["template_id"], run["building_id"])
+        if tmpl is None:
+            return
+        summ = run_summary(tmpl, state.db.checklist_entries(rid))
+        openn = summ["total"] - summ["done"]
+        link = f"\nOpen: {_FORM_URL}" if _FORM_URL else ""
+        txt = (f"📋 You've been assigned *{tmpl.name}* for {run['shift_date']}.\n"
+               f"{openn} item(s) to complete.{link}")
+        state.db.enqueue_notification(run["building_id"], txt, to_number=phone, kind="assignment")
+
+    def _notify_issue(building: str, label: str, value: Any) -> None:
+        txt = (f"⚠️ Checklist flagged an issue:\n*{label}*: {value}\n"
+               "Open the app to assign + resolve.")
+        state.db.enqueue_notification(building, txt, to_number="", kind="issue")   # ops broadcast
+
     def _run_view(rid: int) -> Dict[str, Any]:
         from arvisx.checklist_forms import get_template, run_summary
         run = state.db.get_checklist_run(rid)
@@ -881,8 +910,11 @@ def create_app():
             rid = state.db.create_checklist_run(building, tid, date,
                                                 technician=str(p.get("technician", "")).strip(),
                                                 asset=asset, assignee=assignee)
+            if assignee:
+                _notify_assignment(rid)
         elif assignee:
             state.db.assign_checklist_run(rid, assignee)
+            _notify_assignment(rid)
         return _run_view(rid)
 
     @app.get("/api/v1/forms/run/{rid}")
@@ -917,6 +949,7 @@ def create_app():
                     run["building_id"], title=f"{item.label}: {value}", detail=note,
                     run_id=rid, item_id=item_id, asset=run.get("asset", ""),
                     severity="issue", source="auto", raised_by=run.get("technician", ""))
+                _notify_issue(run["building_id"], item.label, value)   # alert the manager
         else:
             aid = state.db.find_auto_issue(rid, item_id)
             if aid is not None:
@@ -981,6 +1014,19 @@ def create_app():
     async def technician_deactivate(tech_id: int):
         state.db.set_technician_active(tech_id, False)
         return {"id": tech_id, "active": False}
+
+    @app.get("/api/v1/whatsapp/notifications")
+    async def wa_notifications():
+        """Pending outbound notifications for the bot to deliver. to_number set = DM that
+        number (assigned technician); blank = broadcast to ops (manager). Stay pending
+        until the bot ACKs — at-least-once."""
+        return {"notifications": state.db.pending_notifications()}
+
+    @app.post("/api/v1/whatsapp/notifications/ack")
+    async def wa_notifications_ack(payload: Dict[str, Any] = Body(...)):
+        ids = (payload or {}).get("ids") or []
+        state.db.mark_notifications_sent([int(i) for i in ids if str(i).isdigit()])
+        return {"acked": ids}
 
     @app.post("/api/v1/forms/run/{rid}/assign")
     async def forms_assign_run(rid: int, payload: Dict[str, Any] = Body(...)):

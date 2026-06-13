@@ -207,6 +207,19 @@ def test_digest_flags_unassigned():
     assert "Ajith" in manager_digest(runs, "2026-06-14")
 
 
+def test_notification_queue_roundtrip(tmp_path):
+    db = ArvisxDb(str(tmp_path / "n.db"))
+    a = db.enqueue_notification("one-anthem", "You're assigned Shift II", to_number="919111", kind="assignment")
+    b = db.enqueue_notification("one-anthem", "Fire panel OFF", to_number="", kind="issue")
+    pend = db.pending_notifications()
+    assert len(pend) == 2
+    assert any(n["to_number"] == "919111" for n in pend)     # DM target
+    assert any(n["to_number"] == "" for n in pend)           # ops broadcast
+    db.mark_notifications_sent([a])
+    pend2 = db.pending_notifications()
+    assert len(pend2) == 1 and pend2[0]["id"] == b           # acked one stays gone
+
+
 if __name__ == "__main__":
     import sys, tempfile, pathlib
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
