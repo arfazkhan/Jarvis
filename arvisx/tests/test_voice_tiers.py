@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from arvisx.messaging import (answer, _resident_summary, _tech_digest,
+from arvisx.messaging import (answer, route_intent, _resident_summary, _tech_digest,
                               _manager_phrasing, format_alert_resident, pending_alerts)
 from arvisx.models import (CommunityReport, Risk, ServiceHealth,
                             ServiceType, Severity, HealthBand)
@@ -145,12 +145,13 @@ def test_fm_role_gets_tech_voice():
     assert "Community Readiness" in answer("status", report, role="fm")["text"]
 
 
-def test_owner_role_gets_tech_voice():
-    report = _make_report(warning_service=ServiceType.WATER)
-    res = answer("issues", report, role="owner")
-    t = res["text"]
-    assert "BOOST-PUMP-02" in t
-    assert "[Medium]" in t
+def test_owner_gets_understandable_manager_voice():
+    # The owner (secretary) is NOT a technician — issues come softened, no σ / asset IDs.
+    report = _make_report()
+    report.risks.append(_risk("Booster Pump 2 power creep (3.2σ above its own normal)"))
+    t = answer("any issues?", report, role="owner")["text"]
+    assert "working harder than usual" in t
+    assert "σ" not in t and "BOOST-PUMP-02" not in t
 
 
 # ── Gap 2: resident single-service Q&A ────────────────────────────────────
@@ -380,6 +381,75 @@ def test_checklist_prompts_keep_reply_syntax(tmp_path):
             prefixes_seen.add(p["prompt"].split(":")[0] + ":")
     assert prefixes_seen <= set(_PROMPT_PREFIXES)
     assert len(prefixes_seen) > 1, "prompt prefix must vary across days"
+
+
+# ── "what do you know about my building?" — situation aware ───────────────
+from arvisx.models import Asset, AssetType
+
+
+def _assets():
+    return [
+        Asset("UG-TANK-01", "Underground Tank 1", AssetType.UNDERGROUND_TANK),
+        Asset("BOOST-PUMP-01", "Booster Pump 1", AssetType.BOOSTER_PUMP),
+        Asset("GEN-01", "Generator 1", AssetType.DIESEL_GENERATOR),
+        Asset("GAS-PLANT-01", "Gas Plant 1", AssetType.GAS_PLANT),
+    ]
+
+
+def _learned_baselines():
+    from arvisx.learning import BaselineStore
+    bl = BaselineStore()
+    for _ in range(25):
+        bl.observe("BOOST-PUMP-01", "power_kw", 5.0)
+        bl.observe("UG-TANK-01", "tank_level_pct", 70.0)
+    return bl
+
+
+def test_building_resident_learning_is_friendly():
+    rep = _make_report()
+    t = answer("what do you know about my building", rep, _assets(), None,
+               role="resident", phase="learning")["text"]
+    assert "learning" in t.lower()
+    assert "BOOST-PUMP-01" not in t and "σ" not in t and "%" not in t
+
+
+def test_building_resident_operational():
+    rep = _make_report()
+    t = answer("tell me about the building", rep, _assets(), _learned_baselines(),
+               role="resident", phase="operational")["text"]
+    assert "learned" in t.lower() or "watching" in t.lower()
+    assert "BOOST-PUMP-01" not in t
+
+
+def test_building_manager_learning_lists_device_counts():
+    rep = _make_report()
+    t = answer("what are you monitoring", rep, _assets(), None,
+               role="manager", phase="learning")["text"]
+    assert "4 devices" in t and "learning" in t.lower()
+    assert "σ" not in t
+
+
+def test_building_manager_operational_shows_learned_count():
+    rep = _make_report()
+    t = answer("what have you learned", rep, _assets(), _learned_baselines(),
+               role="manager", phase="operational")["text"]
+    assert "Community Readiness" in t
+    assert "readings" in t.lower()           # learned-baseline count surfaced
+    assert "BOOST-PUMP-01" not in t          # manager voice = no asset IDs
+
+
+def test_building_tech_lists_assets():
+    rep = _make_report()
+    t = answer("what devices are connected", rep, _assets(), _learned_baselines(),
+               role="fm", phase="operational")["text"]
+    assert "BOOST-PUMP-01" in t and "GAS-PLANT-01" in t
+    assert "OPERATIONAL" in t
+
+
+def test_building_intent_routes():
+    for q in ["what do you know about my building", "tell me about the building",
+              "what are you monitoring", "what devices are connected", "what can you see"]:
+        assert route_intent(q) == "building", q
 
 
 if __name__ == "__main__":

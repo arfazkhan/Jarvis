@@ -80,6 +80,13 @@ class BaselineStore:
         mad = max(raw_mad, abs(med) * _MAD_REL_FLOOR, _MAD_ABS_FLOOR)
         return med, mad, len(data)
 
+    def learned_summary(self) -> Tuple[int, int]:
+        """(signals tracked, signals with ≥ MIN_SAMPLES history = a usable baseline).
+        Powers the 'what have you learned about my building?' answer."""
+        with self._lock:
+            lens = [len(h) for h in self._hist.values()]
+        return len(lens), sum(1 for n in lens if n >= MIN_SAMPLES)
+
     def drift_z(self, asset_id: str, signal: str) -> Optional[float]:
         """Robust z of the RECENT window's median vs the learned baseline.
         None = insufficient history (abstain)."""

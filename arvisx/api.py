@@ -81,9 +81,17 @@ class _State:
         else:
             self.assets = inject_prd_scenario()
 
+    def _zones(self):
+        """Zones for ghost-energy detection. SIM mode → the demo fixtures. LIVE/MQTT
+        mode → only zones the building actually commissioned (none by default), so a
+        freshly commissioned building has NO phantom ghost faults from sim fixtures."""
+        if self.store is not None:
+            return list(getattr(self.store, "zones", None) or [])
+        return community_zones("healthy" if self.scenario == "healthy" else "prd")
+
     def sync_workorders(self):
         from arvisx.workorders import sync_workorders
-        zones = community_zones("healthy" if self.scenario == "healthy" else "prd")
+        zones = self._zones()
         out = sync_workorders(self.current_assets(), self.wo_store, zones=zones,
                               baselines=(self.baselines if self.store is not None else None),
                               virtual=True, fusion=True, db=self.db, skillbook=self.skillbook)
@@ -97,7 +105,7 @@ class _State:
         # Drift learning only on a LIVE stream (MQTT) — a static sim snapshot has no
         # real variation to learn from. Fixed thresholds carry the sim path.
         assets = self.current_assets()
-        zones = community_zones("healthy" if self.scenario == "healthy" else "prd")
+        zones = self._zones()
         if self.store is not None:
             self.baselines.learn_from_assets(assets)
             try:
@@ -548,7 +556,7 @@ def create_app():
         from arvisx.agent import monitor
         rep = state.report_now()
         cap = int((payload or {}).get("max_investigations", 3))
-        zones = community_zones("healthy" if state.scenario == "healthy" else "prd")
+        zones = state._zones()
         invs = await monitor(state.current_assets(), rep.risks, llm=_llm_for_reasoning(),
                              db=state.db, baselines=state.baselines, skillbook=state.skillbook,
                              max_investigations=cap, store=state.store, zones=zones,
@@ -567,7 +575,7 @@ def create_app():
         rk = next((r for r in rep.risks if r.asset_id == asset_id), None)
         if rk is None:
             return {"asset_id": asset_id, "status": "no active risk", "route": "none"}
-        zones = community_zones("healthy" if state.scenario == "healthy" else "prd")
+        zones = state._zones()
         out = await handle_incident(a, rk, state.current_assets(), rep.risks,
                                     llm=_llm_for_reasoning(), db=state.db, baselines=state.baselines,
                                     skillbook=state.skillbook, store=state.store, zones=zones,
@@ -668,8 +676,14 @@ def create_app():
         by = str(p.get("by", "")).strip()        # sender number (resident requests)
         if not q:
             raise HTTPException(400, "provide 'question'")
+        # Building phase (learning vs operational) drives the situation-aware answers.
+        try:
+            blds = state.commissioner.list()
+            phase = "operational" if any(b.get("state") == "operational" for b in blds) else "learning"
+        except Exception:
+            phase = "operational"
         res = answer(q, state.report_now(), state.current_assets(),
-                     state.baselines if state.store is not None else None, role=role)
+                     state.baselines if state.store is not None else None, role=role, phase=phase)
         if res.get("action") == "resident_request":
             # Record FIRST, confirm after — 'noted' is only said once it's true.
             rid = state.db.save_resident_request(by, res.get("request_text") or q)

@@ -56,10 +56,12 @@ _RESIDENT_INTENT_SVC: Dict[str, ServiceType] = {
     "stp": ServiceType.STP, "fire": ServiceType.FIRE, "gas": ServiceType.GAS,
 }
 
-# roles that receive the full technician/FM voice
-_TECH_ROLES = {"technician", "fm", "owner"}
+# Full technician/FM voice (raw asset IDs, σ, signal detail). The OWNER is the
+# community secretary, NOT a technician — they get the understandable manager voice
+# (and keep work-order rights via the API's action gate, which is separate from voice).
+_TECH_ROLES = {"technician", "fm"}
 # roles that receive the manager/committee voice
-_MGR_ROLES = {"manager", "committee"}
+_MGR_ROLES = {"manager", "committee", "owner"}
 
 
 # ── intent routing (keyword → canned intent) ─────────────────────────────
@@ -85,6 +87,11 @@ def route_intent(text: str) -> str:
         return "gas"
     if re.search(r"\bfix\b|repair|what (should|do) (i|we) do|recommend|next step|action", t):
         return "fix"
+    if re.search(r"about (the|my|this) (building|community|place)"
+                 r"|what (do|did|have|'?ve) (you|u) (know|knew|learn|learned|monitor)"
+                 r"|what (are|r) (you|u) (monitoring|watching|tracking)|what devices|connected devices"
+                 r"|tell me about (the|my|this)|what can (you|u) see", t):
+        return "building"
     if re.search(r"issue|problem|alert|wrong|attention|risk", t):
         return "issues"
     if re.search(r"how.*(doing|building|today)|status|readiness|overall|summary|digest", t):
@@ -116,14 +123,16 @@ def _service_line(report: CommunityReport, st: ServiceType, soften: bool = True)
 
 # ── the canned answers (deterministic) ───────────────────────────────────
 def answer(text: str, report: CommunityReport, assets: Optional[list] = None,
-           baselines=None, role: str = "viewer") -> Dict[str, Any]:
+           baselines=None, role: str = "viewer", phase: str = "operational") -> Dict[str, Any]:
     intent = route_intent(text)
     r = role.lower() if role else "viewer"
     if r == "resident":
-        return _answer_resident(intent, text, report, assets, baselines)
+        return _answer_resident(intent, text, report, assets, baselines, phase)
     if r in _TECH_ROLES:
-        return _answer_tech(intent, text, report, assets, baselines)
-    # manager / committee / viewer fallthrough → standard voice (softened phrasing)
+        return _answer_tech(intent, text, report, assets, baselines, phase)
+    # manager / committee / viewer / owner fallthrough → standard voice (softened phrasing)
+    if intent == "building":
+        return {"intent": intent, "text": _building_summary(report, assets, baselines, phase, "manager")}
     if intent == "status":
         return {"intent": intent, "text": daily_digest(report)}
     if intent == "cost":
@@ -152,8 +161,10 @@ def answer(text: str, report: CommunityReport, assets: Optional[list] = None,
 
 # ── Resident renderer ────────────────────────────────────────────────────
 def _answer_resident(intent: str, text: str, report: CommunityReport,
-                     assets, baselines) -> Dict[str, Any]:
+                     assets, baselines, phase: str = "operational") -> Dict[str, Any]:
     """Outcome-only voice. Residents never see asset names, %, kW, or confidence."""
+    if intent == "building":
+        return {"intent": intent, "text": _building_summary(report, assets, baselines, phase, "resident")}
     if intent == "create_work_order":
         # Resident maintenance request: hand the caller (API) the action to RECORD it.
         # The caller fills in the confirmation text only after the save succeeds —
@@ -207,8 +218,10 @@ def _resident_summary(report: CommunityReport) -> str:
 
 # ── Technician / FM renderer ──────────────────────────────────────────────
 def _answer_tech(intent: str, text: str, report: CommunityReport,
-                 assets, baselines) -> Dict[str, Any]:
+                 assets, baselines, phase: str = "operational") -> Dict[str, Any]:
     """Full operational detail: asset names, signal deviations, actions, confidence."""
+    if intent == "building":
+        return {"intent": intent, "text": _building_summary(report, assets, baselines, phase, "tech")}
     if intent == "status":
         return {"intent": intent, "text": _tech_digest(report)}
     if intent == "issues":
@@ -219,7 +232,7 @@ def _answer_tech(intent: str, text: str, report: CommunityReport,
         return {"intent": intent,
                 "text": _service_line(report, _RESIDENT_INTENT_SVC[intent], soften=False)}
     # for the remaining intents (cost / why / help / wo / unknown) use the standard path
-    return answer(text, report, assets, baselines, role="manager")
+    return answer(text, report, assets, baselines, role="manager", phase=phase)
 
 
 def _tech_digest(report: CommunityReport) -> str:
@@ -332,6 +345,107 @@ _RESIDENT_PUSH_SUFFIX = ("", " Updates to follow.", " We'll keep you posted.",
 
 def _vary(options) -> str:
     return random.choice(options)
+
+
+# ── "what do you know about my building?" — situation-aware ───────────────
+def _assets_by_service(assets) -> "Dict[ServiceType, list]":
+    by: Dict[ServiceType, list] = {}
+    for a in (assets or []):
+        try:
+            by.setdefault(a.service, []).append(a)
+        except Exception:
+            continue
+    return by
+
+
+def _building_summary(report: CommunityReport, assets, baselines,
+                      phase: str, tier: str) -> str:
+    """What ArvisX knows about this building — different in LEARNING vs OPERATIONAL,
+    and in each voice tier. Learning → what's connected + that it's still learning.
+    Operational → that it has learned each device's normal and is watching live."""
+    learning = (phase or "operational").lower() != "operational"
+    by = _assets_by_service(assets)
+    n_dev = sum(len(v) for v in by.values())
+    n_svc = len(by)
+    svc_names = [OUTCOME_LABEL.get(s, s.value) for s in by]
+
+    # ---- Resident: outcome language, no counts-as-jargon, no asset IDs ----
+    if tier == "resident":
+        services_phrase = _friendly_list([_short_service(s) for s in by]) or "the building's core services"
+        if learning:
+            return ("*Getting to know your building*\n\n"
+                    f"I'm still learning what's normal here — I'm connected to {services_phrase}.\n\n"
+                    "Once I've learned the usual pattern (a few more days), I'll start letting you "
+                    "know if anything needs attention. For now, ask me 'is water ok?' or 'is the pool open?'")
+        return ("*About your building*\n\n"
+                f"I've learned what's normal across {services_phrase}, and I'm watching them around the "
+                "clock. If something looks off, I'll tell you — otherwise no news is good news.\n\n"
+                "Ask me 'any issues?' anytime.")
+
+    # ---- Manager / owner: friendly but with useful counts ----
+    if tier == "manager":
+        lines = ["*About your building*", ""]
+        if learning:
+            lines.append(f"I'm still learning — connected to *{n_dev} devices* across *{n_svc} services*:")
+            for s in by:
+                lines.append(f"   • {OUTCOME_LABEL.get(s, s.value)}: {len(by[s])} device(s)")
+            lines += ["", "I'm watching them build up a picture of what's normal. Alerts switch on "
+                          "once the baseline is ready — until then I won't cry wolf."]
+            return "\n".join(lines)
+        tracked, learned = _baseline_counts(baselines)
+        lines.append(_readiness_headline(report))
+        lines.append("")
+        lines.append(f"I'm watching *{n_dev} devices* across *{n_svc} services* "
+                     f"({', '.join(svc_names)}).")
+        if learned:
+            lines.append(f"I've learned the normal pattern for *{learned} readings* and I compare every "
+                         "live reading against each device's own baseline.")
+        lines.append("")
+        lines.append("Ask 'any issues?' for the current picture, or 'what is this costing us?'.")
+        return "\n".join(lines)
+
+    # ---- Technician / FM: asset inventory + baseline coverage ----
+    lines = ["*Building — monitoring inventory*", ""]
+    lines.append(_readiness_headline(report))
+    lines.append("")
+    for s in by:
+        ids = ", ".join(a.asset_id for a in by[s])
+        lines.append(f"{_BAND_EMOJI.get('Healthy','•')} {OUTCOME_LABEL.get(s, s.value)}: {ids}")
+    tracked, learned = _baseline_counts(baselines)
+    lines.append("")
+    if learning:
+        lines.append(f"State: *LEARNING* — {tracked} signals tracked, {learned} with a usable baseline. "
+                     "Drift alerts arm at operational.")
+    else:
+        lines.append(f"State: *OPERATIONAL* — {learned}/{tracked} signals have a learned baseline; "
+                     "drift is judged per-asset against it.")
+    return "\n".join(lines)
+
+
+def _short_service(st: ServiceType) -> str:
+    return {ServiceType.WATER: "water", ServiceType.POWER_BACKUP: "backup power",
+            ServiceType.POOL: "the pool", ServiceType.STP: "the sewage plant",
+            ServiceType.FIRE: "fire systems", ServiceType.GAS: "cooking gas",
+            ServiceType.ENERGY: "common-area energy"}.get(st, st.value)
+
+
+def _friendly_list(items) -> str:
+    items = [i for i in items if i]
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def _baseline_counts(baselines) -> "Tuple[int, int]":
+    """(signals tracked, signals with a usable learned baseline)."""
+    if baselines is None:
+        return 0, 0
+    try:
+        return baselines.learned_summary()
+    except Exception:
+        return 0, 0
 
 
 # ── shared rendering helpers (clean visual hierarchy) ────────────────────
