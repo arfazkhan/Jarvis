@@ -108,6 +108,15 @@ class ArvisxDb:
             CREATE TABLE IF NOT EXISTS checklist_templates (
                 building_id TEXT, template_id TEXT, data TEXT, updated_at TEXT,
                 PRIMARY KEY (building_id, template_id));
+            -- Vendor registry (AMC / service vendors an issue can be owned by).
+            CREATE TABLE IF NOT EXISTS vendors (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, name TEXT,
+                category TEXT, contact TEXT, active INTEGER, created_at TEXT);
+            CREATE INDEX IF NOT EXISTS ix_vendors ON vendors(building_id, active);
+            -- Per-building SLA config (hours) by priority; defaults applied when absent.
+            CREATE TABLE IF NOT EXISTS sla_config (
+                building_id TEXT, priority TEXT, response_hours REAL, resolution_hours REAL,
+                PRIMARY KEY (building_id, priority));
             -- Vision (Phase D): an extraction PROPOSAL from a photo, pending operator
             -- confirmation before it's written to a checklist entry (verify pattern).
             CREATE TABLE IF NOT EXISTS vision_suggestions (
@@ -137,6 +146,12 @@ class ArvisxDb:
             cols = [r[1] for r in c.execute("PRAGMA table_info(checklist_runs)").fetchall()]
             if "assignee" not in cols:
                 c.execute("ALTER TABLE checklist_runs ADD COLUMN assignee TEXT")
+            # SLA/vendor columns on issues (added later than the table).
+            icols = [r[1] for r in c.execute("PRAGMA table_info(checklist_issues)").fetchall()]
+            for col, decl in (("priority", "TEXT"), ("vendor", "TEXT"),
+                              ("escalated_level", "INTEGER DEFAULT 0")):
+                if col not in icols:
+                    c.execute(f"ALTER TABLE checklist_issues ADD COLUMN {col} {decl}")
         self._siglog_last: Dict[tuple, datetime] = {}   # (asset, signal) → last logged ts
 
     # ── Building commissioning config ────────────────────────────────────
@@ -598,17 +613,45 @@ class ArvisxDb:
     # ── Tracked issues (lifecycle + photo + history) ─────────────────────
     def create_issue(self, building_id: str, title: str, detail: str = "", *, run_id: int = None,
                      item_id: str = "", asset: str = "", severity: str = "issue",
-                     source: str = "manual", raised_by: str = "") -> int:
+                     source: str = "manual", raised_by: str = "", priority: str = "",
+                     vendor: str = "") -> int:
         now = datetime.now().isoformat(timespec="seconds")
         hist = json.dumps([{"ts": now, "action": "opened", "by": raised_by, "note": ""}])
         with self._lock, self._conn() as c:
             cur = c.execute(
                 "INSERT INTO checklist_issues (building_id, run_id, item_id, asset, title, detail,"
-                " status, severity, source, assignee, raised_by, photo, created_at, updated_at, history)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " status, severity, source, assignee, raised_by, photo, created_at, updated_at,"
+                " history, priority, vendor, escalated_level)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (building_id, run_id, item_id, asset, title, detail, "open", severity, source,
-                 "", raised_by, None, now, now, hist))
+                 "", raised_by, None, now, now, hist, priority, vendor, 0))
             return int(cur.lastrowid)
+
+    def set_issue_fields(self, issue_id: int, *, priority: str = None, vendor: str = None,
+                         escalated_level: int = None) -> None:
+        sets, args = [], []
+        if priority is not None:
+            sets.append("priority=?"); args.append(priority)
+        if vendor is not None:
+            sets.append("vendor=?"); args.append(vendor)
+        if escalated_level is not None:
+            sets.append("escalated_level=?"); args.append(int(escalated_level))
+        if not sets:
+            return
+        args.append(issue_id)
+        with self._lock, self._conn() as c:
+            c.execute(f"UPDATE checklist_issues SET {', '.join(sets)} WHERE id=?", tuple(args))
+
+    def append_issue_history(self, issue_id: int, action: str, by: str = "", note: str = "") -> None:
+        now = datetime.now().isoformat(timespec="seconds")
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT history FROM checklist_issues WHERE id=?", (issue_id,)).fetchone()
+            if not r:
+                return
+            hist = json.loads(r["history"] or "[]")
+            hist.append({"ts": now, "action": action, "by": by, "note": note})
+            c.execute("UPDATE checklist_issues SET updated_at=?, history=? WHERE id=?",
+                      (now, json.dumps(hist), issue_id))
 
     def get_issue(self, issue_id: int) -> Optional[Dict[str, Any]]:
         with self._lock, self._conn() as c:
@@ -662,6 +705,44 @@ class ArvisxDb:
         with self._lock, self._conn() as c:
             c.execute("UPDATE checklist_issues SET photo=?, updated_at=? WHERE id=?",
                       (photo, datetime.now().isoformat(timespec="seconds"), issue_id))
+
+    # ── Vendor registry ──────────────────────────────────────────────────
+    def add_vendor(self, building_id: str, name: str, category: str = "", contact: str = "") -> int:
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT id FROM vendors WHERE building_id=? AND name=?",
+                          (building_id, name)).fetchone()
+            if r:
+                c.execute("UPDATE vendors SET active=1, category=?, contact=? WHERE id=?",
+                          (category, contact, r["id"]))
+                return int(r["id"])
+            cur = c.execute("INSERT INTO vendors (building_id, name, category, contact, active, created_at)"
+                            " VALUES (?,?,?,?,1,?)",
+                            (building_id, name, category, contact,
+                             datetime.now().isoformat(timespec="seconds")))
+            return int(cur.lastrowid)
+
+    def list_vendors(self, building_id: str, active_only: bool = True) -> List[Dict[str, Any]]:
+        q = "SELECT * FROM vendors WHERE building_id=?" + (" AND active=1" if active_only else "")
+        with self._lock, self._conn() as c:
+            return [dict(r) for r in c.execute(q + " ORDER BY name", (building_id,)).fetchall()]
+
+    def set_vendor_active(self, vendor_id: int, active: bool) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE vendors SET active=? WHERE id=?", (1 if active else 0, vendor_id))
+
+    # ── SLA config (per building, per priority; defaults applied in sla.py) ─
+    def set_sla_config(self, building_id: str, priority: str, response_hours: float,
+                       resolution_hours: float) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("INSERT OR REPLACE INTO sla_config (building_id, priority, response_hours,"
+                      " resolution_hours) VALUES (?,?,?,?)",
+                      (building_id, priority, response_hours, resolution_hours))
+
+    def get_sla_config(self, building_id: str) -> Dict[str, tuple]:
+        with self._lock, self._conn() as c:
+            rows = c.execute("SELECT priority, response_hours, resolution_hours FROM sla_config"
+                             " WHERE building_id=?", (building_id,)).fetchall()
+        return {r["priority"]: (r["response_hours"], r["resolution_hours"]) for r in rows}
 
     def submit_checklist_run(self, run_id: int) -> None:
         with self._lock, self._conn() as c:

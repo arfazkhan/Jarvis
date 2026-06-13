@@ -1114,7 +1114,8 @@ def create_app():
             str(p.get("building", "one-anthem")).strip() or "one-anthem", title,
             detail=str(p.get("detail", "")), asset=str(p.get("asset", "")),
             severity=str(p.get("severity", "issue")), source="manual",
-            raised_by=str(p.get("by", "")))
+            raised_by=str(p.get("by", "")), priority=str(p.get("priority", "")),
+            vendor=str(p.get("vendor", "")))
         return _jsonable(state.db.get_issue(iid))
 
     @app.post("/api/v1/issues/{issue_id}/transition")
@@ -1134,7 +1135,87 @@ def create_app():
         state.db.update_issue(issue_id, status=status,
                               assignee=(str(assignee) if assignee is not None else None),
                               by=str(p.get("by", "")), note=str(p.get("note", "")))
+        # priority / vendor ownership (SLA + vendor accountability)
+        if p.get("priority") is not None or p.get("vendor") is not None:
+            state.db.set_issue_fields(
+                issue_id,
+                priority=(str(p["priority"]) if p.get("priority") is not None else None),
+                vendor=(str(p["vendor"]) if p.get("vendor") is not None else None))
         return _jsonable(state.db.get_issue(issue_id))
+
+    @app.post("/api/v1/issues/{issue_id}/visited")
+    async def issue_vendor_visited(issue_id: int, payload: Dict[str, Any] = Body(default={})):
+        """Record a vendor site visit milestone (feeds vendor response-time analytics)."""
+        if not state.db.get_issue(issue_id):
+            raise HTTPException(404, f"unknown issue {issue_id}")
+        state.db.append_issue_history(issue_id, "vendor visited", by=str((payload or {}).get("by", "")))
+        return _jsonable(state.db.get_issue(issue_id))
+
+    @app.get("/api/v1/issues/{issue_id}/sla")
+    async def issue_sla(issue_id: int):
+        from arvisx.sla import sla_status
+        iss = state.db.get_issue(issue_id)
+        if not iss:
+            raise HTTPException(404, f"unknown issue {issue_id}")
+        return sla_status(iss, state.db.get_sla_config(iss["building_id"]))
+
+    # ── Vendors + SLA config + escalation + vendor analytics ─────────────
+    @app.get("/api/v1/vendors")
+    async def vendors_list(building: str = "one-anthem", all: bool = False):
+        return {"building": building, "vendors": state.db.list_vendors(building, active_only=not all)}
+
+    @app.post("/api/v1/vendors")
+    async def vendor_add(payload: Dict[str, Any] = Body(...)):
+        p = payload or {}
+        name = str(p.get("name", "")).strip()
+        if not name:
+            raise HTTPException(400, "provide 'name'")
+        vid = state.db.add_vendor(str(p.get("building", "one-anthem")).strip() or "one-anthem",
+                                  name, str(p.get("category", "")), str(p.get("contact", "")))
+        return {"id": vid, "name": name}
+
+    @app.post("/api/v1/vendors/{vendor_id}/deactivate")
+    async def vendor_deactivate(vendor_id: int):
+        state.db.set_vendor_active(vendor_id, False)
+        return {"id": vendor_id, "active": False}
+
+    @app.get("/api/v1/sla/config")
+    async def sla_config_get(building: str = "one-anthem"):
+        from arvisx.sla import DEFAULT_SLA
+        override = state.db.get_sla_config(building)
+        merged = {}
+        for pr, (resp, res) in DEFAULT_SLA.items():
+            r = override.get(pr, (resp, res))
+            merged[pr] = {"response_hours": r[0], "resolution_hours": r[1],
+                          "default": pr not in override}
+        return {"building": building, "sla": merged}
+
+    @app.post("/api/v1/sla/config")
+    async def sla_config_set(payload: Dict[str, Any] = Body(...)):
+        from arvisx.sla import PRIORITIES
+        p = payload or {}
+        pr = str(p.get("priority", "")).strip().lower()
+        if pr not in PRIORITIES:
+            raise HTTPException(400, f"priority must be one of {PRIORITIES}")
+        try:
+            state.db.set_sla_config(str(p.get("building", "one-anthem")).strip() or "one-anthem",
+                                    pr, float(p["response_hours"]), float(p["resolution_hours"]))
+        except (KeyError, TypeError, ValueError):
+            raise HTTPException(400, "provide numeric response_hours and resolution_hours")
+        return {"saved": True, "priority": pr}
+
+    @app.post("/api/v1/escalations/run")
+    async def escalations_run(building: str = "one-anthem"):
+        """Sweep open issues, escalate any past SLA (one notification per new level).
+        The bot calls this each poll; safe to call often."""
+        from arvisx.sla import run_escalations
+        return {"building": building, "fired": run_escalations(state.db, building)}
+
+    @app.get("/api/v1/analyzers/vendors")
+    async def analyzers_vendors(building: str = "one-anthem"):
+        """Vendor performance: jobs, avg response/resolution hours, escalations (slowest first)."""
+        from arvisx.sla import vendor_performance
+        return {"building": building, "vendors": vendor_performance(state.db.list_issues(building))}
 
     async def _save_photo_body(request, filename: str):
         from arvisx.uploads import save_photo
