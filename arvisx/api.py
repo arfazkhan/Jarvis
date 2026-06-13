@@ -1201,6 +1201,117 @@ def create_app():
         state.db.mark_ppm_done(building, asset, str(p.get("date", "")).strip() or _today_str())
         return {"asset": asset, "last_done": p.get("date") or _today_str()}
 
+    # ── Phase-A deterministic analyzers (L1, L2, L7, L8) — no LLM ─────────
+    def _num(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
+    def _days_since_check(building: str, asset: str):
+        from arvisx.checklist_forms import items_for_asset
+        ids = [it.item_id for _t, it in items_for_asset(building, asset)]
+        ents = state.db.asset_entries(building, ids, limit=1)
+        if not ents:
+            return None
+        from datetime import date
+        try:
+            return (date.fromisoformat(_today_str()) - date.fromisoformat(ents[0]["ts"][:10])).days
+        except Exception:
+            return None
+
+    def _reading_findings(building: str):
+        """L1 across every reading item with enough history. Returns (flagged_list,
+        anomaly_count_by_asset)."""
+        from arvisx.checklist_forms import templates_for
+        from arvisx.analyzers import reading_anomaly
+        findings, by_asset, seen = [], {}, set()
+        for t in templates_for(building):
+            for it in t.all_items():
+                if it.kind != "reading" or it.item_id in seen:
+                    continue
+                seen.add(it.item_id)
+                vals = [_num(e["value"]) for e in state.db.asset_entries(building, [it.item_id], limit=60)]
+                vals = [v for v in vals if v is not None]
+                if len(vals) < 6:
+                    continue
+                r = reading_anomaly(vals[1:], vals[0])      # newest is latest, rest = history
+                if r.get("flagged"):
+                    findings.append({"item_id": it.item_id, "label": it.label, "asset": it.asset,
+                                     "unit": it.unit, **r})
+                    by_asset[it.asset] = by_asset.get(it.asset, 0) + 1
+        return findings, by_asset
+
+    @app.get("/api/v1/analyzers/readings")
+    async def analyzers_readings(building: str = "one-anthem"):
+        findings, _ = _reading_findings(building)
+        return {"building": building, "anomalies": findings}
+
+    @app.get("/api/v1/analyzers/health")
+    async def analyzers_health(building: str = "one-anthem"):
+        from arvisx.checklist_forms import assets_in, get_template, ppm_status
+        from arvisx.analyzers import asset_health
+        _findings, anomaly_by_asset = _reading_findings(building)
+        out = []
+        for asset in assets_in(building):
+            issues = [i for i in state.db.list_issues(building, asset=asset) if i["status"] != "resolved"]
+            crit = sum(1 for i in issues if i.get("severity") == "critical")
+            sched = state.db.get_ppm_schedule(building, asset)
+            ppm = ppm_status(sched, _today_str(), _latest_run_hours(building, asset)) if sched else None
+            h = asset_health(open_issues=len(issues), critical_issues=crit,
+                             anomalies=anomaly_by_asset.get(asset, 0),
+                             overdue_ppm=bool(ppm and ppm["status"] == "overdue"),
+                             days_since_check=_days_since_check(building, asset))
+            out.append({"asset": asset, **h, "open_issues": len(issues),
+                        "overdue_ppm": bool(ppm and ppm["status"] == "overdue")})
+        out.sort(key=lambda a: a["score"])      # riskiest first
+        return {"building": building, "assets": out}
+
+    @app.get("/api/v1/analyzers/compliance")
+    async def analyzers_compliance(building: str = "one-anthem"):
+        from arvisx.checklist_forms import assets_in, ppm_status
+        from arvisx.analyzers import compliance_report
+        scheds = [ppm_status(s, _today_str(), _latest_run_hours(building, s["asset"]))
+                  for s in state.db.list_ppm_schedules(building)]
+        stale = []
+        for asset in assets_in(building):
+            d = _days_since_check(building, asset)
+            if d is None or d > 7:
+                stale.append({"asset": asset, "days_since_check": d})
+        return {"building": building, **compliance_report(scheds, stale)}
+
+    @app.get("/api/v1/forms/run/{rid}/review")
+    async def forms_run_review(rid: int):
+        """L2 Supervisor: auto-review a run — missing items + reading anomalies + trends."""
+        from arvisx.checklist_forms import get_template, run_summary
+        from arvisx.analyzers import reading_anomaly, trend_alert
+        run = state.db.get_checklist_run(rid)
+        if not run:
+            raise HTTPException(404, f"unknown run {rid}")
+        tmpl = get_template(run["template_id"], run["building_id"])
+        entries = state.db.checklist_entries(rid)
+        summ = run_summary(tmpl, entries)
+        by_id = {it.item_id: it for it in tmpl.all_items()}
+        missing = [{"item_id": m, "label": by_id[m].label} for m in summ["missing"] if m in by_id]
+        anomalies, trends = [], []
+        for it in tmpl.all_items():
+            if it.kind != "reading" or it.item_id not in entries:
+                continue
+            cur = _num(entries[it.item_id].get("value"))
+            if cur is None:
+                continue
+            hist = [_num(e["value"]) for e in state.db.asset_entries(run["building_id"], [it.item_id], limit=60)]
+            hist = [v for v in hist if v is not None]
+            r = reading_anomaly(hist[1:] if hist else [], cur)
+            if r.get("flagged"):
+                anomalies.append({"item_id": it.item_id, "label": it.label, **r})
+            t = trend_alert(list(reversed(hist)))     # oldest→newest
+            if t.get("flagged"):
+                trends.append({"item_id": it.item_id, "label": it.label, **t})
+        return {"run_id": rid, "completion_pct": summ["completion_pct"],
+                "missing": missing, "flagged_issues": summ["issues"],
+                "anomalies": anomalies, "trends": trends}
+
     @app.get("/forms")
     async def forms_page():
         from fastapi.responses import HTMLResponse
