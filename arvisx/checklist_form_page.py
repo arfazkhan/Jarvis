@@ -152,12 +152,40 @@ function renderItem(it,ro){
     ctl=`<textarea class="note" rows="2" ${dis} onchange="saveVal('${it.item_id}',this.value)"
         placeholder="notes">${e?e.value:''}</textarea>`;
   }
-  // photo evidence (any item) — camera on mobile
+  // photo evidence (any item) — camera on mobile; reading items also get vision Scan
+  const scan = it.kind === "reading" ? `
+    <button class="photo-btn" ${dis} onclick="document.getElementById('sc_${it.item_id}').click()">🔎 Scan</button>
+    <input id="sc_${it.item_id}" type="file" accept="image/*" capture="environment" class="hide" onchange="upScan('${it.item_id}','${it.unit||''}',this)">` : '';
   const ph=`<div class="row" style="margin-top:6px">
     <button class="photo-btn" ${dis} onclick="document.getElementById('ph_${it.item_id}').click()">📷 ${e&&e.photo?'Retake':'Photo'}</button>
     <input id="ph_${it.item_id}" type="file" accept="image/*" capture="environment" class="hide" onchange="upPhoto('${it.item_id}',this)">
+    ${scan}
     ${e&&e.photo?`<img class="thumb" src="/api/v1/photos/${e.photo}">`:''}</div>`;
   return `<div class="item"><div class="ilabel"><span class="nm">${it.label}</span>${tag}</div>${ctl}${ro&&!(e&&e.photo)?'':ph}</div>`;
+}
+
+const VAPI="/api/v1/vision";
+function pickReading(ex){
+  if(ex&&typeof ex.level_pct!=='undefined') return ex.level_pct;
+  if(ex&&ex.readings){ const k=Object.keys(ex.readings); if(k.length) return ex.readings[k[0]]; }
+  return "";
+}
+async function upScan(id,unit,inp){
+  const f=inp.files&&inp.files[0]; if(!f) return;
+  const r=await fetch(VAPI+"/extract?kind=gauge&run_id="+RUN.run.id+"&item_id="+encodeURIComponent(id)+"&filename="+encodeURIComponent(f.name||'scan.jpg'),
+    {method:"POST",headers:{"Content-Type":f.type||"image/jpeg"},body:f});
+  const d=await r.json();
+  if(!d.available){
+    alert("Vision model not configured yet — photo saved as evidence. Enter the reading manually.");
+  } else {
+    const val=pickReading(d.extracted);
+    if(confirm("Detected: "+val+" "+unit+"\nUse this reading?")){
+      await fetch(VAPI+"/suggestion/"+d.suggestion_id+"/confirm",
+        {method:"POST",headers:{"Content-Type":"application/json"},
+         body:JSON.stringify({value:val,run_id:RUN.run.id,item_id:id})});
+    }
+  }
+  RUN=await jget(API+"/run/"+RUN.run.id); TPL=RUN.template; renderForm();
 }
 
 async function upPhoto(id,inp){

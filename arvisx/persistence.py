@@ -103,6 +103,13 @@ class ArvisxDb:
             CREATE TABLE IF NOT EXISTS ppm_schedule (
                 building_id TEXT, asset TEXT, interval_days INTEGER, last_done TEXT,
                 run_hours_limit REAL, updated_at TEXT, PRIMARY KEY (building_id, asset));
+            -- Vision (Phase D): an extraction PROPOSAL from a photo, pending operator
+            -- confirmation before it's written to a checklist entry (verify pattern).
+            CREATE TABLE IF NOT EXISTS vision_suggestions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, photo TEXT, kind TEXT,
+                extracted TEXT, status TEXT, run_id INTEGER, item_id TEXT,
+                confirmed_value TEXT, created_at TEXT);
+            CREATE INDEX IF NOT EXISTS ix_vision ON vision_suggestions(building_id, status);
             CREATE TABLE IF NOT EXISTS checklist_run_entries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER, item_id TEXT,
                 value TEXT, status TEXT, note TEXT, is_issue INTEGER, ts TEXT, photo TEXT);
@@ -459,6 +466,45 @@ class ArvisxDb:
 
     def mark_ppm_done(self, building_id: str, asset: str, done_date: str) -> None:
         self.set_ppm_schedule(building_id, asset, last_done=done_date)
+
+    # ── Vision suggestions (Phase D) ─────────────────────────────────────
+    def create_vision_suggestion(self, building_id: str, photo: str, kind: str,
+                                 extracted: Dict[str, Any], run_id: int = None,
+                                 item_id: str = "") -> int:
+        with self._lock, self._conn() as c:
+            cur = c.execute(
+                "INSERT INTO vision_suggestions (building_id, photo, kind, extracted, status,"
+                " run_id, item_id, confirmed_value, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                (building_id, photo, kind, json.dumps(extracted, default=str), "pending",
+                 run_id, item_id, "", datetime.now().isoformat(timespec="seconds")))
+            return int(cur.lastrowid)
+
+    def get_vision_suggestion(self, sug_id: int) -> Optional[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT * FROM vision_suggestions WHERE id=?", (sug_id,)).fetchone()
+        if not r:
+            return None
+        d = dict(r)
+        d["extracted"] = json.loads(d.get("extracted") or "{}")
+        return d
+
+    def list_vision_suggestions(self, building_id: str, status: str = "") -> List[Dict[str, Any]]:
+        q = "SELECT * FROM vision_suggestions WHERE building_id=?"
+        args: List[Any] = [building_id]
+        if status:
+            q += " AND status=?"; args.append(status)
+        q += " ORDER BY id DESC"
+        with self._lock, self._conn() as c:
+            rows = c.execute(q, tuple(args)).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r); d["extracted"] = json.loads(d.get("extracted") or "{}"); out.append(d)
+        return out
+
+    def set_vision_suggestion_status(self, sug_id: int, status: str, confirmed_value: str = "") -> None:
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE vision_suggestions SET status=?, confirmed_value=? WHERE id=?",
+                      (status, confirmed_value, sug_id))
 
     # ── Asset history (Phase S): entries about an asset, newest first ────
     def asset_entries(self, building_id: str, item_ids: List[str], limit: int = 200) -> List[Dict[str, Any]]:

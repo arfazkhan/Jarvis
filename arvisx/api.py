@@ -1318,6 +1318,55 @@ def create_app():
             llm = None
         return await run_building_qa(llm, state.db, building, q, _today_str())
 
+    # ── Phase D: Vision — photo → extraction PROPOSAL → operator confirms ──
+    @app.post("/api/v1/vision/extract")
+    async def vision_extract(request: Request, kind: str = "auto", hint: str = "",
+                             building: str = "one-anthem", run_id: int = 0, item_id: str = "",
+                             filename: str = ""):
+        """Raw image bytes in the body. Stores the photo, runs the vision provider, and
+        records a PENDING suggestion. Never writes to a checklist entry — that needs confirm."""
+        from arvisx.uploads import save_photo
+        from arvisx.vision import extract_from_photo
+        data = await request.body()
+        try:
+            name, _mt = save_photo(data, filename=filename,
+                                   content_type=request.headers.get("content-type", ""))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        result = extract_from_photo(data, kind=kind, hint=hint)
+        sug_id = state.db.create_vision_suggestion(
+            building, name, kind, result.get("extracted", {}),
+            run_id=(run_id or None), item_id=item_id)
+        return {"suggestion_id": sug_id, "photo": name, "available": result.get("available", False),
+                "reason": result.get("reason", ""), "kind": kind,
+                "extracted": result.get("extracted", {})}
+
+    @app.get("/api/v1/vision/suggestions")
+    async def vision_suggestions(building: str = "one-anthem", status: str = ""):
+        return {"building": building, "suggestions": _jsonable(state.db.list_vision_suggestions(building, status))}
+
+    @app.post("/api/v1/vision/suggestion/{sug_id}/confirm")
+    async def vision_confirm(sug_id: int, payload: Dict[str, Any] = Body(default={})):
+        """Operator confirms the extraction → NOW it's written to the checklist entry
+        (if run_id+item_id are on the suggestion or in the body)."""
+        from arvisx.vision import confirm_suggestion
+        sug = state.db.get_vision_suggestion(sug_id)
+        if not sug:
+            raise HTTPException(404, f"unknown suggestion {sug_id}")
+        p = payload or {}
+        run_id = p.get("run_id") or sug.get("run_id")
+        item_id = p.get("item_id") or sug.get("item_id") or ""
+        out = confirm_suggestion(state.db, sug_id, value=p.get("value"),
+                                 run_id=run_id, item_id=item_id, by=str(p.get("by", "")))
+        return _jsonable(out)
+
+    @app.post("/api/v1/vision/suggestion/{sug_id}/reject")
+    async def vision_reject(sug_id: int):
+        if not state.db.get_vision_suggestion(sug_id):
+            raise HTTPException(404, f"unknown suggestion {sug_id}")
+        state.db.set_vision_suggestion_status(sug_id, "rejected")
+        return {"suggestion_id": sug_id, "status": "rejected"}
+
     @app.get("/forms")
     async def forms_page():
         from fastapi.responses import HTMLResponse
