@@ -23,6 +23,14 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List
 
+# Module-level so FastAPI can resolve `request: Request` annotations under
+# `from __future__ import annotations` (it reads hints from module globals). Guarded so
+# the module still imports where fastapi isn't installed (create_app imports it for real).
+try:
+    from fastapi import Request
+except Exception:                       # pragma: no cover
+    Request = None
+
 from arvisx.health import assess_asset, build_report
 from arvisx.simulator import community_zones, healthy_community, inject_prd_scenario
 
