@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ArvisX Discovery — Field Sheet</title>
+<style>
+  :root { --ink:#1a1a1a; --mute:#666; --line:#bbb; --rule:#e3e3e3; --accent:#0b6; }
+  * { box-sizing: border-box; }
+  html,body { margin:0; padding:0; }
+  body {
+    font-family: "Segoe UI", Arial, sans-serif;
+    color: var(--ink); font-size: 10.3px; line-height: 1.45;
+    padding: 14mm 12mm;
+  }
+  h1 { font-size: 17px; margin:0 0 2px; }
+  .sub { color: var(--mute); font-size: 9.5px; margin-bottom: 8px; }
+  .opener {
+    border-left: 3px solid var(--accent); background:#f3fbf7;
+    padding: 6px 9px; font-style: italic; margin: 8px 0 10px; font-size: 9.8px;
+  }
+  .opener b { font-style: normal; }
+  .meta { display:flex; flex-wrap:wrap; gap: 4px 18px; margin-bottom: 8px; font-size: 10px; }
+  .fill { border-bottom: 1px solid var(--line); display:inline-block; min-width: 120px; }
+  h2 {
+    font-size: 11.5px; margin: 9px 0 3px; padding-bottom: 2px;
+    border-bottom: 1.5px solid var(--ink); text-transform: uppercase; letter-spacing: .3px;
+  }
+  ul { margin: 2px 0; padding-left: 15px; }
+  li { margin: 2.5px 0; }
+  .line { border-bottom: 1px dotted var(--line); display:block; height: 13px; margin-top: 2px; }
+  .box { font-size: 11px; }
+  .cols { display:flex; gap: 18px; }
+  .cols > div { flex:1; }
+  .foot {
+    margin-top: 10px; border-top: 1.5px solid var(--ink); padding-top: 6px; font-size: 9.4px;
+  }
+  .green { color: #0a7a4a; font-weight: 600; }
+  .red { color: #b62020; font-weight: 600; }
+  .trust { background:#f6f6f6; padding: 5px 8px; margin-top: 5px; border-radius: 4px; }
+  .next { margin-top: 7px; font-size: 10.3px; }
+  @media print { body { padding: 10mm; } @page { size: A4; margin: 0; } }
+</style>
+</head>
+<body>
+
+<h1>ArvisX Discovery — Field Sheet</h1>
+<div class="sub">Residential community ops intelligence · pilot discovery</div>
+
+<div class="meta">
+  <span>Community: <span class="fill" style="min-width:200px"></span></span>
+  <span>Contact / role: <span class="fill" style="min-width:170px"></span></span>
+  <span>Date: <span class="fill" style="min-width:90px"></span></span>
+  <span>Phone / WhatsApp: <span class="fill" style="min-width:150px"></span></span>
+</div>
+
+<div class="opener">
+  <b>Opener:</b> “Before I show you anything — how does the building actually run day to day? What eats
+  your time, what generates complaints, where does money leak?” &nbsp;<b>Listen first. Pitch last.</b>
+</div>
+
+<div class="cols">
+<div>
+
+<h2>A. The building</h2>
+<ul>
+  <li>Towers / units / floors; occupied vs sold? <span class="line"></span></li>
+  <li>On committee how long? Voluntary or paid? <span class="line"></span></li>
+  <li>Biggest time-sink in a typical week? <span class="line"></span></li>
+  <li>Hands-on work: in-house staff or outsourced FM? <span class="line"></span></li>
+</ul>
+
+<h2>B. Infrastructure <span style="font-weight:400;font-size:9px">(tick what exists)</span></h2>
+<div class="box">
+  ☐ Water source: <span class="fill" style="min-width:90px"></span>
+  ☐ one sump &nbsp;☐ multiple &nbsp;☐ roof tanks &nbsp;☐ booster pumps<br>
+  ☐ Diesel generators (no./size) <span class="fill" style="min-width:80px"></span>
+  &nbsp;☐ STP &nbsp;☐ Pool<br>
+  ☐ Fire panel + pumps — monitored by? <span class="fill" style="min-width:110px"></span><br>
+  ☐ <b>Piped cooking gas</b> (basement bank → apartments)? &nbsp;☐ yes ☐ no<br>
+  ☐ Existing BMS? &nbsp;☐ none / standalone &nbsp;☐ full BMS <span class="fill" style="min-width:80px"></span>
+</div>
+
+<h2>C. How it's run today</h2>
+<ul>
+  <li>How do you find out a pump/generator has a problem? <span class="line"></span></li>
+  <li>Daily checklist exist? <b>Can I see one?</b> ☐ y ☐ n — trusted, or week-end from memory? <span class="line"></span></li>
+  <li>How is a repair tracked to completion? <span class="line"></span></li>
+  <li>How do residents raise complaints? <span class="line"></span></li>
+</ul>
+
+<h2>D. Cost of the pain <span style="font-weight:400;font-size:9px">(get numbers)</span></h2>
+<ul>
+  <li>Last unexpected failure — repair cost + resident fallout? <span class="line"></span></li>
+  <li>Monthly diesel / electricity / water bill? <span class="line"></span></li>
+  <li>Staff involved in monitoring + meter reading? <span class="line"></span></li>
+  <li>Firefighting vs planning — rough % of your time? <span class="line"></span></li>
+</ul>
+
+</div>
+<div>
+
+<h2>E. Two sharp hooks</h2>
+<ul>
+  <li><b>Gas:</b> how is each apartment billed? Who reads meters month-end? Disputes?
+    <span class="line"></span><span class="line"></span></li>
+  <li><b>Checklist:</b> could you prove the pump room was checked last Tuesday? Ever caused a failure?
+    <span class="line"></span><span class="line"></span></li>
+</ul>
+
+<h2>F. Readiness</h2>
+<ul>
+  <li>Digital sensors/meters or all manual gauges? <span class="line"></span></li>
+  <li>☐ Internet near pump / generator / gas rooms &nbsp; ☐ Everyone on WhatsApp</li>
+  <li>Asset list / equipment register (even paper)? <span class="line"></span></li>
+</ul>
+
+<h2>G. Decision &amp; money</h2>
+<ul>
+  <li>Who approves spend — you / committee / AGM? <span class="line"></span></li>
+  <li>Maintenance or capex budget? <span class="line"></span></li>
+  <li>“What would month one need to deliver to be worth it?” <span class="line"></span></li>
+  <li>Tried software before? What happened? <span class="line"></span></li>
+</ul>
+
+<h2>H. Pilot ask <span style="font-weight:400;font-size:9px">(only after listening)</span></h2>
+<ul>
+  <li>30–60 day pilot, one tower, read-only, daily WhatsApp summary — open?
+    &nbsp;☐ yes ☐ maybe ☐ no</li>
+  <li>Day-to-day contact on their side: <span class="line"></span></li>
+</ul>
+
+</div>
+</div>
+
+<div class="foot">
+  <span class="green">🟢 FIT:</span> fragmented / no BMS · manual gas billing + disputes ·
+  untrusted checklist · reactive (“we find out when it breaks”) · budget-holding champion ·
+  WhatsApp everywhere<br>
+  <span class="red">🔴 CAUTION:</span> full BMS · no plant-room internet · AGM-only decisions / no budget ·
+  fire is the #1 ask
+  <div class="trust">
+    <b>Trust lines:</b> read-only, never controls equipment · fire stays with your certified panel,
+    we add visibility alongside · learning period first so it doesn't cry wolf
+  </div>
+  <div class="next">Next step agreed: <span class="fill" style="min-width:430px"></span></div>
+</div>
+
+</body>
+</html>
