@@ -89,6 +89,42 @@ def test_compliance_low_when_clean():
     assert compliance_report([{"asset": "X", "status": "ok", "days_remaining": 40}], [])["compliance_risk"] == "low"
 
 
+# ── L6 failure watchlist (DB-backed; honest — no fabricated %) ──────────
+def _wl_db(tmp_path):
+    from arvisx.persistence import ArvisxDb
+    db = ArvisxDb(str(tmp_path / "wl.db"))
+    for v in (25.0, 24.0, 23.0, 22.0):          # DG-1 battery declining
+        rid = db.create_checklist_run("one-anthem", "ANTHEM-SHIFT-3", "2026-06-14")
+        db.save_checklist_entry(rid, "dg_battery_v", value=str(v))
+    db.create_issue("one-anthem", "DG-2 panel: FAULT", asset="DG-2", severity="critical", source="auto")
+    return db
+
+
+def test_watchlist_flags_declining_and_critical(tmp_path):
+    from arvisx import checklist_intel as ci
+    wl = ci.failure_watchlist(_wl_db(tmp_path), "one-anthem", "2026-06-14")
+    by = {w["asset"]: w for w in wl}
+    assert "DG-1" in by and any("declining" in s for s in by["DG-1"]["signals"])
+    assert by["DG-2"]["concern"] == "high"      # open critical issue
+
+
+def test_watchlist_has_no_fabricated_probability(tmp_path):
+    import json
+    from arvisx import checklist_intel as ci
+    wl = ci.failure_watchlist(_wl_db(tmp_path), "one-anthem", "2026-06-14")
+    blob = json.dumps(wl)
+    assert "%" not in blob                       # the honesty line: NO fabricated probability
+    assert "probability" not in blob.lower() or "no failure" in blob.lower()
+    assert all("concern" in w and w["signals"] for w in wl)
+
+
+def test_watchlist_skips_clean_assets(tmp_path):
+    from arvisx import checklist_intel as ci
+    from arvisx.persistence import ArvisxDb
+    db = ArvisxDb(str(tmp_path / "clean.db"))
+    assert ci.failure_watchlist(db, "one-anthem", "2026-06-14") == []   # nothing flagged
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for f in fns:

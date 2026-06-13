@@ -8,6 +8,7 @@ the LLM agents reason over (they never invent these numbers).
 """
 from __future__ import annotations
 
+from collections import Counter
 from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -94,6 +95,48 @@ def compliance(db, building: str, today: str) -> Dict[str, Any]:
         if d is None or d > 7:
             stale.append({"asset": asset, "days_since_check": d})
     return analyzers.compliance_report(scheds, stale)
+
+
+def failure_watchlist(db, building: str, today: str) -> List[Dict[str, Any]]:
+    """L6, the HONEST version: a grounded rising-concern list — evidence + a concern LEVEL
+    (elevated / high), NEVER a fabricated failure probability or window. A real % needs the
+    dense sensor telemetry of Phase 1; on sparse checklist data we name the signals only."""
+    out: List[Dict[str, Any]] = []
+    for asset in assets_in(building):
+        signals: List[str] = []
+        for _t, it in items_for_asset(building, asset):
+            if it.kind != "reading":
+                continue
+            vals = [_num(e["value"]) for e in db.asset_entries(building, [it.item_id], limit=60)]
+            vals = [v for v in vals if v is not None]
+            if len(vals) >= 4:
+                tr = analyzers.trend_alert(list(reversed(vals)))
+                if tr.get("flagged") and tr["direction"] == "declining":
+                    signals.append(f"{it.label} declining ({tr['from']}→{tr['to']})")
+            if len(vals) >= 6:
+                an = analyzers.reading_anomaly(vals[1:], vals[0])
+                if an.get("flagged") and an["direction"] == "below":
+                    signals.append(f"{it.label} below normal (latest {an['latest']})")
+        issues = db.list_issues(building, asset=asset)
+        open_crit = [i for i in issues if i["status"] != "resolved" and i.get("severity") == "critical"]
+        if open_crit:
+            signals.append(f"{len(open_crit)} open critical issue(s)")
+        titles = Counter(i["title"].split(":")[0].strip() for i in issues)
+        recurring = [t for t, c in titles.items() if c >= 2]
+        if recurring:
+            signals.append("recurring: " + ", ".join(recurring))
+        sched = db.get_ppm_schedule(building, asset)
+        ppm = ppm_status(sched, today, latest_run_hours(db, building, asset)) if sched else None
+        if ppm and ppm.get("status") == "overdue":
+            signals.append("PPM overdue")
+        if not signals:
+            continue
+        concern = "high" if (open_crit or len(signals) >= 2) else "elevated"
+        out.append({"asset": asset, "concern": concern, "signals": signals,
+                    "note": "Concern level from corroborating signals — no failure "
+                            "probability/window (that needs continuous sensor data, Phase 1)."})
+    out.sort(key=lambda w: {"high": 0, "elevated": 1}.get(w["concern"], 9))
+    return out
 
 
 def asset_history(db, building: str, asset: str, today: str, limit: int = 100) -> Dict[str, Any]:

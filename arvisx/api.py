@@ -1225,6 +1225,12 @@ def create_app():
         from arvisx import checklist_intel as ci
         return {"building": building, **ci.compliance(state.db, building, _today_str())}
 
+    @app.get("/api/v1/analyzers/watchlist")
+    async def analyzers_watchlist(building: str = "one-anthem"):
+        """L6 failure watchlist — grounded rising-concern (evidence + level), NO fabricated %."""
+        from arvisx import checklist_intel as ci
+        return {"building": building, "watchlist": ci.failure_watchlist(state.db, building, _today_str())}
+
     @app.get("/api/v1/forms/run/{rid}/review")
     async def forms_run_review(rid: int):
         """L2 Supervisor: auto-review a run — missing items + reading anomalies + trends."""
