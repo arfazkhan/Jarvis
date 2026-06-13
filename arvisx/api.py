@@ -1257,6 +1257,23 @@ def create_app():
                 "missing": missing, "flagged_issues": summ["issues"],
                 "anomalies": anomalies, "trends": trends}
 
+    # ── Phase C-1: Shift Handover agent (LLM if configured, else deterministic) ──
+    @app.get("/api/v1/agents/handover")
+    async def agent_handover(building: str = "one-anthem", notify: bool = False, to: str = ""):
+        """Grounded shift-handover for the incoming shift. notify=true enqueues it (DM `to`
+        if set, else ops broadcast). Falls back to deterministic text without an LLM."""
+        from arvisx.checklist_skills import run_handover
+        llm = None
+        try:
+            from arvisx.llm_client import make_llm
+            llm = make_llm()
+        except Exception:
+            llm = None
+        res = await run_handover(llm, state.db, building, _today_str())
+        if notify:
+            state.db.enqueue_notification(building, res["text"], to_number=to, kind="handover")
+        return res
+
     @app.get("/forms")
     async def forms_page():
         from fastapi.responses import HTMLResponse
