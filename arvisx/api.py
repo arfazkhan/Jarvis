@@ -1302,6 +1302,22 @@ def create_app():
             raise HTTPException(404, f"unknown issue {issue_id}")
         return {**s, "text": render_work_order(s)}
 
+    # ── Phase C-4: Digital-Twin Q&A ("ask the building") ────────────────
+    @app.get("/api/v1/agents/ask")
+    async def agent_ask(q: str, building: str = "one-anthem"):
+        """Natural-language question about the building, answered over the health/issues/
+        history tools (grounded + guarded), with a deterministic fallback."""
+        from arvisx.checklist_skills import run_building_qa
+        if not q.strip():
+            raise HTTPException(400, "provide 'q'")
+        llm = None
+        try:
+            from arvisx.llm_client import make_llm
+            llm = make_llm()
+        except Exception:
+            llm = None
+        return await run_building_qa(llm, state.db, building, q, _today_str())
+
     @app.get("/forms")
     async def forms_page():
         from fastapi.responses import HTMLResponse

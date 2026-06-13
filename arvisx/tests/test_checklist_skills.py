@@ -6,7 +6,8 @@ import asyncio
 
 from arvisx.checklist_skills import (gather_handover, render_handover, run_handover,
                                      gather_rca, render_rca, run_rca,
-                                     suggest_work_order, render_work_order)
+                                     suggest_work_order, render_work_order,
+                                     building_qa_deterministic, run_building_qa)
 from arvisx.persistence import ArvisxDb
 
 T = "2026-06-14"
@@ -157,6 +158,42 @@ def test_work_order_action_from_rca(tmp_path):
 def test_work_order_unknown_issue(tmp_path):
     db = ArvisxDb(str(tmp_path / "wo4.db"))
     assert suggest_work_order(db, "one-anthem", 999, T) == {}
+
+
+# ── C-4 Digital-Twin Q&A ─────────────────────────────────────────────────
+def test_qa_riskiest_system(tmp_path):
+    db = ArvisxDb(str(tmp_path / "qa.db"))
+    db.create_issue("one-anthem", "DG-2 panel: FAULT", asset="DG-2", severity="critical", source="auto")
+    ans = building_qa_deterministic(db, "one-anthem", T, "what's the riskiest system?")
+    assert "Riskiest systems" in ans and "DG-2" in ans
+
+
+def test_qa_open_issues(tmp_path):
+    db = ArvisxDb(str(tmp_path / "qa2.db"))
+    db.create_issue("one-anthem", "WTP leakage: DETECTED", asset="WTP", source="auto")
+    ans = building_qa_deterministic(db, "one-anthem", T, "what is open right now?")
+    assert "Open issues" in ans and "WTP leakage" in ans
+
+
+def test_qa_default_overview(tmp_path):
+    db = ArvisxDb(str(tmp_path / "qa3.db"))
+    ans = building_qa_deterministic(db, "one-anthem", T, "hello")
+    assert "Building overview" in ans
+
+
+def test_run_qa_deterministic_without_llm(tmp_path):
+    db = ArvisxDb(str(tmp_path / "qa4.db"))
+    db.create_issue("one-anthem", "DG-2 panel: FAULT", asset="DG-2", severity="critical", source="auto")
+    res = asyncio.run(run_building_qa(None, db, "one-anthem", "riskiest system?", T))
+    assert res["source"] == "deterministic" and "DG-2" in res["text"]
+
+
+def test_run_qa_fallback_on_fabricated_number(tmp_path):
+    db = ArvisxDb(str(tmp_path / "qa5.db"))
+    db.create_issue("one-anthem", "DG-2 panel: FAULT", asset="DG-2", severity="critical", source="auto")
+    llm = _FakeLLM("The riskiest system is DG-2 at 41% with 5 faults pending.")  # 41/5 not in evidence... 5 is single
+    res = asyncio.run(run_building_qa(llm, db, "one-anthem", "riskiest?", T))
+    assert res["source"] == "deterministic"          # 41 ungrounded → fell back
 
 
 if __name__ == "__main__":

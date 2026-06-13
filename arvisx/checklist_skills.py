@@ -276,3 +276,46 @@ def render_work_order(s: Dict[str, Any]) -> str:
         f"Required team: {s['required_team']}",
         f"Suggested action: {s['suggested_action']}", "",
         "Reply 'create work order' to raise it."]))
+
+
+# ── C-4 Digital-Twin Q&A ("ask the building") ─────────────────────────────
+def building_qa_deterministic(db, building: str, today: str, question: str) -> str:
+    """Grounded fallback for the common questions — riskiest system, what's open, overview."""
+    q = (question or "").lower()
+    health = intel.asset_health_all(db, building, today)
+    if any(w in q for w in ("risk", "worst", "attention", "danger", "bad")):
+        risky = [h for h in health if h["band"] != "good"][:3] or health[:3]
+        L = ["*Riskiest systems:*"]
+        for h in risky:
+            why = f" — {', '.join(h['reasons'])}" if h["reasons"] else ""
+            L.append(f"• {h['asset']}: {h['score']}/100 ({h['band']}){why}")
+        return "\n".join(L)
+    if any(w in q for w in ("open", "issue", "problem", "fault", "pending")):
+        oi = [i for i in db.list_issues(building) if i["status"] != "resolved"]
+        if not oi:
+            return "No open issues."
+        return "*Open issues:*\n" + "\n".join(f"• {i['title']} [{i['status']}]" for i in oi[:8])
+    top = health[:3]
+    return ("*Building overview:*\n" + "\n".join(f"• {h['asset']}: {h['score']}/100" for h in top)
+            + "\nAsk 'riskiest system?' or 'what's open?'")
+
+
+_QA_SYSTEM = (
+    "You are ArvisX's building assistant. Answer the user's question about the building using "
+    "ONLY the tools (health_overview, open_issues, asset_history, reading_anomalies, compliance, "
+    "list_assets). Cite the asset and the figure from the tools. Concise, operational. If the "
+    "data isn't there, say so — never invent a number or a status."
+)
+
+
+async def run_building_qa(llm, db, building: str, question: str, today: str) -> Dict[str, Any]:
+    if llm is not None:
+        try:
+            ctx = build_ctx(db, building, today)
+            out = await run_agent(llm, _QA_SYSTEM, question, ctx)
+            text = (out.get("text") or "").strip()
+            if text and verify_grounded(text, out.get("evidence"))["grounded"]:
+                return {"text": text, "source": "agent"}
+        except Exception:
+            pass
+    return {"text": building_qa_deterministic(db, building, today, question), "source": "deterministic"}
