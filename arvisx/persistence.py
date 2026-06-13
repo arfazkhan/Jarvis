@@ -78,6 +78,22 @@ class ArvisxDb:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, ts TEXT,
                 by_user TEXT, text TEXT, status TEXT);
             CREATE INDEX IF NOT EXISTS ix_resident_req ON resident_requests(building_id, status, ts);
+            -- Phase-0 digitized checklists: a run is one filled sheet (shift+date, or
+            -- a PPM asset-block); entries are per-item (server-timestamped); signoffs
+            -- are the technician→supervisor→…→president chain.
+            CREATE TABLE IF NOT EXISTS checklist_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, template_id TEXT,
+                asset TEXT, shift_date TEXT, technician TEXT, status TEXT,
+                started_at TEXT, submitted_at TEXT);
+            CREATE INDEX IF NOT EXISTS ix_cl_runs ON checklist_runs(building_id, shift_date, template_id);
+            CREATE TABLE IF NOT EXISTS checklist_run_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER, item_id TEXT,
+                value TEXT, status TEXT, note TEXT, is_issue INTEGER, ts TEXT);
+            CREATE INDEX IF NOT EXISTS ix_cl_entries ON checklist_run_entries(run_id, item_id);
+            CREATE TABLE IF NOT EXISTS checklist_signoffs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER, role TEXT,
+                by_user TEXT, ts TEXT);
+            CREATE INDEX IF NOT EXISTS ix_cl_signoffs ON checklist_signoffs(run_id, role);
             """)
         self._siglog_last: Dict[tuple, datetime] = {}   # (asset, signal) → last logged ts
 
@@ -309,3 +325,68 @@ class ArvisxDb:
         with self._lock, self._conn() as c:
             c.execute("UPDATE resident_requests SET status=? WHERE building_id=? AND id=?",
                       (status, self.building_id, request_id))
+
+    # ── Phase-0 checklist runs / entries / sign-offs ─────────────────────
+    def create_checklist_run(self, building_id: str, template_id: str, shift_date: str,
+                             technician: str = "", asset: str = "") -> int:
+        with self._lock, self._conn() as c:
+            cur = c.execute(
+                "INSERT INTO checklist_runs (building_id, template_id, asset, shift_date,"
+                " technician, status, started_at, submitted_at) VALUES (?,?,?,?,?,?,?,?)",
+                (building_id, template_id, asset, shift_date, technician, "open",
+                 datetime.now().isoformat(timespec="seconds"), None))
+            return int(cur.lastrowid)
+
+    def find_open_run(self, building_id: str, template_id: str, shift_date: str,
+                      asset: str = "") -> Optional[int]:
+        with self._lock, self._conn() as c:
+            r = c.execute(
+                "SELECT id FROM checklist_runs WHERE building_id=? AND template_id=? AND"
+                " shift_date=? AND asset=? AND status='open' ORDER BY id DESC LIMIT 1",
+                (building_id, template_id, shift_date, asset)).fetchone()
+            return int(r["id"]) if r else None
+
+    def get_checklist_run(self, run_id: int) -> Optional[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT * FROM checklist_runs WHERE id=?", (run_id,)).fetchone()
+            return dict(r) if r else None
+
+    def save_checklist_entry(self, run_id: int, item_id: str, value: str = "", status: str = "",
+                             note: str = "", is_issue: bool = False) -> None:
+        """Upsert one item's entry (operator may correct before submit). Server-timestamped."""
+        with self._lock, self._conn() as c:
+            c.execute("DELETE FROM checklist_run_entries WHERE run_id=? AND item_id=?",
+                      (run_id, item_id))
+            c.execute("INSERT INTO checklist_run_entries (run_id, item_id, value, status, note,"
+                      " is_issue, ts) VALUES (?,?,?,?,?,?,?)",
+                      (run_id, item_id, value, status, note, 1 if is_issue else 0,
+                       datetime.now().isoformat(timespec="seconds")))
+
+    def checklist_entries(self, run_id: int) -> Dict[str, Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            rows = c.execute("SELECT * FROM checklist_run_entries WHERE run_id=?", (run_id,)).fetchall()
+        return {r["item_id"]: {"value": r["value"], "status": r["status"], "note": r["note"],
+                               "is_issue": bool(r["is_issue"]), "ts": r["ts"]} for r in rows}
+
+    def submit_checklist_run(self, run_id: int) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE checklist_runs SET status='submitted', submitted_at=? WHERE id=?",
+                      (datetime.now().isoformat(timespec="seconds"), run_id))
+
+    def add_checklist_signoff(self, run_id: int, role: str, by_user: str = "") -> None:
+        with self._lock, self._conn() as c:
+            c.execute("DELETE FROM checklist_signoffs WHERE run_id=? AND role=?", (run_id, role))
+            c.execute("INSERT INTO checklist_signoffs (run_id, role, by_user, ts) VALUES (?,?,?,?)",
+                      (run_id, role, by_user, datetime.now().isoformat(timespec="seconds")))
+
+    def checklist_signoffs(self, run_id: int) -> List[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            rows = c.execute("SELECT role, by_user, ts FROM checklist_signoffs WHERE run_id=?"
+                             " ORDER BY ts", (run_id,)).fetchall()
+            return [dict(r) for r in rows]
+
+    def checklist_runs_for(self, building_id: str, shift_date: str) -> List[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            rows = c.execute("SELECT * FROM checklist_runs WHERE building_id=? AND shift_date=?"
+                             " ORDER BY id", (building_id, shift_date)).fetchall()
+            return [dict(r) for r in rows]

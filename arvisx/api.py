@@ -829,6 +829,135 @@ def create_app():
             status=parsed["status"], note=parsed["note"], by_user=str(p.get("by", "")))
         return {"recorded": True, **parsed}
 
+    # ── Phase-0 digitized checklists (NO sensors) — the paper-sheet replacement ──
+    def _today_str() -> str:
+        return datetime.now().strftime("%Y-%m-%d")
+
+    def _run_view(rid: int) -> Dict[str, Any]:
+        from arvisx.checklist_forms import get_template, run_summary
+        run = state.db.get_checklist_run(rid)
+        if not run:
+            raise HTTPException(404, f"unknown run {rid}")
+        tmpl = get_template(run["template_id"], run["building_id"])
+        if tmpl is None:
+            raise HTTPException(404, f"unknown template {run['template_id']}")
+        entries = state.db.checklist_entries(rid)
+        return {"run": run, "template": tmpl.to_dict(), "entries": entries,
+                "summary": run_summary(tmpl, entries),
+                "signoffs": state.db.checklist_signoffs(rid)}
+
+    @app.get("/api/v1/forms/templates")
+    async def forms_templates(building: str = "one-anthem"):
+        from arvisx.checklist_forms import templates_for
+        return {"building": building,
+                "templates": [{"template_id": t.template_id, "name": t.name,
+                               "cadence": t.cadence, "timing": t.timing,
+                               "items": len(t.all_items()), "per_asset": t.per_asset}
+                              for t in templates_for(building)]}
+
+    @app.get("/api/v1/forms/template/{tid}")
+    async def forms_template(tid: str, building: str = "one-anthem"):
+        from arvisx.checklist_forms import get_template
+        t = get_template(tid, building)
+        if t is None:
+            raise HTTPException(404, f"unknown template {tid}")
+        return t.to_dict()
+
+    @app.post("/api/v1/forms/run")
+    async def forms_start_run(payload: Dict[str, Any] = Body(...)):
+        """Start (or resume) a checklist run for a template+date(+asset). Resuming an
+        OPEN run is intentional — one sheet per shift/day, entries accumulate."""
+        from arvisx.checklist_forms import get_template
+        p = payload or {}
+        tid = str(p.get("template_id", "")).strip()
+        building = str(p.get("building", "one-anthem")).strip() or "one-anthem"
+        if get_template(tid, building) is None:
+            raise HTTPException(400, f"unknown template '{tid}'")
+        date = str(p.get("date", "")).strip() or _today_str()
+        asset = str(p.get("asset", "")).strip()
+        rid = state.db.find_open_run(building, tid, date, asset)
+        if rid is None:
+            rid = state.db.create_checklist_run(building, tid, date,
+                                                technician=str(p.get("technician", "")).strip(), asset=asset)
+        return _run_view(rid)
+
+    @app.get("/api/v1/forms/run/{rid}")
+    async def forms_get_run(rid: int):
+        return _run_view(rid)
+
+    @app.post("/api/v1/forms/run/{rid}/entry")
+    async def forms_save_entry(rid: int, payload: Dict[str, Any] = Body(...)):
+        from arvisx.checklist_forms import get_template, entry_is_issue
+        run = state.db.get_checklist_run(rid)
+        if not run:
+            raise HTTPException(404, f"unknown run {rid}")
+        if run["status"] != "open":
+            raise HTTPException(409, "run already submitted — cannot edit")
+        tmpl = get_template(run["template_id"], run["building_id"])
+        p = payload or {}
+        item_id = str(p.get("item_id", "")).strip()
+        item = next((i for i in tmpl.all_items() if i.item_id == item_id), None)
+        if item is None:
+            raise HTTPException(400, f"unknown item '{item_id}'")
+        value = p.get("value", "")
+        status = str(p.get("status", "")).strip().lower()
+        flagged = entry_is_issue(item, value, status)
+        state.db.save_checklist_entry(rid, item_id, value=str(value), status=status,
+                                      note=str(p.get("note", "")), is_issue=flagged)
+        return {"saved": True, "item_id": item_id, "is_issue": flagged,
+                "summary": _run_view(rid)["summary"]}
+
+    @app.post("/api/v1/forms/run/{rid}/submit")
+    async def forms_submit_run(rid: int):
+        if not state.db.get_checklist_run(rid):
+            raise HTTPException(404, f"unknown run {rid}")
+        state.db.submit_checklist_run(rid)
+        return _run_view(rid)
+
+    @app.post("/api/v1/forms/run/{rid}/signoff")
+    async def forms_signoff(rid: int, payload: Dict[str, Any] = Body(...)):
+        if not state.db.get_checklist_run(rid):
+            raise HTTPException(404, f"unknown run {rid}")
+        p = payload or {}
+        role = str(p.get("role", "")).strip().lower()
+        if not role:
+            raise HTTPException(400, "provide 'role'")
+        state.db.add_checklist_signoff(rid, role, by_user=str(p.get("by", "")).strip())
+        return _run_view(rid)
+
+    @app.get("/api/v1/forms/today")
+    async def forms_today(building: str = "one-anthem", date: str = ""):
+        """Manager view: every run for the day with completion % + open issues."""
+        from arvisx.checklist_forms import get_template, run_summary
+        date = date or _today_str()
+        out = []
+        for run in state.db.checklist_runs_for(building, date):
+            tmpl = get_template(run["template_id"], building)
+            if tmpl is None:
+                continue
+            summ = run_summary(tmpl, state.db.checklist_entries(run["id"]))
+            out.append({"run_id": run["id"], "template_id": run["template_id"],
+                        "name": tmpl.name, "status": run["status"],
+                        "technician": run["technician"], "asset": run["asset"],
+                        "completion_pct": summ["completion_pct"], "issues": summ["issues"],
+                        "signoffs": [s["role"] for s in state.db.checklist_signoffs(run["id"])]})
+        return {"building": building, "date": date, "runs": out}
+
+    @app.get("/api/v1/forms/digest")
+    async def forms_digest(building: str = "one-anthem", date: str = ""):
+        """WhatsApp-ready manager digest of today's checklists (completion, issues,
+        sign-off). The bot can push this once a day / on shift close."""
+        from arvisx.checklist_forms import manager_digest
+        date = date or _today_str()
+        runs = (await forms_today(building, date))["runs"]
+        return {"date": date, "text": manager_digest(runs, date)}
+
+    @app.get("/forms")
+    async def forms_page():
+        from fastapi.responses import HTMLResponse
+        from arvisx.checklist_form_page import FORM_HTML
+        return HTMLResponse(FORM_HTML)
+
     @app.post("/api/v1/scenario/{name}")
     async def scenario(name: str):
         state.set_scenario(name)
