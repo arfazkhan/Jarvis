@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 
 from arvisx.checklist_skills import (gather_handover, render_handover, run_handover,
-                                     gather_rca, render_rca, run_rca)
+                                     gather_rca, render_rca, run_rca,
+                                     suggest_work_order, render_work_order)
 from arvisx.persistence import ArvisxDb
 
 T = "2026-06-14"
@@ -120,6 +121,42 @@ def test_run_rca_falls_back_on_fabricated_number(tmp_path):
     llm = _FakeLLM("Root cause: failure probability 73% over 40 days.")
     res = asyncio.run(run_rca(llm, db, "one-anthem", "DG-1", T))
     assert res["source"] == "deterministic-fallback" and "73" not in res["text"]
+
+
+# ── C-3 Work-Order agent ────────────────────────────────────────────────
+def test_work_order_classifies_electrical(tmp_path):
+    db = ArvisxDb(str(tmp_path / "wo.db"))
+    iid = db.create_issue("one-anthem", "DG-2 panel: FAULT", asset="DG-2", severity="critical",
+                          source="auto")
+    s = suggest_work_order(db, "one-anthem", iid, T)
+    assert s["category"] == "Electrical" and s["required_team"] == "Electrical"
+    assert s["priority"] == "High"                  # critical → High
+    assert render_work_order(s).count("create work order") == 1
+
+
+def test_work_order_plumbing_and_safety(tmp_path):
+    db = ArvisxDb(str(tmp_path / "wo2.db"))
+    leak = db.create_issue("one-anthem", "WTP leakage: DETECTED", asset="WTP", source="auto")
+    fire = db.create_issue("one-anthem", "Fire alarm: OFF", asset="FIRE-PANEL", severity="critical",
+                           source="auto")
+    assert suggest_work_order(db, "one-anthem", leak, T)["category"] == "Plumbing"
+    fs = suggest_work_order(db, "one-anthem", fire, T)
+    assert fs["category"] == "Safety" and fs["required_team"] == "Fire-Safety"
+
+
+def test_work_order_action_from_rca(tmp_path):
+    db = ArvisxDb(str(tmp_path / "wo3.db"))
+    for v in (25.0, 24.0, 23.0, 22.0):
+        rid = db.create_checklist_run("one-anthem", "ANTHEM-SHIFT-3", T)
+        db.save_checklist_entry(rid, "dg_battery_v", value=str(v))
+    iid = db.create_issue("one-anthem", "DG-1 battery low", asset="DG-1", source="auto")
+    s = suggest_work_order(db, "one-anthem", iid, T)
+    assert "load test" in s["suggested_action"].lower()   # borrowed from the battery RCA
+
+
+def test_work_order_unknown_issue(tmp_path):
+    db = ArvisxDb(str(tmp_path / "wo4.db"))
+    assert suggest_work_order(db, "one-anthem", 999, T) == {}
 
 
 if __name__ == "__main__":

@@ -1291,6 +1291,17 @@ def create_app():
             state.db.enqueue_notification(building, res["text"], to_number=to, kind="rca")
         return res
 
+    # ── Phase C-3: Work-Order agent (deterministic classification) ──────
+    @app.get("/api/v1/agents/work-order")
+    async def agent_work_order(issue_id: int, building: str = "one-anthem"):
+        """Suggest a work order for an issue: category / priority / required team / action
+        (action from the grounded RCA). Pure rules — human confirms before raising."""
+        from arvisx.checklist_skills import suggest_work_order, render_work_order
+        s = suggest_work_order(state.db, building, issue_id, _today_str())
+        if not s:
+            raise HTTPException(404, f"unknown issue {issue_id}")
+        return {**s, "text": render_work_order(s)}
+
     @app.get("/forms")
     async def forms_page():
         from fastapi.responses import HTMLResponse

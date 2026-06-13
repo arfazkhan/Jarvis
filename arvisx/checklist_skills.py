@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+import re
 from collections import Counter
 
 from arvisx import checklist_intel as intel
@@ -221,3 +222,57 @@ async def run_rca(llm, db, building: str, asset: str, today: str) -> Dict[str, A
         pass
     return {"asset": asset, "text": deterministic, "source": "deterministic-fallback",
             "confidence": data["confidence"], "probable_cause": data["probable_cause"]}
+
+
+# ── C-3 Work-Order agent (pure classification — deterministic by principle) ─
+# Category/team is a routing decision, not reasoning → rules, not LLM. The suggested
+# action is borrowed from the grounded RCA when available.
+_CATEGORY_RULES = [
+    (r"FIRE", "Safety", "Fire-Safety"),
+    (r"DG\b|TRANSFORMER|MSB|SSB|PANEL|BATTERY|ELECTRIC", "Electrical", "Electrical"),
+    (r"LEAK|TANK|WTP|BOREWELL|WATER|PLUMB", "Plumbing", "Plumbing"),
+    (r"PUMP|BLOWER|STP|POOL|MOTOR|BEARING", "Mechanical", "Mechanical"),
+    (r"LIFT|ELEVATOR", "Mechanical", "Lift-Vendor"),
+]
+_DEFAULT_ACTION = {
+    "Electrical": "Inspect connections, breakers and load; rectify and log.",
+    "Plumbing": "Inspect supply line and fittings for leakage; rectify and log.",
+    "Mechanical": "Inspect for wear/vibration/noise; service the unit.",
+    "Safety": "Verify the safety system and restore to normal; escalate if not resolved.",
+    "General": "Inspect on site and rectify.",
+}
+
+
+def _classify(asset: str, title: str) -> tuple:
+    s = f"{asset} {title}".upper()
+    for pat, cat, team in _CATEGORY_RULES:
+        if re.search(pat, s):
+            return cat, team
+    return "General", "Maintenance"
+
+
+def suggest_work_order(db, building: str, issue_id: int, today: str) -> Dict[str, Any]:
+    iss = db.get_issue(issue_id)
+    if not iss:
+        return {}
+    asset = iss.get("asset") or ""
+    cat, team = _classify(asset, iss.get("title", ""))
+    priority = "High" if iss.get("severity") == "critical" else "Medium"
+    rca = gather_rca(db, building, asset, today) if asset else {}
+    action = rca.get("recommended_action") or _DEFAULT_ACTION.get(cat, _DEFAULT_ACTION["General"])
+    return {"issue_id": issue_id, "asset": asset, "observation": iss.get("title", ""),
+            "category": cat, "required_team": team, "priority": priority,
+            "suggested_action": action}
+
+
+def render_work_order(s: Dict[str, Any]) -> str:
+    if not s:
+        return "Unknown issue — nothing to draft."
+    return ("\n".join([
+        f"*Suggested Work Order — {s['asset'] or 'general'}*", "",
+        f"Observation: {s['observation']}",
+        f"Category: {s['category']}",
+        f"Priority: {s['priority']}",
+        f"Required team: {s['required_team']}",
+        f"Suggested action: {s['suggested_action']}", "",
+        "Reply 'create work order' to raise it."]))
