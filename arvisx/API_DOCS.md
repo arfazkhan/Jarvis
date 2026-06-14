@@ -254,6 +254,18 @@ Partial updates allowed (omitted fields keep current values). → `{"saved":true
 ```
 `band` ∈ good (≥85) / watch (≥60) / risk.
 
+### GET /analyzers/readiness  — one building score (Maintenance Readiness)
+0.7·(weighted asset health) + 0.3·(today's round completion) − PPM penalty. Maintenance/
+inspection readiness from checklist data — **not** live equipment condition (sensors upgrade
+the same score in Phase 1). A day with no completed rounds is capped at 60.
+```json
+{ "building":"one-anthem","label":"Maintenance Readiness","readiness":64,"band":"Attention Required",
+  "components":{"asset_health_avg":87,"rounds_completion_avg":8,"overdue_ppm":0,"compliance_penalty":0},
+  "contributors":["DG-2: 55/100 (1 critical issue(s))","rounds 8% complete today"],
+  "assets_assessed":13,"note":"...not live equipment condition (sensors, Phase 1)..." }
+```
+`band`: Healthy ≥80 / Attention ≥50 / Critical.
+
 ### GET /analyzers/compliance  — L8
 ```json
 { "building":"one-anthem","compliance_risk":"high",
