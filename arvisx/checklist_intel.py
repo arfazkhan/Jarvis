@@ -187,6 +187,57 @@ def failure_watchlist(db, building: str, today: str) -> List[Dict[str, Any]]:
     return out
 
 
+def building_readiness(db, building: str, today: str) -> Dict[str, Any]:
+    """One building score from the checklist data — MAINTENANCE readiness (is the building
+    being properly inspected + maintained), NOT live equipment condition (that needs
+    sensors). Transparent: returns its components so it's explainable. Honest: a day with
+    no completed rounds is capped — you can't claim readiness you didn't verify.
+
+    readiness = 0.7·(weighted asset health) + 0.3·(today's round completion) − PPM penalty.
+    Risk-band assets weigh heavier so one bad asset realistically drags the score down."""
+    assets = asset_health_all(db, building, today)          # riskiest first
+    w = {"risk": 2.0, "watch": 1.5, "good": 1.0}
+    if assets:
+        num = sum(a["score"] * w.get(a["band"], 1.0) for a in assets)
+        den = sum(w.get(a["band"], 1.0) for a in assets)
+        health = num / den
+    else:
+        health = 100.0
+    comps = []
+    for r in db.checklist_runs_for(building, today):
+        t = get_template(r["template_id"], building)
+        if t:
+            comps.append(run_summary(t, db.checklist_entries(r["id"]))["completion_pct"])
+    completion = (sum(comps) / len(comps)) if comps else 0.0
+    no_rounds = not comps
+    comp = compliance(db, building, today)
+    overdue_n = len(comp.get("overdue_ppm") or [])
+    penalty = min(20, 5 * overdue_n)
+    readiness = 0.7 * health + 0.3 * completion - penalty
+    if no_rounds:
+        readiness = min(readiness, 60.0)                   # unverified today → can't be "healthy"
+    readiness = max(0.0, min(100.0, round(readiness)))
+    band = "Healthy" if readiness >= 80 else ("Attention Required" if readiness >= 50 else "Critical")
+    contributors = []
+    for a in assets[:3]:
+        if a["band"] != "good":
+            why = f" ({', '.join(a['reasons'])})" if a["reasons"] else ""
+            contributors.append(f"{a['asset']}: {a['score']}/100{why}")
+    if overdue_n:
+        contributors.append(f"{overdue_n} PPM overdue")
+    if no_rounds:
+        contributors.append("no rounds completed today")
+    elif completion < 100:
+        contributors.append(f"rounds {completion:.0f}% complete today")
+    return {"label": "Maintenance Readiness", "readiness": readiness, "band": band,
+            "components": {"asset_health_avg": round(health),
+                           "rounds_completion_avg": round(completion),
+                           "overdue_ppm": overdue_n, "compliance_penalty": penalty},
+            "contributors": contributors, "assets_assessed": len(assets),
+            "note": "Maintenance/inspection readiness from checklist data — not live equipment "
+                    "condition (sensors, Phase 1, upgrade this same score to real-time)."}
+
+
 def asset_history(db, building: str, asset: str, today: str, limit: int = 100) -> Dict[str, Any]:
     ids = [it.item_id for _t, it in items_for_asset(building, asset)]
     entries = db.asset_entries(building, ids, limit=limit)

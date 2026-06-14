@@ -1356,6 +1356,14 @@ def create_app():
         from arvisx import checklist_intel as ci
         return {"building": building, **ci.compliance(state.db, building, _today_str())}
 
+    @app.get("/api/v1/analyzers/readiness")
+    async def analyzers_readiness(building: str = "one-anthem"):
+        """One building score (Maintenance Readiness) from checklist data — weighted asset
+        health + round completion − PPM penalty, with its components shown. NOT live
+        equipment condition (sensors upgrade the same score in Phase 1)."""
+        from arvisx import checklist_intel as ci
+        return {"building": building, **ci.building_readiness(state.db, building, _today_str())}
+
     @app.get("/api/v1/analyzers/watchlist")
     async def analyzers_watchlist(building: str = "one-anthem"):
         """L6 failure watchlist — grounded rising-concern (evidence + level), NO fabricated %."""

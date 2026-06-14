@@ -125,6 +125,41 @@ def test_watchlist_skips_clean_assets(tmp_path):
     assert ci.failure_watchlist(db, "one-anthem", "2026-06-14") == []   # nothing flagged
 
 
+# ── building (maintenance) readiness ────────────────────────────────────
+def test_readiness_no_rounds_is_capped(tmp_path):
+    from arvisx import checklist_intel as ci
+    from arvisx.persistence import ArvisxDb
+    db = ArvisxDb(str(tmp_path / "rdy.db"))
+    r = ci.building_readiness(db, "one-anthem", "2026-06-14")
+    assert r["label"] == "Maintenance Readiness"
+    assert r["readiness"] <= 60                       # nothing inspected today → can't be healthy
+    assert "no rounds completed today" in r["contributors"]
+    assert r["components"]["rounds_completion_avg"] == 0
+
+
+def test_readiness_drops_with_critical_issue(tmp_path):
+    from datetime import datetime
+    from arvisx import checklist_intel as ci
+    from arvisx.persistence import ArvisxDb
+    db = ArvisxDb(str(tmp_path / "rdy2.db"))
+    today = datetime.now().strftime("%Y-%m-%d")
+    clean = ci.building_readiness(db, "one-anthem", today)["readiness"]
+    db.create_issue("one-anthem", "DG-2 panel: FAULT", asset="DG-2", severity="critical", source="auto")
+    worse = ci.building_readiness(db, "one-anthem", today)["readiness"]
+    assert worse < clean
+    r = ci.building_readiness(db, "one-anthem", today)
+    assert any("DG-2" in c for c in r["contributors"])
+
+
+def test_readiness_components_present(tmp_path):
+    from arvisx import checklist_intel as ci
+    from arvisx.persistence import ArvisxDb
+    db = ArvisxDb(str(tmp_path / "rdy3.db"))
+    comp = ci.building_readiness(db, "one-anthem", "2026-06-14")["components"]
+    for k in ("asset_health_avg", "rounds_completion_avg", "overdue_ppm", "compliance_penalty"):
+        assert k in comp
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for f in fns:
