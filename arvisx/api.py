@@ -1219,9 +1219,9 @@ def create_app():
         from arvisx import checklist_intel as ci
         remind_h = float(os.environ.get("ARVISX_ROUND_REMIND_H", "6"))
         esc_h = float(os.environ.get("ARVISX_ROUND_ESCALATE_H", "10"))
-        return {"building": building,
-                "fired": ci.round_reminders(state.db, building, remind_after_h=remind_h,
-                                            escalate_after_h=esc_h)}
+        lapsed = ci.lapse_stale_rounds(state.db, building, _today_str())   # prior-day open → terminal
+        fired = ci.round_reminders(state.db, building, remind_after_h=remind_h, escalate_after_h=esc_h)
+        return {"building": building, "lapsed": lapsed, "fired": fired}
 
     @app.get("/api/v1/analyzers/vendors")
     async def analyzers_vendors(building: str = "one-anthem"):
@@ -1270,9 +1270,17 @@ def create_app():
         """WhatsApp-ready manager digest of today's checklists (completion, issues,
         sign-off). The bot can push this once a day / on shift close."""
         from arvisx.checklist_forms import manager_digest
+        from arvisx import checklist_intel as ci
         date = date or _today_str()
         runs = (await forms_today(building, date))["runs"]
-        return {"date": date, "text": manager_digest(runs, date)}
+        text = manager_digest(runs, date)
+        aged = ci.aged_open_issues(state.db, building)        # Fix #2 — aged issues can't fade
+        if aged:
+            text += "\n\n*⏳ Aged open issues (>2d):*\n" + "\n".join(
+                f"• {a['title']} — {a['age_days']:.0f}d [{a['status']}]"
+                + (f" → {a['assignee'] or a['vendor']}" if (a['assignee'] or a['vendor']) else "")
+                for a in aged[:6])
+        return {"date": date, "text": text, "aged_open_issues": aged}
 
     # ── Phase-S substrate: asset registry, asset history, PPM scheduling ──
     def _latest_run_hours(building: str, asset: str):

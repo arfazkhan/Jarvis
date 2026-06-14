@@ -367,6 +367,51 @@ def test_round_reminders_skip_complete_and_submitted(tmp_path):
     assert ci.round_reminders(db, "one-anthem") == []
 
 
+# ── Fix #1: incomplete prior-day rounds get a terminal (lapse) ──────────
+def test_lapse_stale_rounds(tmp_path):
+    from arvisx import checklist_intel as ci
+    db = ArvisxDb(str(tmp_path / "lapse.db"))
+    yesterday = "2026-06-13"
+    rid = db.create_checklist_run("one-anthem", "ANTHEM-SHIFT-2", yesterday, assignee="Ajith")
+    db.save_checklist_entry(rid, "wtp_backwash", value="done", status="ok")   # incomplete
+    today_rid = db.create_checklist_run("one-anthem", "ANTHEM-SHIFT-2", "2026-06-14")
+    lapsed = ci.lapse_stale_rounds(db, "one-anthem", "2026-06-14")
+    assert len(lapsed) == 1 and lapsed[0]["run_id"] == rid
+    assert db.get_checklist_run(rid)["status"] == "lapsed"          # terminal reached
+    assert db.get_checklist_run(today_rid)["status"] == "open"      # today untouched
+    # idempotent — lapsed run not re-swept
+    assert ci.lapse_stale_rounds(db, "one-anthem", "2026-06-14") == []
+    assert any(n["kind"] == "round_lapsed" for n in db.pending_notifications())
+
+
+# ── Fix #2: aged open issues surface ────────────────────────────────────
+def test_aged_open_issues(tmp_path):
+    from datetime import datetime, timedelta
+    from arvisx import checklist_intel as ci
+    db = ArvisxDb(str(tmp_path / "aged.db"))
+    iid = db.create_issue("one-anthem", "STP blower FAULT", asset="STP", source="auto")
+    old = (datetime.now() - timedelta(days=3)).isoformat(timespec="seconds")
+    with db._conn() as c:
+        c.execute("UPDATE checklist_issues SET created_at=? WHERE id=?", (old, iid))
+    fresh = db.create_issue("one-anthem", "new one", asset="X", source="auto")
+    aged = ci.aged_open_issues(db, "one-anthem", days=2)
+    assert [a["id"] for a in aged] == [iid]                         # only the 3-day-old one
+    db.update_issue(iid, status="resolved", by="x")
+    assert ci.aged_open_issues(db, "one-anthem", days=2) == []      # resolved drops off
+
+
+# ── Fix #3: reopen resets the escalation clock ──────────────────────────
+def test_reopen_resets_escalation(tmp_path):
+    db = ArvisxDb(str(tmp_path / "reopen.db"))
+    iid = db.create_issue("one-anthem", "DG-2 FAULT", asset="DG-2", severity="critical", source="auto")
+    db.set_issue_fields(iid, escalated_level=4)                     # was at committee
+    db.update_issue(iid, status="resolved", by="x")
+    db.update_issue(iid, status="open", by="y")                     # reopen
+    iss = db.get_issue(iid)
+    assert iss["escalated_level"] == 0                              # clock reset
+    assert any(h["action"] == "reopened" for h in iss["history"])
+
+
 if __name__ == "__main__":
     import sys, tempfile, pathlib
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

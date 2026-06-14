@@ -702,10 +702,18 @@ class ArvisxDb:
             hist = json.loads(r["history"] or "[]")
             new_status = status or r["status"]
             new_assignee = r["assignee"] if assignee is None else assignee
-            action = f"→ {status}" if status else ("assigned" if assignee is not None else "note")
+            # Reopen (resolved → open) restarts the escalation clock so it can chase again.
+            reopened = status == "open" and r["status"] == "resolved"
+            action = ("reopened" if reopened else
+                      (f"→ {status}" if status else ("assigned" if assignee is not None else "note")))
             hist.append({"ts": now, "action": action, "by": by, "note": note})
-            c.execute("UPDATE checklist_issues SET status=?, assignee=?, updated_at=?, history=? WHERE id=?",
-                      (new_status, new_assignee, now, json.dumps(hist), issue_id))
+            if reopened:
+                c.execute("UPDATE checklist_issues SET status=?, assignee=?, updated_at=?, history=?,"
+                          " escalated_level=0 WHERE id=?",
+                          (new_status, new_assignee, now, json.dumps(hist), issue_id))
+            else:
+                c.execute("UPDATE checklist_issues SET status=?, assignee=?, updated_at=?, history=? WHERE id=?",
+                          (new_status, new_assignee, now, json.dumps(hist), issue_id))
 
     def set_issue_photo(self, issue_id: int, photo: str) -> None:
         with self._lock, self._conn() as c:
@@ -754,6 +762,17 @@ class ArvisxDb:
         with self._lock, self._conn() as c:
             c.execute("UPDATE checklist_runs SET status='submitted', submitted_at=? WHERE id=?",
                       (datetime.now().isoformat(timespec="seconds"), run_id))
+
+    def open_runs_before(self, building_id: str, before_date: str) -> List[Dict[str, Any]]:
+        """Still-open runs from a PRIOR day — candidates to lapse (no terminal otherwise)."""
+        with self._lock, self._conn() as c:
+            rows = c.execute("SELECT * FROM checklist_runs WHERE building_id=? AND status='open'"
+                             " AND shift_date<? ORDER BY id", (building_id, before_date)).fetchall()
+            return [dict(r) for r in rows]
+
+    def set_run_status(self, run_id: int, status: str) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE checklist_runs SET status=? WHERE id=?", (status, run_id))
 
     def add_checklist_signoff(self, run_id: int, role: str, by_user: str = "") -> None:
         with self._lock, self._conn() as c:

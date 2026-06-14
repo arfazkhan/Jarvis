@@ -97,6 +97,49 @@ def compliance(db, building: str, today: str) -> Dict[str, Any]:
     return analyzers.compliance_report(scheds, stale)
 
 
+def lapse_stale_rounds(db, building: str, today: str) -> List[Dict[str, Any]]:
+    """Fix #1: give incomplete rounds a TERMINAL. Any run still 'open' from a prior day is
+    lapsed (status='lapsed') with a manager notice — so it never hangs open forever or
+    silently disappears after midnight. Runs that hit 100% but weren't submitted still lapse,
+    recorded with their completion."""
+    fired: List[Dict[str, Any]] = []
+    for run in db.open_runs_before(building, today):
+        tmpl = get_template(run["template_id"], building)
+        pct = 0.0
+        if tmpl is not None:
+            pct = run_summary(tmpl, db.checklist_entries(run["id"]))["completion_pct"]
+        db.set_run_status(run["id"], "lapsed")
+        name = tmpl.name if tmpl else run["template_id"]
+        who = run.get("assignee") or run.get("technician") or "unassigned"
+        db.enqueue_notification(
+            building, f"⚠️ {name} ({run['shift_date']}) closed INCOMPLETE at {pct:.0f}% "
+                      f"— assigned: {who}. Carry over / follow up.", to_number="", kind="round_lapsed")
+        fired.append({"run_id": run["id"], "shift_date": run["shift_date"], "completion_pct": pct})
+    return fired
+
+
+def aged_open_issues(db, building: str, now: Optional["datetime"] = None,
+                     days: float = 2.0) -> List[Dict[str, Any]]:
+    """Fix #2: issues open longer than `days` — so a long-unresolved issue can't fade even
+    after it hits the top of the escalation ladder. Feeds the manager digest."""
+    from datetime import datetime as _dt
+    now = now or _dt.now()
+    out = []
+    for i in db.list_issues(building):
+        if i["status"] == "resolved":
+            continue
+        try:
+            age_d = (now - _dt.fromisoformat(str(i["created_at"])[:19])).total_seconds() / 86400.0
+        except Exception:
+            continue
+        if age_d >= days:
+            out.append({"id": i["id"], "title": i["title"], "status": i["status"],
+                        "age_days": round(age_d, 1), "assignee": i.get("assignee") or "",
+                        "vendor": i.get("vendor") or ""})
+    out.sort(key=lambda x: x["age_days"], reverse=True)
+    return out
+
+
 def round_reminders(db, building: str, now: Optional["datetime"] = None,
                     remind_after_h: float = 6.0, escalate_after_h: float = 10.0) -> List[Dict[str, Any]]:
     """Chase ASSIGNED rounds that aren't finished. After remind_after_h → DM the assigned
