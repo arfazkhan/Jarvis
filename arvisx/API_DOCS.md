@@ -363,8 +363,16 @@ manager, ≥3× → committee. Issues with no `priority` fall back to severity (
   "breached_resolution":true,"escalation_level":2,"target":"supervisor" }
 ```
 
-### POST /escalations/run?building=  — the sweep (bot calls each poll)
+### POST /escalations/run?building=  — ISSUE SLA sweep (bot calls each poll)
 Escalates any open issue past its SLA, one notification per new level. → `{"building":"one-anthem","fired":[{"issue_id":3,"level":2,"target":"supervisor"}]}`
+
+### POST /forms/reminders/run?building=  — ROUND completion sweep (bot calls each poll)
+Chases assigned-but-unfinished rounds: after `ARVISX_ROUND_REMIND_H` (default 6) DMs the
+assigned technician their pending items; after `ARVISX_ROUND_ESCALATE_H` (default 10) still
+incomplete, escalates to the manager (ops). One notification per level; submitted/complete
+rounds skipped; unassigned → straight to manager.
+→ `{"building":"one-anthem","fired":[{"run_id":1,"level":1,"assignee":"Ajith"}]}`
+(`level` 1 = technician nudged, 2 = manager escalated.)
 
 ### Vendors
 - `GET /vendors?building=&all=false` → `{"building":"one-anthem","vendors":[{"id":1,"name":"ABC Power","category":"DG","contact":"98xx","active":1}]}`
