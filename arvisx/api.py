@@ -1211,6 +1211,18 @@ def create_app():
         from arvisx.sla import run_escalations
         return {"building": building, "fired": run_escalations(state.db, building)}
 
+    @app.post("/api/v1/forms/reminders/run")
+    async def round_reminders_run(building: str = "one-anthem"):
+        """Chase assigned-but-unfinished rounds: DM the technician, then escalate to the
+        manager. One notification per level. Bot calls each poll. Cutoffs via env
+        ARVISX_ROUND_REMIND_H (default 6) / ARVISX_ROUND_ESCALATE_H (default 10)."""
+        from arvisx import checklist_intel as ci
+        remind_h = float(os.environ.get("ARVISX_ROUND_REMIND_H", "6"))
+        esc_h = float(os.environ.get("ARVISX_ROUND_ESCALATE_H", "10"))
+        return {"building": building,
+                "fired": ci.round_reminders(state.db, building, remind_after_h=remind_h,
+                                            escalate_after_h=esc_h)}
+
     @app.get("/api/v1/analyzers/vendors")
     async def analyzers_vendors(building: str = "one-anthem"):
         """Vendor performance: jobs, avg response/resolution hours, escalations (slowest first)."""

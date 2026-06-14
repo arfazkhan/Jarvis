@@ -325,6 +325,48 @@ def test_custom_loader_merges_and_overrides():
         set_custom_loader(None)
 
 
+# ── round-completion reminder sweep ─────────────────────────────────────
+def test_round_reminders_nudge_then_escalate(tmp_path):
+    from datetime import datetime, timedelta
+    from arvisx import checklist_intel as ci
+    db = ArvisxDb(str(tmp_path / "rr.db"))
+    today = datetime.now().strftime("%Y-%m-%d")
+    rid = db.create_checklist_run("one-anthem", "ANTHEM-SHIFT-2", today,
+                                  technician="Ajith", assignee="Ajith")
+    db.add_technician("one-anthem", "Ajith", "919000")
+    db.save_checklist_entry(rid, "wtp_backwash", value="done", status="ok")   # ~4% done
+    # backdate start to 7h ago → past remind (6h), before escalate (10h)
+    with db._conn() as c:
+        c.execute("UPDATE checklist_runs SET started_at=? WHERE id=?",
+                  ((datetime.now() - timedelta(hours=7)).isoformat(timespec="seconds"), rid))
+    fired = ci.round_reminders(db, "one-anthem")
+    assert fired and fired[0]["level"] == 1                       # tech nudged
+    assert ci.round_reminders(db, "one-anthem") == []            # dedup — no repeat at level 1
+    n = db.pending_notifications()
+    assert any(x["kind"] == "round_reminder" and x["to_number"] == "919000" for x in n)
+
+    # now backdate to 11h → escalate to manager (ops broadcast)
+    with db._conn() as c:
+        c.execute("UPDATE checklist_runs SET started_at=? WHERE id=?",
+                  ((datetime.now() - timedelta(hours=11)).isoformat(timespec="seconds"), rid))
+    fired2 = ci.round_reminders(db, "one-anthem")
+    assert fired2 and fired2[0]["level"] == 2
+    assert any(x["kind"] == "round_escalation" and x["to_number"] == "" for x in db.pending_notifications())
+
+
+def test_round_reminders_skip_complete_and_submitted(tmp_path):
+    from datetime import datetime, timedelta
+    from arvisx import checklist_intel as ci
+    db = ArvisxDb(str(tmp_path / "rr2.db"))
+    today = datetime.now().strftime("%Y-%m-%d")
+    rid = db.create_checklist_run("one-anthem", "ANTHEM-SHIFT-2", today, assignee="Ajith")
+    with db._conn() as c:
+        c.execute("UPDATE checklist_runs SET started_at=? WHERE id=?",
+                  ((datetime.now() - timedelta(hours=12)).isoformat(timespec="seconds"), rid))
+    db.submit_checklist_run(rid)                                  # submitted → skip
+    assert ci.round_reminders(db, "one-anthem") == []
+
+
 if __name__ == "__main__":
     import sys, tempfile, pathlib
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

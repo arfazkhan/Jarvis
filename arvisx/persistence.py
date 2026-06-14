@@ -146,6 +146,8 @@ class ArvisxDb:
             cols = [r[1] for r in c.execute("PRAGMA table_info(checklist_runs)").fetchall()]
             if "assignee" not in cols:
                 c.execute("ALTER TABLE checklist_runs ADD COLUMN assignee TEXT")
+            if "reminded_level" not in cols:
+                c.execute("ALTER TABLE checklist_runs ADD COLUMN reminded_level INTEGER DEFAULT 0")
             # SLA/vendor columns on issues (added later than the table).
             icols = [r[1] for r in c.execute("PRAGMA table_info(checklist_issues)").fetchall()]
             for col, decl in (("priority", "TEXT"), ("vendor", "TEXT"),
@@ -397,6 +399,10 @@ class ArvisxDb:
     def assign_checklist_run(self, run_id: int, assignee: str) -> None:
         with self._lock, self._conn() as c:
             c.execute("UPDATE checklist_runs SET assignee=? WHERE id=?", (assignee, run_id))
+
+    def set_run_reminded(self, run_id: int, level: int) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE checklist_runs SET reminded_level=? WHERE id=?", (int(level), run_id))
 
     def runs_assigned_to(self, building_id: str, assignee: str, shift_date: str) -> List[Dict[str, Any]]:
         with self._lock, self._conn() as c:

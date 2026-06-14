@@ -97,6 +97,54 @@ def compliance(db, building: str, today: str) -> Dict[str, Any]:
     return analyzers.compliance_report(scheds, stale)
 
 
+def round_reminders(db, building: str, now: Optional["datetime"] = None,
+                    remind_after_h: float = 6.0, escalate_after_h: float = 10.0) -> List[Dict[str, Any]]:
+    """Chase ASSIGNED rounds that aren't finished. After remind_after_h → DM the assigned
+    technician (their pending items); after escalate_after_h still incomplete → escalate to
+    the manager (ops). One notification per level (reminded_level guard). Submitted/complete
+    rounds are skipped. This is the 'if not done → WhatsApp alert' half for ROUNDS (the SLA
+    sweep covers ISSUES)."""
+    from datetime import datetime as _dt
+    now = now or _dt.now()
+    today = now.strftime("%Y-%m-%d")
+    fired: List[Dict[str, Any]] = []
+    for run in db.checklist_runs_for(building, today):
+        if run.get("status") == "submitted":
+            continue
+        tmpl = get_template(run["template_id"], building)
+        if tmpl is None:
+            continue
+        summ = run_summary(tmpl, db.checklist_entries(run["id"]))
+        if summ["completion_pct"] >= 100:
+            continue
+        try:
+            age_h = (now - _dt.fromisoformat(str(run["started_at"])[:19])).total_seconds() / 3600.0
+        except Exception:
+            continue
+        prev = int(run.get("reminded_level") or 0)
+        assignee = run.get("assignee") or ""
+        pending = summ["total"] - summ["done"]
+        pct = summ["completion_pct"]
+        if age_h >= escalate_after_h and prev < 2:
+            who = assignee or "unassigned"
+            db.enqueue_notification(
+                building, f"⚠️ {tmpl.name} ({today}) only {pct:.0f}% done by {who} — "
+                          f"{pending} item(s) pending, shift closing.", to_number="", kind="round_escalation")
+            db.set_run_reminded(run["id"], 2)
+            fired.append({"run_id": run["id"], "level": 2, "assignee": assignee})
+        elif age_h >= remind_after_h and prev < 1:
+            to_number = ""
+            if assignee:
+                tech = db.get_technician(building, assignee)
+                to_number = (tech or {}).get("phone", "") or ""
+            db.enqueue_notification(
+                building, f"📋 {tmpl.name} is {pct:.0f}% done — {pending} item(s) still pending. "
+                          "Please complete before shift close.", to_number=to_number, kind="round_reminder")
+            db.set_run_reminded(run["id"], 1)
+            fired.append({"run_id": run["id"], "level": 1, "assignee": assignee})
+    return fired
+
+
 def failure_watchlist(db, building: str, today: str) -> List[Dict[str, Any]]:
     """L6, the HONEST version: a grounded rising-concern list — evidence + a concern LEVEL
     (elevated / high), NEVER a fabricated failure probability or window. A real % needs the
