@@ -23,6 +23,46 @@ pilot works with zero external dependencies.
 
 ---
 
+## 1b. Authentication & accounts
+
+There are two auth modes; they coexist:
+- **API key** (`ARVISX_API_KEY`) — server-to-server / the WhatsApp bot. Sent as
+  `X-API-Key` or `Authorization: Bearer <key>`. Acts as role **`system`** (full write).
+- **User accounts + tokens** — for the committee-facing frontend. Users have a role:
+  **owner** / **fm** (can write) · **viewer** (read-only). Login mints an HMAC-signed token
+  (JWT-shaped, 24 h TTL via `ARVISX_TOKEN_TTL`).
+
+**When is auth enforced?** When at least one user exists **or** `ARVISX_API_KEY` is set.
+With neither (local dev) the API is open and every request is role `system`.
+
+**Write gating:** any non-GET request needs `owner` / `fm` / `system`; a `viewer` token gets
+**403**. Reads need any valid identity (or open dev mode).
+
+### Bootstrap the first admin
+On first boot with no users, set `ARVISX_ADMIN_USER` + `ARVISX_ADMIN_PASSWORD` → an `owner`
+account is created automatically.
+
+### POST /auth/login   (exempt from auth)
+```json
+{ "username":"admin", "password":"secret" }
+```
+→ `{ "token":"<body>.<sig>", "role":"owner", "username":"admin" }`
+Use it on every call: `Authorization: Bearer <token>`.
+
+### GET /auth/me  → `{ "username":"admin", "role":"owner" }` (who the token/key resolves to).
+
+### POST /auth/users   (owner / system only — this is account creation)
+```json
+{ "username":"rahul", "password":"pw", "role":"fm" }
+```
+→ `{ "username":"rahul", "role":"fm" }`  · roles: `owner` | `fm` | `viewer`.
+
+> Note: these `auth` roles gate **API access** (read vs write). They are separate from the
+> WhatsApp **voice tiers** (resident/manager/technician) and the **checklist roster**
+> (who performs rounds) — different concepts, don't conflate.
+
+---
+
 ## 2. Checklist templates (builder)
 
 ### GET /forms/templates
@@ -440,7 +480,7 @@ exposes **legacy ArvisX platform endpoints** that are NOT part of the Phase-0 ch
 product and are out of scope here: `/commission/*` (building commissioning), `/community/*`,
 `/workorders/*`, `/water`, `/topology`, `/impact`, `/heartbeat/*`, `/watches`,
 `/investigations`, `/investigate`, `/monitor`, `/incident/*`, `/reason/*`, `/ask` (legacy),
-`/skillbook`, `/signal-quality`, `/events/stream`, `/auth/*`, `/scenario/*`, `/gas/billing`,
+`/skillbook`, `/signal-quality`, `/events/stream`, `/scenario/*`, `/gas/billing`,
 and the older `/checklist/*` (telemetry checklist, superseded by `/forms/*`). They belong to
 the sensor/commercial path; ignore them for the pilot. Everything a checklist pilot needs is
 in sections 2–12 above.
