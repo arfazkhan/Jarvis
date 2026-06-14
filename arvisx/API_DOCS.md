@@ -430,3 +430,21 @@ The bot polls these; you usually don't call them directly.
 
 All Phase-0, no hardware. Edge sensors (later) feed the same `reading` items + light up
 vision/verification — the API surface does not change for the pilot→hardware upgrade.
+
+---
+
+## 13. Scope note — endpoints NOT in this doc
+
+This document covers the **checklist + agentic AI pilot** surface only. The running API also
+exposes **legacy ArvisX platform endpoints** that are NOT part of the Phase-0 checklist
+product and are out of scope here: `/commission/*` (building commissioning), `/community/*`,
+`/workorders/*`, `/water`, `/topology`, `/impact`, `/heartbeat/*`, `/watches`,
+`/investigations`, `/investigate`, `/monitor`, `/incident/*`, `/reason/*`, `/ask` (legacy),
+`/skillbook`, `/signal-quality`, `/events/stream`, `/auth/*`, `/scenario/*`, `/gas/billing`,
+and the older `/checklist/*` (telemetry checklist, superseded by `/forms/*`). They belong to
+the sensor/commercial path; ignore them for the pilot. Everything a checklist pilot needs is
+in sections 2–12 above.
+
+Machine-readable spec: FastAPI serves the live OpenAPI at `GET /openapi.json` and Swagger UI
+at `GET /docs` — but those list ALL routes (including the legacy ones above); this doc is the
+curated pilot subset.
