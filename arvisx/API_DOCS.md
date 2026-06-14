@@ -196,7 +196,13 @@ Locks the run. → run view with `run.status":"submitted"`.
 ```
 
 ### GET /forms/digest?building=&date=  — WhatsApp-ready manager summary
-→ `{"date":"2026-06-14","text":"*Checklist summary — 2026-06-14*\n..."}`
+Includes today's rounds plus an **aged-open-issues** section (issues unresolved >2 days, so
+a long-running issue can't fade after it tops the escalation ladder).
+```json
+{ "date":"2026-06-14",
+  "text":"*Checklist summary — 2026-06-14*\n...\n\n*⏳ Aged open issues (>2d):*\n• STP blower FAULT — 3d [open] → ABC Power",
+  "aged_open_issues":[{"id":3,"title":"STP blower FAULT","status":"open","age_days":3.0,"assignee":"","vendor":"ABC Power"}] }
+```
 
 ---
 
@@ -418,13 +424,19 @@ manager, ≥3× → committee. Issues with no `priority` fall back to severity (
 ### POST /escalations/run?building=  — ISSUE SLA sweep (bot calls each poll)
 Escalates any open issue past its SLA, one notification per new level. → `{"building":"one-anthem","fired":[{"issue_id":3,"level":2,"target":"supervisor"}]}`
 
-### POST /forms/reminders/run?building=  — ROUND completion sweep (bot calls each poll)
-Chases assigned-but-unfinished rounds: after `ARVISX_ROUND_REMIND_H` (default 6) DMs the
-assigned technician their pending items; after `ARVISX_ROUND_ESCALATE_H` (default 10) still
-incomplete, escalates to the manager (ops). One notification per level; submitted/complete
-rounds skipped; unassigned → straight to manager.
-→ `{"building":"one-anthem","fired":[{"run_id":1,"level":1,"assignee":"Ajith"}]}`
-(`level` 1 = technician nudged, 2 = manager escalated.)
+### POST /forms/reminders/run?building=  — ROUND sweep + lapse (bot calls each poll)
+Two things in one sweep:
+1. **Reminders** — assigned-but-unfinished rounds today: after `ARVISX_ROUND_REMIND_H`
+   (default 6) DM the technician; after `ARVISX_ROUND_ESCALATE_H` (default 10) escalate to
+   the manager. One notification per level; submitted/complete skipped; unassigned → manager.
+2. **Lapse** — any still-`open` run from a **prior day** is closed to terminal status
+   `lapsed` (with its completion %) + a manager notice, so incomplete rounds never hang open.
+```json
+{ "building":"one-anthem",
+  "lapsed":[{"run_id":1,"shift_date":"2026-06-13","completion_pct":40}],
+  "fired":[{"run_id":7,"level":1,"assignee":"Ajith"}] }
+```
+`level` 1 = technician nudged, 2 = manager escalated. **Run terminal states: `submitted` | `lapsed`.**
 
 ### Vendors
 - `GET /vendors?building=&all=false` → `{"building":"one-anthem","vendors":[{"id":1,"name":"ABC Power","category":"DG","contact":"98xx","active":1}]}`
