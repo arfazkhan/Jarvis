@@ -1,0 +1,1206 @@
+{
+  "building_id": "one-anthem",
+  "name": "One Anthem Apartments",
+  "templates": [
+    {
+      "template_id": "ANTHEM-SHIFT-1",
+      "name": "Shift I — Daily Operations",
+      "cadence": "daily",
+      "timing": "08:00 AM – 04:15 PM",
+      "signoff_roles": [
+        "technician",
+        "supervisor",
+        "caretaker",
+        "engineer",
+        "president"
+      ],
+      "per_asset": [],
+      "sections": [
+        {
+          "name": "Fire Pump Room",
+          "items": [
+            {
+              "item_id": "fp_diesel_fuel",
+              "label": "Diesel pump fuel level",
+              "kind": "reading",
+              "unit": "%",
+              "options": [],
+              "alert_states": [],
+              "asset": "FIRE-PUMP"
+            },
+            {
+              "item_id": "fp_coolant",
+              "label": "Coolant level",
+              "kind": "reading",
+              "unit": "%",
+              "options": [],
+              "alert_states": [],
+              "asset": "FIRE-PUMP"
+            },
+            {
+              "item_id": "fp_oil",
+              "label": "Oil level",
+              "kind": "reading",
+              "unit": "%",
+              "options": [],
+              "alert_states": [],
+              "asset": "FIRE-PUMP"
+            },
+            {
+              "item_id": "fp_main_pump",
+              "label": "Main pump",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "OK",
+                "RUNNING",
+                "FAULT"
+              ],
+              "alert_states": [
+                "FAULT"
+              ],
+              "asset": "FIRE-PUMP"
+            },
+            {
+              "item_id": "fp_standby_pump",
+              "label": "Standby pump",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "OK",
+                "RUNNING",
+                "FAULT"
+              ],
+              "alert_states": [
+                "FAULT"
+              ],
+              "asset": "FIRE-PUMP"
+            },
+            {
+              "item_id": "fp_jockey_pump",
+              "label": "Jockey pump",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "OK",
+                "RUNNING",
+                "FAULT"
+              ],
+              "alert_states": [
+                "FAULT"
+              ],
+              "asset": "FIRE-PUMP"
+            }
+          ]
+        },
+        {
+          "name": "Swimming Pool",
+          "items": [
+            {
+              "item_id": "pool_vacuum",
+              "label": "Vacuuming",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": "POOL"
+            },
+            {
+              "item_id": "pool_ph",
+              "label": "pH reading",
+              "kind": "reading",
+              "unit": "pH",
+              "options": [],
+              "alert_states": [],
+              "asset": "POOL"
+            },
+            {
+              "item_id": "pool_backwash",
+              "label": "Backwash",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": "POOL"
+            },
+            {
+              "item_id": "pool_filtration",
+              "label": "Filtration",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "ON",
+                "OFF"
+              ],
+              "alert_states": [
+                "OFF"
+              ],
+              "asset": "POOL"
+            },
+            {
+              "item_id": "pool_chlorination",
+              "label": "Chlorination",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": "POOL"
+            }
+          ]
+        },
+        {
+          "name": "General Facility",
+          "items": [
+            {
+              "item_id": "gen_electrical",
+              "label": "Electrical equipment status",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "OK",
+                "FAULT"
+              ],
+              "alert_states": [
+                "FAULT"
+              ],
+              "asset": ""
+            },
+            {
+              "item_id": "gen_fire_alarm",
+              "label": "Fire alarm panel health (main ON / no fault)",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "ON",
+                "OFF",
+                "FAULT"
+              ],
+              "alert_states": [
+                "OFF",
+                "FAULT"
+              ],
+              "asset": "FIRE-PANEL"
+            },
+            {
+              "item_id": "gen_mygate",
+              "label": "MyGate ticket monitoring",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            },
+            {
+              "item_id": "gen_oh_tank",
+              "label": "OH tank water level",
+              "kind": "reading",
+              "unit": "%",
+              "options": [],
+              "alert_states": [],
+              "asset": "OH-TANK"
+            },
+            {
+              "item_id": "gen_borewell",
+              "label": "Borewell status",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "OK",
+                "OFF"
+              ],
+              "alert_states": [
+                "OFF"
+              ],
+              "asset": "BOREWELL"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "template_id": "ANTHEM-SHIFT-2",
+      "name": "Shift II — Daily Operations",
+      "cadence": "daily",
+      "timing": "12:00 AM – 08:15 PM",
+      "signoff_roles": [
+        "technician",
+        "supervisor",
+        "caretaker",
+        "engineer",
+        "president"
+      ],
+      "per_asset": [],
+      "sections": [
+        {
+          "name": "Water Treatment Plant",
+          "items": [
+            {
+              "item_id": "wtp_backwash",
+              "label": "WTP backwash",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": "WTP"
+            },
+            {
+              "item_id": "wtp_chemical",
+              "label": "Chemical addition",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": "WTP"
+            },
+            {
+              "item_id": "wtp_filtration",
+              "label": "Filtration",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "ON",
+                "OFF"
+              ],
+              "alert_states": [
+                "OFF"
+              ],
+              "asset": "WTP"
+            },
+            {
+              "item_id": "wtp_leakage",
+              "label": "Leakage detected",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "NIL",
+                "DETECTED"
+              ],
+              "alert_states": [
+                "DETECTED"
+              ],
+              "asset": "WTP"
+            }
+          ]
+        },
+        {
+          "name": "Electrical Infrastructure",
+          "items": [
+            {
+              "item_id": "el_transformer",
+              "label": "Main transformer reading",
+              "kind": "reading",
+              "unit": "V",
+              "options": [],
+              "alert_states": [],
+              "asset": "TRANSFORMER"
+            },
+            {
+              "item_id": "el_room1",
+              "label": "Electrical room-1 inspection",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            },
+            {
+              "item_id": "el_room1_msb",
+              "label": "Room-1 MSB inspection",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            },
+            {
+              "item_id": "el_room1_ssb",
+              "label": "Room-1 SSB inspection",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            },
+            {
+              "item_id": "el_room2",
+              "label": "Electrical room-2 inspection",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            },
+            {
+              "item_id": "el_room2_msb",
+              "label": "Room-2 MSB inspection",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            },
+            {
+              "item_id": "el_room2_ssb",
+              "label": "Room-2 SSB inspection",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            },
+            {
+              "item_id": "el_room3",
+              "label": "Electrical room-3 inspection",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            },
+            {
+              "item_id": "el_room3_msb",
+              "label": "Room-3 MSB inspection",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            },
+            {
+              "item_id": "el_room3_ssb",
+              "label": "Room-3 SSB inspection",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            },
+            {
+              "item_id": "el_dg1_panel",
+              "label": "DG-1 panel",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "OK",
+                "FAULT"
+              ],
+              "alert_states": [
+                "FAULT"
+              ],
+              "asset": "DG-1"
+            },
+            {
+              "item_id": "el_dg2_panel",
+              "label": "DG-2 panel",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "OK",
+                "FAULT"
+              ],
+              "alert_states": [
+                "FAULT"
+              ],
+              "asset": "DG-2"
+            }
+          ]
+        },
+        {
+          "name": "General Operations",
+          "items": [
+            {
+              "item_id": "g2_fire_alarm",
+              "label": "Fire alarm panel health (main ON / no fault)",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "ON",
+                "OFF",
+                "FAULT"
+              ],
+              "alert_states": [
+                "OFF",
+                "FAULT"
+              ],
+              "asset": "FIRE-PANEL"
+            },
+            {
+              "item_id": "g2_mygate",
+              "label": "MyGate ticket review",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            },
+            {
+              "item_id": "g2_lift",
+              "label": "Lift shaft inspection",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": "LIFT"
+            },
+            {
+              "item_id": "g2_gf_raw_tank",
+              "label": "GF raw tank water level",
+              "kind": "reading",
+              "unit": "%",
+              "options": [],
+              "alert_states": [],
+              "asset": "GF-RAW-TANK"
+            },
+            {
+              "item_id": "g2_gf_filter_tank",
+              "label": "GF filter tank water level",
+              "kind": "reading",
+              "unit": "%",
+              "options": [],
+              "alert_states": [],
+              "asset": "GF-FILTER-TANK"
+            },
+            {
+              "item_id": "g2_oh_tank",
+              "label": "OH tank water level",
+              "kind": "reading",
+              "unit": "%",
+              "options": [],
+              "alert_states": [],
+              "asset": "OH-TANK"
+            },
+            {
+              "item_id": "g2_japan_water",
+              "label": "Japan water status",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "OK",
+                "NIL"
+              ],
+              "alert_states": [
+                "NIL"
+              ],
+              "asset": ""
+            },
+            {
+              "item_id": "g2_borewell",
+              "label": "Borewell pumping status",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "OK",
+                "OFF"
+              ],
+              "alert_states": [
+                "OFF"
+              ],
+              "asset": "BOREWELL"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "template_id": "ANTHEM-SHIFT-3",
+      "name": "Shift III — Daily Operations",
+      "cadence": "daily",
+      "timing": "08:00 PM – 08:15 AM",
+      "signoff_roles": [
+        "technician",
+        "supervisor",
+        "caretaker",
+        "engineer",
+        "president"
+      ],
+      "per_asset": [],
+      "sections": [
+        {
+          "name": "Diesel Generators",
+          "items": [
+            {
+              "item_id": "dg1_status",
+              "label": "DG-1 monitoring",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "OK",
+                "RUNNING",
+                "FAULT"
+              ],
+              "alert_states": [
+                "FAULT"
+              ],
+              "asset": "DG-1"
+            },
+            {
+              "item_id": "dg2_status",
+              "label": "DG-2 monitoring",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "OK",
+                "RUNNING",
+                "FAULT"
+              ],
+              "alert_states": [
+                "FAULT"
+              ],
+              "asset": "DG-2"
+            },
+            {
+              "item_id": "dg_run_hours",
+              "label": "Run hours",
+              "kind": "reading",
+              "unit": "hrs",
+              "options": [],
+              "alert_states": [],
+              "asset": "DG-1"
+            },
+            {
+              "item_id": "dg_battery_v",
+              "label": "Battery voltage",
+              "kind": "reading",
+              "unit": "V",
+              "options": [],
+              "alert_states": [],
+              "asset": "DG-1"
+            },
+            {
+              "item_id": "dg_oil",
+              "label": "Oil level",
+              "kind": "reading",
+              "unit": "%",
+              "options": [],
+              "alert_states": [],
+              "asset": "DG-1"
+            },
+            {
+              "item_id": "dg_coolant",
+              "label": "Coolant level",
+              "kind": "reading",
+              "unit": "%",
+              "options": [],
+              "alert_states": [],
+              "asset": "DG-1"
+            },
+            {
+              "item_id": "dg_fuel",
+              "label": "Fuel level",
+              "kind": "reading",
+              "unit": "%",
+              "options": [],
+              "alert_states": [],
+              "asset": "DG-1"
+            }
+          ]
+        },
+        {
+          "name": "Sewage Treatment Plant",
+          "items": [
+            {
+              "item_id": "stp_psf_backwash",
+              "label": "PSF backwash",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": "STP"
+            },
+            {
+              "item_id": "stp_acf_backwash",
+              "label": "ACF backwash",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": "STP"
+            },
+            {
+              "item_id": "stp_chemical",
+              "label": "Chemical dosing",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": "STP"
+            },
+            {
+              "item_id": "stp_blower",
+              "label": "Blower inspection",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "OK",
+                "FAULT"
+              ],
+              "alert_states": [
+                "FAULT"
+              ],
+              "asset": "STP"
+            },
+            {
+              "item_id": "stp_sludge",
+              "label": "Sludge monitoring",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "NORMAL",
+                "HIGH"
+              ],
+              "alert_states": [
+                "HIGH"
+              ],
+              "asset": "STP"
+            },
+            {
+              "item_id": "stp_leakage",
+              "label": "Leakage check",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "NIL",
+                "DETECTED"
+              ],
+              "alert_states": [
+                "DETECTED"
+              ],
+              "asset": "STP"
+            },
+            {
+              "item_id": "stp_overflow",
+              "label": "Overflow check",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "NIL",
+                "DETECTED"
+              ],
+              "alert_states": [
+                "DETECTED"
+              ],
+              "asset": "STP"
+            }
+          ]
+        },
+        {
+          "name": "Night Operations",
+          "items": [
+            {
+              "item_id": "night_duct",
+              "label": "Duct inspection",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            },
+            {
+              "item_id": "night_server",
+              "label": "Server room inspection",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            },
+            {
+              "item_id": "night_amenities",
+              "label": "Amenities closing/opening",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            },
+            {
+              "item_id": "night_fire",
+              "label": "Fire system check",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "OK",
+                "FAULT"
+              ],
+              "alert_states": [
+                "FAULT"
+              ],
+              "asset": ""
+            },
+            {
+              "item_id": "night_water",
+              "label": "Water system check",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "OK",
+                "FAULT"
+              ],
+              "alert_states": [
+                "FAULT"
+              ],
+              "asset": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "template_id": "ANTHEM-PPM",
+      "name": "Quarterly Preventive Maintenance",
+      "cadence": "quarterly",
+      "timing": "Every 3 months",
+      "signoff_roles": [
+        "technician",
+        "engineer",
+        "president"
+      ],
+      "per_asset": [
+        "Transformer Panel",
+        "MSB",
+        "SSB",
+        "DG Panel",
+        "Distribution Panel"
+      ],
+      "sections": [
+        {
+          "name": "1. Safety & Preparation",
+          "items": [
+            {
+              "item_id": "ppm_work_permit",
+              "label": "Work permit obtained",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            },
+            {
+              "item_id": "ppm_isolation",
+              "label": "Isolation done",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            },
+            {
+              "item_id": "ppm_loto",
+              "label": "LOTO applied",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            },
+            {
+              "item_id": "ppm_ppe",
+              "label": "PPE worn",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            }
+          ]
+        },
+        {
+          "name": "2. Cleaning & Physical Inspection",
+          "items": [
+            {
+              "item_id": "ppm_dust",
+              "label": "Dust",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "CLEAN",
+                "DUSTY"
+              ],
+              "alert_states": [
+                "DUSTY"
+              ],
+              "asset": ""
+            },
+            {
+              "item_id": "ppm_moisture",
+              "label": "Moisture",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "DRY",
+                "WET"
+              ],
+              "alert_states": [
+                "WET"
+              ],
+              "asset": ""
+            },
+            {
+              "item_id": "ppm_corrosion",
+              "label": "Corrosion",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "NIL",
+                "FOUND"
+              ],
+              "alert_states": [
+                "FOUND"
+              ],
+              "asset": ""
+            },
+            {
+              "item_id": "ppm_panel_condition",
+              "label": "Panel condition",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "OK",
+                "DAMAGED"
+              ],
+              "alert_states": [
+                "DAMAGED"
+              ],
+              "asset": ""
+            }
+          ]
+        },
+        {
+          "name": "3. Mechanical Tightness",
+          "items": [
+            {
+              "item_id": "ppm_busbars",
+              "label": "Busbars",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "TIGHT",
+                "LOOSE"
+              ],
+              "alert_states": [
+                "LOOSE"
+              ],
+              "asset": ""
+            },
+            {
+              "item_id": "ppm_cable_term",
+              "label": "Cable terminations",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "TIGHT",
+                "LOOSE"
+              ],
+              "alert_states": [
+                "LOOSE"
+              ],
+              "asset": ""
+            },
+            {
+              "item_id": "ppm_earth_bars",
+              "label": "Earth bars",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "TIGHT",
+                "LOOSE"
+              ],
+              "alert_states": [
+                "LOOSE"
+              ],
+              "asset": ""
+            }
+          ]
+        },
+        {
+          "name": "4. Thermal Inspection",
+          "items": [
+            {
+              "item_id": "ppm_hotspots",
+              "label": "Hotspots",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "NIL",
+                "FOUND"
+              ],
+              "alert_states": [
+                "FOUND"
+              ],
+              "asset": ""
+            },
+            {
+              "item_id": "ppm_load_balance",
+              "label": "Load balance",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "OK",
+                "IMBALANCED"
+              ],
+              "alert_states": [
+                "IMBALANCED"
+              ],
+              "asset": ""
+            },
+            {
+              "item_id": "ppm_overheating",
+              "label": "Overheating",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "NIL",
+                "FOUND"
+              ],
+              "alert_states": [
+                "FOUND"
+              ],
+              "asset": ""
+            }
+          ]
+        },
+        {
+          "name": "5. Electrical Components",
+          "items": [
+            {
+              "item_id": "ppm_breakers",
+              "label": "Breakers",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "OK",
+                "FAULT"
+              ],
+              "alert_states": [
+                "FAULT"
+              ],
+              "asset": ""
+            },
+            {
+              "item_id": "ppm_relays",
+              "label": "Relays",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "OK",
+                "FAULT"
+              ],
+              "alert_states": [
+                "FAULT"
+              ],
+              "asset": ""
+            },
+            {
+              "item_id": "ppm_contactors",
+              "label": "Contactors",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "OK",
+                "FAULT"
+              ],
+              "alert_states": [
+                "FAULT"
+              ],
+              "asset": ""
+            },
+            {
+              "item_id": "ppm_lamps",
+              "label": "Indicator lamps",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "OK",
+                "FAULT"
+              ],
+              "alert_states": [
+                "FAULT"
+              ],
+              "asset": ""
+            }
+          ]
+        },
+        {
+          "name": "6. Earthing & Protection",
+          "items": [
+            {
+              "item_id": "ppm_earth_resistance",
+              "label": "Earthing resistance",
+              "kind": "reading",
+              "unit": "ohm",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            },
+            {
+              "item_id": "ppm_elcb",
+              "label": "ELCB/RCCB testing",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "PASS",
+                "FAIL"
+              ],
+              "alert_states": [
+                "FAIL"
+              ],
+              "asset": ""
+            }
+          ]
+        },
+        {
+          "name": "7. Wiring & Insulation",
+          "items": [
+            {
+              "item_id": "ppm_loose_wiring",
+              "label": "Loose wiring",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "NIL",
+                "FOUND"
+              ],
+              "alert_states": [
+                "FOUND"
+              ],
+              "asset": ""
+            },
+            {
+              "item_id": "ppm_insulation",
+              "label": "Damaged insulation",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "NIL",
+                "FOUND"
+              ],
+              "alert_states": [
+                "FOUND"
+              ],
+              "asset": ""
+            },
+            {
+              "item_id": "ppm_burn_marks",
+              "label": "Burn marks",
+              "kind": "state",
+              "unit": "",
+              "options": [
+                "NIL",
+                "FOUND"
+              ],
+              "alert_states": [
+                "FOUND"
+              ],
+              "asset": ""
+            }
+          ]
+        },
+        {
+          "name": "8. Metering",
+          "items": [
+            {
+              "item_id": "ppm_voltage",
+              "label": "Voltage",
+              "kind": "reading",
+              "unit": "V",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            },
+            {
+              "item_id": "ppm_current",
+              "label": "Current",
+              "kind": "reading",
+              "unit": "A",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            },
+            {
+              "item_id": "ppm_frequency",
+              "label": "Frequency",
+              "kind": "reading",
+              "unit": "Hz",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            },
+            {
+              "item_id": "ppm_pf",
+              "label": "Power factor",
+              "kind": "reading",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            }
+          ]
+        },
+        {
+          "name": "9. Documentation",
+          "items": [
+            {
+              "item_id": "ppm_labels",
+              "label": "Labels present",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            },
+            {
+              "item_id": "ppm_circuit_id",
+              "label": "Circuit identification",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            },
+            {
+              "item_id": "ppm_warning_signs",
+              "label": "Warning signs",
+              "kind": "tick",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            }
+          ]
+        },
+        {
+          "name": "10. Corrective Actions",
+          "items": [
+            {
+              "item_id": "ppm_issues_found",
+              "label": "Issues found",
+              "kind": "note",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            },
+            {
+              "item_id": "ppm_actions_taken",
+              "label": "Actions taken",
+              "kind": "note",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            },
+            {
+              "item_id": "ppm_pending_work",
+              "label": "Pending work",
+              "kind": "note",
+              "unit": "",
+              "options": [],
+              "alert_states": [],
+              "asset": ""
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

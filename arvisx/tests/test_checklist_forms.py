@@ -17,6 +17,18 @@ def test_one_anthem_has_four_templates():
     assert ids == {"ANTHEM-SHIFT-1", "ANTHEM-SHIFT-2", "ANTHEM-SHIFT-3", "ANTHEM-PPM"}
 
 
+def test_templates_are_seed_data_not_code():
+    # One Anthem is loaded from arvisx/seeds/one-anthem.json — the engine code holds no
+    # building-specific templates/asset-map (so a new building is config, not a code change).
+    import pathlib, arvisx.checklist_forms as cf
+    seed = pathlib.Path(cf.__file__).parent / "seeds" / "one-anthem.json"
+    assert seed.is_file()
+    src = pathlib.Path(cf.__file__).read_text(encoding="utf-8")
+    assert "_ANTHEM_ASSET_MAP" not in src and "ANTHEM-SHIFT-1" not in src   # no hardcoding
+    # asset tags come from the seed data (e.g. DG-1 readings tagged in the JSON)
+    assert any(it.asset == "DG-1" for _t, it in items_for_asset("one-anthem", "DG-1"))
+
+
 def test_shift2_matches_the_real_sheet():
     t = get_template("ANTHEM-SHIFT-2")
     items = {i.item_id for i in t.all_items()}

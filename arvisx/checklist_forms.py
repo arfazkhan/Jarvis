@@ -120,213 +120,39 @@ def validate_template_dict(d: Dict[str, Any]) -> None:
         raise ValueError("at least one item required")
 
 
-# convenience builders
-def _tick(i, l): return Item(i, l, "tick")
-def _read(i, l, unit): return Item(i, l, "reading", unit=unit)
-def _state(i, l, options, alert=()): return Item(i, l, "state", options=list(options), alert_states=list(alert))
+# ── building templates load from SEED DATA — no building hardcoded in code ──
+# Each arvisx/seeds/<name>.json = {"building_id":.., "name":.., "templates":[<Template dicts>]}.
+# One Anthem is just the first seed file (asset tags baked into the items). A new building is a
+# new seed file OR templates created via the API builder (DB, layered on via set_custom_loader).
+# The engine code carries ZERO building-specific data.
+import json as _json
+from pathlib import Path as _Path
+
+_SEED_DIR = _Path(__file__).parent / "seeds"
 
 
-_DAILY_SIGNOFF = ["technician", "supervisor", "caretaker", "engineer", "president"]
+def _load_seed_templates() -> Dict[str, List[Template]]:
+    out: Dict[str, List[Template]] = {}
+    if not _SEED_DIR.is_dir():
+        return out
+    for f in sorted(_SEED_DIR.glob("*.json")):
+        try:
+            data = _json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        bid = data.get("building_id")
+        if not bid:
+            continue
+        out.setdefault(bid, [])
+        for t in data.get("templates", []):
+            try:
+                out[bid].append(Template.from_dict(t))
+            except Exception:
+                continue
+    return out
 
 
-# ── One Anthem Apartments — the four real documents ───────────────────────
-def _shift1() -> Template:
-    return Template(
-        "ANTHEM-SHIFT-1", "Shift I — Daily Operations", "daily", timing="08:00 AM – 04:15 PM",
-        signoff_roles=_DAILY_SIGNOFF, sections=[
-            Section("Fire Pump Room", [
-                _read("fp_diesel_fuel", "Diesel pump fuel level", "%"),
-                _read("fp_coolant", "Coolant level", "%"),
-                _read("fp_oil", "Oil level", "%"),
-                _state("fp_main_pump", "Main pump", ["OK", "RUNNING", "FAULT"], alert=["FAULT"]),
-                _state("fp_standby_pump", "Standby pump", ["OK", "RUNNING", "FAULT"], alert=["FAULT"]),
-                _state("fp_jockey_pump", "Jockey pump", ["OK", "RUNNING", "FAULT"], alert=["FAULT"]),
-            ]),
-            Section("Swimming Pool", [
-                _tick("pool_vacuum", "Vacuuming"),
-                _read("pool_ph", "pH reading", "pH"),
-                _tick("pool_backwash", "Backwash"),
-                _state("pool_filtration", "Filtration", ["ON", "OFF"], alert=["OFF"]),
-                _tick("pool_chlorination", "Chlorination"),
-            ]),
-            Section("General Facility", [
-                _state("gen_electrical", "Electrical equipment status", ["OK", "FAULT"], alert=["FAULT"]),
-                _state("gen_fire_alarm", "Fire alarm panel health (main ON / no fault)", ["ON", "OFF", "FAULT"], alert=["OFF", "FAULT"]),
-                _tick("gen_mygate", "MyGate ticket monitoring"),
-                _read("gen_oh_tank", "OH tank water level", "%"),
-                _state("gen_borewell", "Borewell status", ["OK", "OFF"], alert=["OFF"]),
-            ]),
-        ])
-
-
-def _shift2() -> Template:
-    return Template(
-        "ANTHEM-SHIFT-2", "Shift II — Daily Operations", "daily", timing="12:00 AM – 08:15 PM",
-        signoff_roles=_DAILY_SIGNOFF, sections=[
-            Section("Water Treatment Plant", [
-                _tick("wtp_backwash", "WTP backwash"),
-                _tick("wtp_chemical", "Chemical addition"),
-                _state("wtp_filtration", "Filtration", ["ON", "OFF"], alert=["OFF"]),
-                _state("wtp_leakage", "Leakage detected", ["NIL", "DETECTED"], alert=["DETECTED"]),
-            ]),
-            Section("Electrical Infrastructure", [
-                _read("el_transformer", "Main transformer reading", "V"),
-                _tick("el_room1", "Electrical room-1 inspection"),
-                _tick("el_room1_msb", "Room-1 MSB inspection"),
-                _tick("el_room1_ssb", "Room-1 SSB inspection"),
-                _tick("el_room2", "Electrical room-2 inspection"),
-                _tick("el_room2_msb", "Room-2 MSB inspection"),
-                _tick("el_room2_ssb", "Room-2 SSB inspection"),
-                _tick("el_room3", "Electrical room-3 inspection"),
-                _tick("el_room3_msb", "Room-3 MSB inspection"),
-                _tick("el_room3_ssb", "Room-3 SSB inspection"),
-                _state("el_dg1_panel", "DG-1 panel", ["OK", "FAULT"], alert=["FAULT"]),
-                _state("el_dg2_panel", "DG-2 panel", ["OK", "FAULT"], alert=["FAULT"]),
-            ]),
-            Section("General Operations", [
-                _state("g2_fire_alarm", "Fire alarm panel health (main ON / no fault)", ["ON", "OFF", "FAULT"], alert=["OFF", "FAULT"]),
-                _tick("g2_mygate", "MyGate ticket review"),
-                _tick("g2_lift", "Lift shaft inspection"),
-                _read("g2_gf_raw_tank", "GF raw tank water level", "%"),
-                _read("g2_gf_filter_tank", "GF filter tank water level", "%"),
-                _read("g2_oh_tank", "OH tank water level", "%"),
-                _state("g2_japan_water", "Japan water status", ["OK", "NIL"], alert=["NIL"]),
-                _state("g2_borewell", "Borewell pumping status", ["OK", "OFF"], alert=["OFF"]),
-            ]),
-        ])
-
-
-def _shift3() -> Template:
-    return Template(
-        "ANTHEM-SHIFT-3", "Shift III — Daily Operations", "daily", timing="08:00 PM – 08:15 AM",
-        signoff_roles=_DAILY_SIGNOFF, sections=[
-            Section("Diesel Generators", [
-                _state("dg1_status", "DG-1 monitoring", ["OK", "RUNNING", "FAULT"], alert=["FAULT"]),
-                _state("dg2_status", "DG-2 monitoring", ["OK", "RUNNING", "FAULT"], alert=["FAULT"]),
-                _read("dg_run_hours", "Run hours", "hrs"),
-                _read("dg_battery_v", "Battery voltage", "V"),
-                _read("dg_oil", "Oil level", "%"),
-                _read("dg_coolant", "Coolant level", "%"),
-                _read("dg_fuel", "Fuel level", "%"),
-            ]),
-            Section("Sewage Treatment Plant", [
-                _tick("stp_psf_backwash", "PSF backwash"),
-                _tick("stp_acf_backwash", "ACF backwash"),
-                _tick("stp_chemical", "Chemical dosing"),
-                _state("stp_blower", "Blower inspection", ["OK", "FAULT"], alert=["FAULT"]),
-                _state("stp_sludge", "Sludge monitoring", ["NORMAL", "HIGH"], alert=["HIGH"]),
-                _state("stp_leakage", "Leakage check", ["NIL", "DETECTED"], alert=["DETECTED"]),
-                _state("stp_overflow", "Overflow check", ["NIL", "DETECTED"], alert=["DETECTED"]),
-            ]),
-            Section("Night Operations", [
-                _tick("night_duct", "Duct inspection"),
-                _tick("night_server", "Server room inspection"),
-                _tick("night_amenities", "Amenities closing/opening"),
-                _state("night_fire", "Fire system check", ["OK", "FAULT"], alert=["FAULT"]),
-                _state("night_water", "Water system check", ["OK", "FAULT"], alert=["FAULT"]),
-            ]),
-        ])
-
-
-def _ppm() -> Template:
-    """Quarterly preventive maintenance — asset-based. One run covers a panel asset;
-    the 10 sections are applied per asset (transformer/MSB/SSB/DG/distribution panels)."""
-    return Template(
-        "ANTHEM-PPM", "Quarterly Preventive Maintenance", "quarterly",
-        timing="Every 3 months",
-        signoff_roles=["technician", "engineer", "president"],
-        per_asset=["Transformer Panel", "MSB", "SSB", "DG Panel", "Distribution Panel"],
-        sections=[
-            Section("1. Safety & Preparation", [
-                _tick("ppm_work_permit", "Work permit obtained"),
-                _tick("ppm_isolation", "Isolation done"),
-                _tick("ppm_loto", "LOTO applied"),
-                _tick("ppm_ppe", "PPE worn"),
-            ]),
-            Section("2. Cleaning & Physical Inspection", [
-                _state("ppm_dust", "Dust", ["CLEAN", "DUSTY"], alert=["DUSTY"]),
-                _state("ppm_moisture", "Moisture", ["DRY", "WET"], alert=["WET"]),
-                _state("ppm_corrosion", "Corrosion", ["NIL", "FOUND"], alert=["FOUND"]),
-                _state("ppm_panel_condition", "Panel condition", ["OK", "DAMAGED"], alert=["DAMAGED"]),
-            ]),
-            Section("3. Mechanical Tightness", [
-                _state("ppm_busbars", "Busbars", ["TIGHT", "LOOSE"], alert=["LOOSE"]),
-                _state("ppm_cable_term", "Cable terminations", ["TIGHT", "LOOSE"], alert=["LOOSE"]),
-                _state("ppm_earth_bars", "Earth bars", ["TIGHT", "LOOSE"], alert=["LOOSE"]),
-            ]),
-            Section("4. Thermal Inspection", [
-                _state("ppm_hotspots", "Hotspots", ["NIL", "FOUND"], alert=["FOUND"]),
-                _state("ppm_load_balance", "Load balance", ["OK", "IMBALANCED"], alert=["IMBALANCED"]),
-                _state("ppm_overheating", "Overheating", ["NIL", "FOUND"], alert=["FOUND"]),
-            ]),
-            Section("5. Electrical Components", [
-                _state("ppm_breakers", "Breakers", ["OK", "FAULT"], alert=["FAULT"]),
-                _state("ppm_relays", "Relays", ["OK", "FAULT"], alert=["FAULT"]),
-                _state("ppm_contactors", "Contactors", ["OK", "FAULT"], alert=["FAULT"]),
-                _state("ppm_lamps", "Indicator lamps", ["OK", "FAULT"], alert=["FAULT"]),
-            ]),
-            Section("6. Earthing & Protection", [
-                _read("ppm_earth_resistance", "Earthing resistance", "ohm"),
-                _state("ppm_elcb", "ELCB/RCCB testing", ["PASS", "FAIL"], alert=["FAIL"]),
-            ]),
-            Section("7. Wiring & Insulation", [
-                _state("ppm_loose_wiring", "Loose wiring", ["NIL", "FOUND"], alert=["FOUND"]),
-                _state("ppm_insulation", "Damaged insulation", ["NIL", "FOUND"], alert=["FOUND"]),
-                _state("ppm_burn_marks", "Burn marks", ["NIL", "FOUND"], alert=["FOUND"]),
-            ]),
-            Section("8. Metering", [
-                _read("ppm_voltage", "Voltage", "V"),
-                _read("ppm_current", "Current", "A"),
-                _read("ppm_frequency", "Frequency", "Hz"),
-                _read("ppm_pf", "Power factor", ""),
-            ]),
-            Section("9. Documentation", [
-                _tick("ppm_labels", "Labels present"),
-                _tick("ppm_circuit_id", "Circuit identification"),
-                _tick("ppm_warning_signs", "Warning signs"),
-            ]),
-            Section("10. Corrective Actions", [
-                Item("ppm_issues_found", "Issues found", "note"),
-                Item("ppm_actions_taken", "Actions taken", "note"),
-                Item("ppm_pending_work", "Pending work", "note"),
-            ]),
-        ])
-
-
-# Phase-S asset tagging: map item_id → the canonical asset it's about, so readings/issues
-# can be rolled up into per-asset history + health. (Shared DG readings → DG-1 primary.)
-_ANTHEM_ASSET_MAP: Dict[str, str] = {
-    # Shift I
-    "fp_diesel_fuel": "FIRE-PUMP", "fp_coolant": "FIRE-PUMP", "fp_oil": "FIRE-PUMP",
-    "fp_main_pump": "FIRE-PUMP", "fp_standby_pump": "FIRE-PUMP", "fp_jockey_pump": "FIRE-PUMP",
-    "pool_vacuum": "POOL", "pool_ph": "POOL", "pool_backwash": "POOL",
-    "pool_filtration": "POOL", "pool_chlorination": "POOL",
-    "gen_fire_alarm": "FIRE-PANEL", "gen_oh_tank": "OH-TANK", "gen_borewell": "BOREWELL",
-    # Shift II
-    "wtp_backwash": "WTP", "wtp_chemical": "WTP", "wtp_filtration": "WTP", "wtp_leakage": "WTP",
-    "el_transformer": "TRANSFORMER", "el_dg1_panel": "DG-1", "el_dg2_panel": "DG-2",
-    "g2_fire_alarm": "FIRE-PANEL", "g2_lift": "LIFT", "g2_gf_raw_tank": "GF-RAW-TANK",
-    "g2_gf_filter_tank": "GF-FILTER-TANK", "g2_oh_tank": "OH-TANK", "g2_borewell": "BOREWELL",
-    # Shift III
-    "dg1_status": "DG-1", "dg2_status": "DG-2", "dg_run_hours": "DG-1", "dg_battery_v": "DG-1",
-    "dg_oil": "DG-1", "dg_coolant": "DG-1", "dg_fuel": "DG-1",
-    "stp_psf_backwash": "STP", "stp_acf_backwash": "STP", "stp_chemical": "STP",
-    "stp_blower": "STP", "stp_sludge": "STP", "stp_leakage": "STP", "stp_overflow": "STP",
-}
-
-
-def _tag_assets(templates: List[Template], amap: Dict[str, str]) -> List[Template]:
-    for t in templates:
-        for it in t.all_items():
-            if it.item_id in amap:
-                it.asset = amap[it.item_id]
-    return templates
-
-
-# building_id → its templates. Add new buildings here as they onboard.
-_BUILDING_TEMPLATES: Dict[str, List[Template]] = {
-    "one-anthem": _tag_assets([_shift1(), _shift2(), _shift3(), _ppm()], _ANTHEM_ASSET_MAP),
-}
+_BUILDING_TEMPLATES: Dict[str, List[Template]] = _load_seed_templates()
 
 
 # Custom (builder-created) templates live in the DB. The API sets this loader at startup so
