@@ -321,6 +321,25 @@ def test_custom_template_persistence(tmp_path):
     assert db.list_templates("bldg-x") == []
 
 
+def test_seed_catalog_and_clone(tmp_path):
+    from arvisx.checklist_forms import (seed_catalog, seed_templates, set_custom_loader,
+                                        templates_for, Template)
+    cat = seed_catalog()
+    assert any(s["building_id"] == "one-anthem" and s["templates"] == 4 for s in cat)
+    src = seed_templates("one-anthem")
+    assert len(src) == 4 and seed_templates("nope") == []
+    # clone into a new building via the DB loader (what POST /forms/seed does)
+    db = ArvisxDb(str(tmp_path / "seed.db"))
+    for t in src:
+        db.save_template("green-meadows", t.template_id, t.to_dict())
+    set_custom_loader(lambda b: [Template.from_dict(d) for d in db.list_templates(b)])
+    try:
+        ids = {t.template_id for t in templates_for("green-meadows")}
+        assert ids == {"ANTHEM-SHIFT-1", "ANTHEM-SHIFT-2", "ANTHEM-SHIFT-3", "ANTHEM-PPM"}
+    finally:
+        set_custom_loader(None)
+
+
 def test_custom_loader_merges_and_overrides():
     from arvisx.checklist_forms import set_custom_loader, templates_for, Template
     custom = Template.from_dict({"template_id": "CUSTOM-1", "name": "Custom", "cadence": "daily",

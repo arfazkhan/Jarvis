@@ -930,6 +930,44 @@ def create_app():
             raise HTTPException(404, f"no custom template {tid} for {building}")
         return {"deleted": tid, "building": building}
 
+    # ── Seed / onboard a new building from a starter pack ────────────────
+    @app.get("/api/v1/forms/seeds")
+    async def forms_seeds():
+        """Starter packs available on disk (e.g. one-anthem). Use POST /forms/seed to clone
+        one into a new building."""
+        from arvisx.checklist_forms import seed_catalog
+        return {"seeds": seed_catalog()}
+
+    @app.post("/api/v1/forms/seed")
+    async def forms_seed(payload: Dict[str, Any] = Body(...)):
+        """Onboard a building's checklists in one call — clone a starter pack (`from`) into a
+        new `building`, or bulk-import `templates`. Saved as that building's DB templates."""
+        from arvisx.checklist_forms import seed_templates, validate_template_dict, Template
+        p = payload or {}
+        building = str(p.get("building", "")).strip()
+        if not building:
+            raise HTTPException(400, "provide 'building'")
+        src = str(p.get("from", "")).strip()
+        if src:
+            tpls = seed_templates(src)
+            if not tpls:
+                raise HTTPException(400, f"unknown seed '{src}'")
+            to_save = [t.to_dict() for t in tpls]
+        elif isinstance(p.get("templates"), list) and p["templates"]:
+            to_save = p["templates"]
+        else:
+            raise HTTPException(400, "provide 'from' (a seed id) or a non-empty 'templates' list")
+        saved = []
+        for t in to_save:
+            try:
+                validate_template_dict(t)
+                Template.from_dict(t)
+            except (ValueError, KeyError) as e:
+                raise HTTPException(400, f"invalid template '{t.get('template_id','?')}': {e}")
+            state.db.save_template(building, str(t["template_id"]), t)
+            saved.append(t["template_id"])
+        return {"building": building, "seeded": saved}
+
     @app.post("/api/v1/forms/run")
     async def forms_start_run(payload: Dict[str, Any] = Body(...)):
         """Start (or resume) a checklist run for a template+date(+asset). Resuming an

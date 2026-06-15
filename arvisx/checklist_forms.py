@@ -129,6 +129,7 @@ import json as _json
 from pathlib import Path as _Path
 
 _SEED_DIR = _Path(__file__).parent / "seeds"
+_SEED_NAMES: Dict[str, str] = {}      # building_id → display name (from the seed file)
 
 
 def _load_seed_templates() -> Dict[str, List[Template]]:
@@ -144,6 +145,7 @@ def _load_seed_templates() -> Dict[str, List[Template]]:
         if not bid:
             continue
         out.setdefault(bid, [])
+        _SEED_NAMES[bid] = data.get("name", bid)
         for t in data.get("templates", []):
             try:
                 out[bid].append(Template.from_dict(t))
@@ -153,6 +155,17 @@ def _load_seed_templates() -> Dict[str, List[Template]]:
 
 
 _BUILDING_TEMPLATES: Dict[str, List[Template]] = _load_seed_templates()
+
+
+def seed_catalog() -> List[Dict[str, Any]]:
+    """Available starter packs on disk — for onboarding a new building from a seed."""
+    return [{"building_id": b, "name": _SEED_NAMES.get(b, b), "templates": len(_BUILDING_TEMPLATES[b])}
+            for b in _BUILDING_TEMPLATES]
+
+
+def seed_templates(building_id: str) -> List[Template]:
+    """The SEED (starter-pack) templates for a building_id — used to clone into a new building."""
+    return list(_BUILDING_TEMPLATES.get(building_id, []))
 
 
 # Custom (builder-created) templates live in the DB. The API sets this loader at startup so
