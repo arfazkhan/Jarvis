@@ -109,6 +109,14 @@ Errors 400: missing `template_id`/`name`, no sections, duplicate `item_id`, bad 
 ### DELETE /forms/template/{template_id}?building=
 → `{"deleted":"CUSTOM-DG","building":"one-anthem"}` (404 if no custom template by that id).
 
+### Seeds / onboarding a new building
+Built-in checklists are **seed data** (`arvisx/seeds/*.json`), not code.
+- `GET /forms/seeds` → `{"seeds":[{"building_id":"one-anthem","name":"One Anthem Apartments","templates":4}]}`
+- `POST /forms/seed` `{"building":"green-meadows","from":"one-anthem"}` → clones a starter pack
+  into a new building → `{"building":"green-meadows","seeded":["ANTHEM-SHIFT-1","..."]}`.
+  (Or `{"building":..,"templates":[...]}` to bulk-import your own.) Onboarding building #2 = one
+  call, no code change; thereafter pass `?building=green-meadows` everywhere.
+
 ---
 
 ## 3. Rounds (checklist runs)

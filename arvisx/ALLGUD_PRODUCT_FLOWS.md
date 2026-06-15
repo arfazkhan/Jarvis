@@ -104,6 +104,26 @@ POST $B/forms/templates
 - Delete: `DELETE $B/forms/template/DG-QUICK`.
 - Branch (validation): missing id/name, no sections, duplicate item_id, or bad `kind` → **400**, nothing saved.
 
+> **Built-ins are seed data, not code.** The One Anthem checklists live in
+> `arvisx/seeds/one-anthem.json`; the engine carries no building-specific templates. A new
+> building is onboarded as config — see 2.6.
+
+### 2.6 Onboard a NEW building from a starter pack (one call)
+List available starter packs:
+```
+GET $B/forms/seeds
+```
+**Response** `{ "seeds":[{"building_id":"one-anthem","name":"One Anthem Apartments","templates":4}] }`
+Clone a pack into a brand-new building (no code change):
+```
+POST $B/forms/seed
+{ "building":"green-meadows", "from":"one-anthem" }
+```
+**Response** `{ "building":"green-meadows", "seeded":["ANTHEM-SHIFT-1","ANTHEM-SHIFT-2","ANTHEM-SHIFT-3","ANTHEM-PPM"] }`
+Now `GET $B/forms/templates?building=green-meadows` returns those 4 — edit/add via the builder
+(2.4) from there. (Alternatively `POST /forms/seed {building, templates:[...]}` to bulk-import
+your own.) From here, every other call works the same — just pass `?building=green-meadows`.
+
 > **Item kinds** the technician will fill: `tick` (Done/Issue), `reading` (a number + unit),
 > `state` (pick from `options`), `note` (free text). `alert_states` = values that auto-raise an
 > issue (e.g. fire `OFF`).
