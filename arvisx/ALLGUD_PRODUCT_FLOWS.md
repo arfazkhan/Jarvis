@@ -108,6 +108,26 @@ POST $B/forms/templates
 > `state` (pick from `options`), `note` (free text). `alert_states` = values that auto-raise an
 > issue (e.g. fire `OFF`).
 
+### 2.5 The four built-in checklists at One Anthem
+A real building runs **three daily shifts + one quarterly PPM**. All are returned by
+`GET /forms/templates`. The flow in steps 3–8 is **identical for every shift** — you only
+change `template_id`. Here's what each contains:
+
+| template_id | name | timing | sections (key items) |
+|---|---|---|---|
+| `ANTHEM-SHIFT-1` | Shift I — Daily Operations | 08:00 AM – 04:15 PM | **Fire Pump Room** (diesel fuel, coolant, oil, main/standby/jockey pump) · **Swimming Pool** (vacuum, pH, backwash, filtration, chlorination) · **General** (electrical status, fire alarm, MyGate, OH tank, borewell) |
+| `ANTHEM-SHIFT-2` | Shift II — Daily Operations | 12:00 AM – 08:15 PM | **WTP** (backwash, chemical, filtration, leakage) · **Electrical** (transformer, room 1/2/3 inspections, MSB×3, SSB×3, DG-1/DG-2 panel) · **General** (fire alarm, MyGate, lift, GF raw/filter tank, OH tank, Japan water, borewell) |
+| `ANTHEM-SHIFT-3` | Shift III — Daily Operations | 08:00 PM – 08:15 AM | **Diesel Generators** (DG-1, DG-2, run hours, battery V, oil, coolant, fuel) · **STP** (PSF/ACF backwash, chemical dosing, blower, sludge, leakage, overflow) · **Night** (duct, server room, amenities, fire, water) |
+| `ANTHEM-PPM` | Quarterly Preventive Maintenance | every 3 months | 10 sections per asset (safety/prep, cleaning, mechanical tightness, thermal, electrical components, earthing, wiring, metering, documentation, corrective actions) — run **once per panel** (transformer/MSB/SSB/DG/distribution) |
+
+Fetch any one in full: `GET /forms/template/ANTHEM-SHIFT-1` (same shape as 2.4) → its exact
+sections, item kinds, units, `alert_states`, and asset tags. Examples of the alert-states that
+auto-raise issues across shifts: Shift I `fp_main_pump=FAULT`, `pool_filtration=OFF`; Shift III
+`stp_leakage=DETECTED`, `dg1_status=FAULT`, `night_fire=FAULT`.
+
+> Asset tags link items to assets so they roll up into health/history/RCA — e.g. Shift III's
+> `dg_battery_v` and Shift II's `el_dg1_panel` both feed asset **DG-1**.
+
 ---
 
 ## 3. Assign the round (manager)
@@ -132,6 +152,16 @@ POST $B/forms/run
 *"📋 You've been assigned Shift II — 24 items. Open: <form link>."*
 - Re-assign later: `POST $B/forms/run/1/assign` `{ "assignee":"Suresh" }` → run view, re-DMs Suresh.
 - Branch: unknown `template_id` → **400**. Same template+date again → returns the SAME open run (resume).
+- **Other shifts — identical call, different id:** `{"template_id":"ANTHEM-SHIFT-1","assignee":"Ramesh"}`
+  starts the morning round; `"ANTHEM-SHIFT-3"` starts the night round. Each is its own run with
+  its own completion, sign-off, reminders and lapse.
+- **Quarterly PPM — one run per panel:** pass `asset` so each panel gets its own sheet:
+  ```
+  POST $B/forms/run
+  { "template_id":"ANTHEM-PPM", "asset":"MSB", "assignee":"ABC Power", "date":"2026-06-14" }
+  ```
+  Repeat with `"asset":"DG Panel"`, `"SSB"`, etc. Everything else (fill, submit, sign-off,
+  reminders) works the same; the PPM also feeds `GET /ppm/schedule` (mark done via `POST /ppm/MSB/done`).
 
 ---
 
@@ -412,6 +442,34 @@ POST $B/whatsapp/notifications/ack   { "ids":[1] }
 `to_number` set = DM that person (technician); blank = broadcast to the manager + committee
 groups. **At-least-once:** a message stays queued until acked, so a bot restart never loses it
 (worst case: a duplicate). Same for resident requests (`/resident-requests/ack`).
+
+---
+
+## 12b. A full day across all three shifts (the rhythm)
+
+Each shift is the same loop (assign → fill → review → submit → handover). The **handover
+chains them** — every shift starts informed by the last.
+
+```
+08:00  Shift I  (Ramesh)  ── fill fire-pump/pool/general ──┐
+                                                           ▼  at 16:15 close →
+                          GET /agents/handover  →  open issues + pending → broadcast to Shift II
+00:00  Shift II (Ajith)   ── fill WTP/electrical/general ──┐   (overlaps; the long shift)
+                                                           ▼  at 20:15 close →
+                          GET /agents/handover  →  carries the fire-panel issue → Shift III
+20:00  Shift III (Suresh) ── fill DG/STP/night ───────────┐
+                                                           ▼  at 08:15 close →
+                          GET /agents/handover  →  back to Shift I next morning
+Quarterly: PPM runs (one per panel) ride alongside, not daily.
+```
+- Each shift = its own `POST /forms/run` (step 3) with that shift's `template_id`.
+- The bot broadcasts the handover at `FORMS_DIGEST_HOUR` (and you can pull it anytime via
+  `GET /agents/handover`).
+- Open issues + lapsed/incomplete rounds **carry across shifts** — an unresolved fire-panel
+  issue raised in Shift II is still open (and escalating) when Shift III and next-day Shift I
+  begin, and shows in their handover + the aged-issues digest until resolved.
+- `GET /forms/today` shows **all three shifts'** runs side by side with each one's completion,
+  assignee, and issues.
 
 ---
 
