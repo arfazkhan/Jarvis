@@ -1,0 +1,5 @@
+# Pilot secrets + real building data — never commit these.
+.env
+onboard.json
+backups/
+backup.log

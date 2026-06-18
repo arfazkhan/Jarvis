@@ -1,0 +1,6 @@
+# These run on the Linux VPS — force LF so a Windows checkout can't ship CRLF
+# (a CRLF shebang breaks the script, CRLF in Dockerfiles/Caddyfile is fragile).
+*.sh           text eol=lf
+*.Dockerfile   text eol=lf
+Caddyfile      text eol=lf
+*.yml          text eol=lf

@@ -1,0 +1,22 @@
+# AllGud pilot — one origin: SPA + API behind auto-HTTPS.
+# DOMAIN is injected from the environment (see docker-compose.pilot.yml).
+{$DOMAIN} {
+	encode gzip
+
+	# API → the api container. Everything under /api/* (incl. the SSE stream).
+	handle /api/* {
+		reverse_proxy api:8090
+	}
+
+	# SPA → static files with client-side routing fallback, so deep links like
+	# /field/run/42?t=... resolve to index.html and the router takes over.
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+}
+
+# Local/staging without a real domain + cert: set DOMAIN=:80 in .env to serve
+# plain HTTP on port 80 (note: clipboard "Field link" + camera need HTTPS, so use
+# a real domain for the actual pilot).

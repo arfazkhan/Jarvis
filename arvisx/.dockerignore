@@ -1,5 +1,10 @@
-# Keep the API image lean and secret-free.
+# Keep the API/web image build context lean and secret-free.
+# NOTE: Allgud/ source is kept (the web image builds from it) but node_modules
+# and dist are dropped (the web build runs npm ci itself).
 bot/
+**/node_modules
+Allgud/dist/
+scratch/
 tests/
 __pycache__/
 *.pyc

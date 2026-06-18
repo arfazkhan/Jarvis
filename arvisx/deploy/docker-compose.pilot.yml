@@ -1,0 +1,66 @@
+# AllGud — One Anthem pilot stack (CHECKLIST product, no sensors).
+# Three services behind one HTTPS origin:
+#   web (Caddy: SPA + /api proxy + auto-TLS)  ·  api (engine, SQLite)  ·  bot (WhatsApp)
+#
+# Quick start (see PILOT_DEPLOY_ONE_ANTHEM.md):
+#   cp .env.pilot.example .env   # fill DOMAIN + secrets + OWNER_NUMBER
+#   docker compose -f docker-compose.pilot.yml up -d --build
+#   docker compose -f docker-compose.pilot.yml logs -f bot   # scan the WhatsApp QR once
+name: allgud-oneanthem
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/api.Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ARVISX_SOURCE: sim
+      ARVISX_DB: /data/arvisx.db
+      # Deep-link origin baked into WhatsApp assignment DMs -> the SPA on this domain.
+      ARVISX_PUBLIC_URL: https://${DOMAIN}
+    volumes:
+      - api-data:/data
+    expose:
+      - "8090"
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/web.Dockerfile
+      args:
+        VITE_API_BASE: /api/v1
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy-data:/data      # TLS certs (persist across restarts)
+      - caddy-config:/config
+    depends_on:
+      - api
+
+  bot:
+    build:
+      context: ../bot         # the wa_bot submodule
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ARVIS_API_URL: http://api:8090     # base only — the bot appends /api/v1 itself
+      ARVIS_API_KEY: ${ARVISX_API_KEY}   # one source of truth: same key as the api
+    volumes:
+      - bot-session:/app/session         # WhatsApp pairing — scan QR once, persists
+      - bot-data:/app/data
+    depends_on:
+      - api
+
+volumes:
+  api-data:
+  caddy-data:
+  caddy-config:
+  bot-session:
+  bot-data:

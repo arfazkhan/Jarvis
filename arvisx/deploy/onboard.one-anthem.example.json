@@ -1,0 +1,29 @@
+{
+  "building": "one-anthem",
+  "owner": {"username": "athul", "role": "owner"},
+  "_comment_owner": "Password is taken from ARVISX_ADMIN_PASSWORD in .env, never from this file.",
+
+  "_comment_pins": "REPLACE these PINs before go-live. Must be distinct per building (PIN+building identifies one technician at field sign-in). Distribute privately.",
+  "technicians": [
+    {"name": "Ajith",        "phone": "919876543210", "pin": "1001"},
+    {"name": "Suresh",       "phone": "919876543211", "pin": "1002"},
+    {"name": "Ramesh Kumar", "phone": "919876543212", "pin": "1003"},
+    {"name": "Vijay",        "phone": "919876543213", "pin": "1004"},
+    {"name": "Mohan",        "phone": "919876543214", "pin": "1005"},
+    {"name": "Athul",        "phone": "919876543215", "pin": "1006"}
+  ],
+
+  "vendors": [
+    {"name": "ABC Power Systems", "category": "Electrical",  "contact": "919800000001"},
+    {"name": "ABC Fire Systems",  "category": "Fire Safety", "contact": "919800000002"},
+    {"name": "Lift Care",         "category": "Lifts",       "contact": "919800000003"}
+  ],
+
+  "_comment_ppm": "Use the building's REAL last-service dates + intervals.",
+  "ppm": [
+    {"asset": "DG-1",        "interval_days": 90,  "last_done": "2026-04-01", "run_hours_limit": 250},
+    {"asset": "DG-2",        "interval_days": 90,  "last_done": "2026-04-01", "run_hours_limit": 250},
+    {"asset": "MSB",         "interval_days": 90,  "last_done": "2026-03-15"},
+    {"asset": "TRANSFORMER", "interval_days": 180, "last_done": "2026-01-10"}
+  ]
+}
