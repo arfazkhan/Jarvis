@@ -148,6 +148,9 @@ class ArvisxDb:
                 c.execute("ALTER TABLE checklist_runs ADD COLUMN assignee TEXT")
             if "reminded_level" not in cols:
                 c.execute("ALTER TABLE checklist_runs ADD COLUMN reminded_level INTEGER DEFAULT 0")
+            tcols = [r[1] for r in c.execute("PRAGMA table_info(technicians)").fetchall()]
+            if tcols and "pin_hash" not in tcols:
+                c.execute("ALTER TABLE technicians ADD COLUMN pin_hash TEXT")
             # SLA/vendor columns on issues (added later than the table).
             icols = [r[1] for r in c.execute("PRAGMA table_info(checklist_issues)").fetchall()]
             for col, decl in (("priority", "TEXT"), ("vendor", "TEXT"),
@@ -441,6 +444,10 @@ class ArvisxDb:
             r = c.execute("SELECT * FROM technicians WHERE building_id=? AND name=?",
                           (building_id, name)).fetchone()
             return dict(r) if r else None
+
+    def set_technician_pin(self, tech_id: int, pin_hash: str) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE technicians SET pin_hash=? WHERE id=?", (pin_hash, tech_id))
 
     # ── Outbound WhatsApp notification queue (bot polls + delivers + acks) ─
     def enqueue_notification(self, building_id: str, text: str, to_number: str = "",

@@ -29,11 +29,14 @@ from arvisx.auth import hash_password
 if db.count_users() == 0:
     db.create_user("athul", "owner", hash_password("change-me"))   # change the password!
 
-# 3) Roster — the real staff who perform rounds.
-for name, phone in [("Ajith", "919876543210"), ("Suresh", "919876543211"),
-                    ("Ramesh Kumar", "919876543212"), ("Vijay", "919876543213"),
-                    ("Mohan", "919876543214"), ("Athul", "919876543215")]:
-    db.add_technician(B, name, phone)
+# 3) Roster — the real staff who perform rounds. Each gets a field PIN so they can
+#    sign into the field app without the manager login. CHANGE these PINs — and keep
+#    them distinct per building (PIN + building resolves one technician at login).
+for name, phone, pin in [("Ajith", "919876543210", "1001"), ("Suresh", "919876543211", "1002"),
+                         ("Ramesh Kumar", "919876543212", "1003"), ("Vijay", "919876543213", "1004"),
+                         ("Mohan", "919876543214", "1005"), ("Athul", "919876543215", "1006")]:
+    tid = db.add_technician(B, name, phone)
+    db.set_technician_pin(tid, hash_password(pin))
 
 # 4) Vendors / AMCs who own external fixes.
 for vn, cat in [("ABC Power Systems", "Electrical"), ("ABC Fire Systems", "Fire Safety"),

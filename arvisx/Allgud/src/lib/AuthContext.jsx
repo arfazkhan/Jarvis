@@ -55,6 +55,18 @@ export function AuthProvider({ children }) {
     [],
   )
 
+  // Field (technician) login — a short PIN, separate from the manager wall.
+  // Mints the same Bearer token primitive a deep-link ?t= would, so both paths
+  // land a technician in /field with identical handling.
+  const fieldLogin = useCallback(async (building, pin) => {
+    const res = await api.fieldLogin(building, pin)   // { token, role, technician }
+    setToken(res.token)
+    setRole(res.role)
+    setUsername(res.technician)
+    setStatus('authed')
+    return res
+  }, [])
+
   const logout = useCallback(() => {
     setToken('')
     setRole(null)
@@ -67,7 +79,8 @@ export function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider
-      value={{ status, role, username, canWrite, error, login, logout, retry: check, hasToken: !!getToken() }}
+      value={{ status, role, username, canWrite, isTechnician: role === 'technician',
+               error, login, fieldLogin, logout, retry: check, hasToken: !!getToken() }}
     >
       {children}
     </AuthContext.Provider>

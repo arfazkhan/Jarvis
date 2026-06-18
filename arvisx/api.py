@@ -232,7 +232,7 @@ def create_app():
     # Auth: API key (server) OR user Bearer token (browser). Writes (non-GET) require
     # an owner/fm role; reads need any authenticated identity. Login is exempt.
     from arvisx import auth as _auth_mod
-    _EXEMPT = {"/api/v1/auth/login"}
+    _EXEMPT = {"/api/v1/auth/login", "/api/v1/auth/field-login"}
 
     @app.middleware("http")
     async def _auth(request: Request, call_next):
@@ -281,6 +281,53 @@ def create_app():
             raise HTTPException(400, "need username, password, role in {owner,fm,viewer}")
         state.db.create_user(u, role, _auth_mod.hash_password(pw))
         return {"username": u, "role": role}
+
+    # ── field access (technicians) ───────────────────────────────────────────
+    # A technician must reach the round runner without the manager login wall.
+    # Two doors, ONE primitive — both mint a `technician`-role token the SPA
+    # already understands (Bearer): a short PIN they type, OR a pre-minted
+    # deep-link token embedded in the WhatsApp assignment link (?t=...).
+    @app.post("/api/v1/auth/field-login")
+    async def field_login(payload: Dict[str, Any] = Body(...)):
+        p = payload or {}
+        building = str(p.get("building", "")).strip()
+        pin = str(p.get("pin", "")).strip()
+        if not building or not pin:
+            raise HTTPException(400, "need building and pin")
+        for t in state.db.list_technicians(building):
+            ph = t.get("pin_hash")
+            if ph and _auth_mod.verify_password(pin, ph):
+                tok = _auth_mod.make_token(t["name"], "technician")
+                return {"token": tok, "role": "technician",
+                        "technician": t["name"], "building": building}
+        raise HTTPException(401, "invalid PIN")
+
+    @app.post("/api/v1/technicians/{tech_id}/pin")
+    async def set_field_pin(tech_id: int, payload: Dict[str, Any] = Body(...),
+                            authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        _, role = _auth_mod.identify(authorization, x_api_key, _api_key)
+        if role not in ("system", "owner", "fm"):
+            raise HTTPException(403, "only owner/fm/system can set a technician PIN")
+        pin = str((payload or {}).get("pin", "")).strip()
+        if len(pin) < 4:
+            raise HTTPException(400, "pin must be at least 4 digits")
+        state.db.set_technician_pin(tech_id, _auth_mod.hash_password(pin))
+        return {"ok": True, "tech_id": tech_id}
+
+    @app.post("/api/v1/auth/field-token")
+    async def field_token(payload: Dict[str, Any] = Body(...),
+                          authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        # Mint a deep-link token for a technician (owner/fm/system). The
+        # assignment link can carry this as ?t=<token> so a tap auto-authenticates.
+        _, role = _auth_mod.identify(authorization, x_api_key, _api_key)
+        if role not in ("system", "owner", "fm"):
+            raise HTTPException(403, "only owner/fm/system can mint a field token")
+        p = payload or {}
+        tech = str(p.get("technician", "")).strip()
+        if not tech:
+            raise HTTPException(400, "need technician")
+        ttl = int(p.get("ttl", _auth_mod.TOKEN_TTL))
+        return {"token": _auth_mod.make_token(tech, "technician", ttl=ttl), "technician": tech}
 
     @app.get("/api/v1/community/overview")
     async def overview():
@@ -847,8 +894,21 @@ def create_app():
     def _today_str() -> str:
         return datetime.now().strftime("%Y-%m-%d")
 
-    _FORM_URL = (os.environ.get("ARVISX_PUBLIC_URL", "").rstrip("/") + "/forms") \
-        if os.environ.get("ARVISX_PUBLIC_URL") else ""
+    _PUBLIC_URL = os.environ.get("ARVISX_PUBLIC_URL", "").rstrip("/")
+    _FORM_URL = (_PUBLIC_URL + "/forms") if _PUBLIC_URL else ""
+
+    def _field_deeplink(rid: int, building: str, assignee: str) -> str:
+        """Deep-link a technician straight into the field round runner.
+        Carries a pre-minted technician token (?t=) so the tap auto-authenticates —
+        same primitive as the PIN login, no manager wall. Falls back to the legacy
+        /forms page if the SPA URL isn't configured."""
+        if not _PUBLIC_URL:
+            return f"\nOpen: {_FORM_URL}" if _FORM_URL else ""
+        tok = _auth_mod.make_token(assignee, "technician") if assignee else ""
+        url = f"{_PUBLIC_URL}/field/run/{rid}?building={building}"
+        if tok:
+            url += f"&t={tok}"
+        return f"\nOpen: {url}"
 
     def _notify_assignment(rid: int) -> None:
         """DM the assigned technician their round (needs a roster phone; else skip —
@@ -866,7 +926,7 @@ def create_app():
             return
         summ = run_summary(tmpl, state.db.checklist_entries(rid))
         openn = summ["total"] - summ["done"]
-        link = f"\nOpen: {_FORM_URL}" if _FORM_URL else ""
+        link = _field_deeplink(rid, run["building_id"], run["assignee"])
         txt = (f"📋 You've been assigned *{tmpl.name}* for {run['shift_date']}.\n"
                f"{openn} item(s) to complete.{link}")
         state.db.enqueue_notification(run["building_id"], txt, to_number=phone, kind="assignment")

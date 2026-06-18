@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Check, TriangleAlert, Camera, ChevronLeft, ChevronRight, X, CheckCircle2, Loader2 } from 'lucide-react'
+import { Check, TriangleAlert, Camera, ChevronLeft, ChevronRight, X, CheckCircle2, Loader2, CloudOff } from 'lucide-react'
 import { api } from '../api/client'
 import { useBuilding } from '../lib/BuildingContext'
+import { enqueue, flush, subscribe, isNetworkError } from '../lib/fieldQueue'
 
 // Field round-runner: the technician's ENTIRE world. Phone-first, one check at a time,
 // big touch targets, auto-advance, minimal chrome. Opened straight from the WhatsApp link
@@ -25,7 +26,11 @@ export default function FieldRound() {
   const [idx, setIdx] = useState(0)
   const [saving, setSaving] = useState(false)
   const [done, setDone] = useState(false)
+  const [queued, setQueued] = useState(0)
   const fileRef = useRef(null)
+
+  // surface how many taps are waiting on a reconnect
+  useEffect(() => subscribe(setQueued), [])
 
   const items = useMemo(() => flatten(run?.template), [run])
   const entries = run?.entries || {}
@@ -54,11 +59,21 @@ export default function FieldRound() {
 
   async function record({ status = '', value = '', note = '' }) {
     setSaving(true)
+    const body = { item_id: item.item_id, value: String(value), status, note }
+    // Optimistic local update first — progress + resume stay correct whether or
+    // not the network is up. The tech never waits on a round-trip.
+    setRun((r) => ({ ...r, entries: { ...(r.entries || {}), [item.item_id]: { value: String(value), status, note } } }))
     try {
-      await api.entry(rid, { item_id: item.item_id, value: String(value), status, note })
-      // optimistic local update so progress + resume stay correct without a full refetch
-      setRun((r) => ({ ...r, entries: { ...(r.entries || {}), [item.item_id]: { value: String(value), status, note } } }))
-    } catch (e) { setErr(e) }
+      await api.entry(rid, body)
+      setErr(null)
+    } catch (e) {
+      if (isNetworkError(e)) {
+        enqueue(rid, body)   // offline — stash and replay on reconnect
+        setErr(null)
+      } else {
+        setErr(e)            // a real rejection (auth/validation) — show it
+      }
+    }
     setSaving(false)
   }
 
@@ -91,6 +106,12 @@ export default function FieldRound() {
   async function submitRound() {
     setSaving(true)
     try {
+      const drained = await flush()      // land any offline entries before closing the round
+      if (!drained) {
+        setErr(new Error('Some entries are still waiting to sync — reconnect, then submit.'))
+        setSaving(false)
+        return
+      }
       await api.submit(rid)
       setDone(true)
     } catch (e) { setErr(e) }
@@ -127,6 +148,11 @@ export default function FieldRound() {
           <span>{item.section}</span>
           <span>{doneCount} / {total} done</span>
         </div>
+        {queued > 0 && (
+          <div className="mt-2 flex items-center gap-1.5 text-xs text-amber">
+            <CloudOff size={13} /> {queued} saved on this phone — will sync when back online
+          </div>
+        )}
       </div>
 
       {/* the one check */}

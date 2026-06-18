@@ -19,8 +19,8 @@ import os
 import time
 from typing import Optional, Tuple
 
-WRITE_ROLES = {"system", "owner", "fm"}      # may mutate
-ALL_ROLES = {"owner", "fm", "viewer"}
+WRITE_ROLES = {"system", "owner", "fm", "technician"}   # may mutate (technician fills rounds)
+ALL_ROLES = {"owner", "fm", "viewer", "technician"}
 TOKEN_TTL = int(os.environ.get("ARVISX_TOKEN_TTL", "86400"))   # seconds
 
 

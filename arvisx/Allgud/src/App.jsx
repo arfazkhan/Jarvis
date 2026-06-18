@@ -1,6 +1,7 @@
-import { BrowserRouter, Routes, Route, Outlet } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Outlet, Navigate } from 'react-router-dom'
 import Sidebar from './components/Sidebar'
 import Login from './components/Login'
+import FieldLogin from './components/FieldLogin'
 import Overview from './pages/Overview'
 import Operations from './pages/Operations'
 import RoundDetail from './pages/RoundDetail'
@@ -39,7 +40,9 @@ function AuthGate() {
         </div>
       )
     }
-    return <Login />
+    // Router isn't mounted yet (it lives inside Shell), so branch on the raw path:
+    // a technician on a /field link gets the PIN keypad, not the manager wall.
+    return window.location.pathname.startsWith('/field') ? <FieldLogin /> : <Login />
   }
   return (
     <BuildingProvider>
@@ -50,6 +53,7 @@ function AuthGate() {
 
 function Shell() {
   const { loading, error, buildings } = useBuilding()
+  const { isTechnician } = useAuth()
 
   if (loading) return <Center>Loading buildings…</Center>
   if (error) return <Center className="text-red">Could not reach AllGud API: {error.message}</Center>
@@ -72,9 +76,9 @@ function Shell() {
         <Route path="/field" element={<FieldHome />} />
         <Route path="/field/run/:rid" element={<FieldRound />} />
 
-        {/* Console — manager, with sidebar */}
+        {/* Console — manager, with sidebar. Technicians don't belong here. */}
         <Route element={<ConsoleLayout />}>
-          <Route path="/" element={<Overview />} />
+          <Route path="/" element={isTechnician ? <Navigate to="/field" replace /> : <Overview />} />
           <Route path="/operations" element={<Operations />} />
           <Route path="/operations/round/:rid" element={<RoundDetail />} />
           <Route path="/operations/round/:rid/check/:itemIndex" element={<CheckItem />} />

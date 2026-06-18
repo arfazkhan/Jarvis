@@ -87,9 +87,50 @@ def test_user_auth_and_role_gating():
         assert c.post("/api/v1/workorders/sync", headers=viewer).status_code == 403
 
 
+def test_field_pin_and_deeplink_token():
+    """Technician field access: owner sets a PIN, the tech exchanges it for a
+    technician-role token (PIN door), and a pre-minted deep-link token authes the
+    same way (?t= door). Both can write entries; neither can manage."""
+    with _env(ARVISX_DB=os.path.join(tempfile.mkdtemp(), "a.db"),
+              ARVISX_ADMIN_USER="boss", ARVISX_ADMIN_PASSWORD="s3cret",
+              ARVISX_AUTH_SECRET="test-secret"):
+        c = _app()
+        owner = {"Authorization": "Bearer " + c.post(
+            "/api/v1/auth/login", json={"username": "boss", "password": "s3cret"}).json()["token"]}
+
+        # roster a tech, then owner sets their PIN
+        tid = c.post("/api/v1/technicians", headers=owner,
+                     json={"name": "Ajith", "building": "one-anthem"}).json()["id"]
+        assert c.post(f"/api/v1/technicians/{tid}/pin", headers=owner,
+                      json={"pin": "4821"}).status_code == 200
+
+        # PIN login is exempt from the auth wall (a tech has no token yet)
+        bad = c.post("/api/v1/auth/field-login", json={"building": "one-anthem", "pin": "0000"})
+        assert bad.status_code == 401
+        ok = c.post("/api/v1/auth/field-login", json={"building": "one-anthem", "pin": "4821"})
+        assert ok.status_code == 200 and ok.json()["role"] == "technician"
+        tech = {"Authorization": "Bearer " + ok.json()["token"]}
+
+        # technician identity resolves and can write (fills rounds) but can't manage users
+        assert c.get("/api/v1/auth/me", headers=tech).json()["role"] == "technician"
+        assert c.post("/api/v1/auth/users", headers=tech,
+                      json={"username": "x", "password": "p", "role": "viewer"}).status_code == 403
+
+        # deep-link door: owner mints a token for the tech; it authes the same way
+        dt = c.post("/api/v1/auth/field-token", headers=owner, json={"technician": "Ajith"})
+        assert dt.status_code == 200
+        deep = {"Authorization": "Bearer " + dt.json()["token"]}
+        assert c.get("/api/v1/auth/me", headers=deep).json()["role"] == "technician"
+
+        # only managers can mint/set — a tech can't escalate
+        assert c.post("/api/v1/auth/field-token", headers=tech,
+                      json={"technician": "Ajith"}).status_code == 403
+
+
 if __name__ == "__main__":
     test_open_mode_endpoints_asset_and_from_risk()
     test_pagination()
     test_sse_route_registered()
     test_user_auth_and_role_gating()
-    print("PASS — frontend endpoints (auth/role, asset, from-risk, pagination, SSE) verified")
+    test_field_pin_and_deeplink_token()
+    print("PASS — frontend endpoints (auth/role, field PIN + deep-link token, asset, pagination, SSE) verified")

@@ -21,6 +21,21 @@ export function getToken() {
   return authToken
 }
 
+// Deep-link auth: a WhatsApp assignment link can carry a pre-minted technician
+// token as ?t=<token> so tapping it drops the tech straight into the round, no
+// login wall. Consume it once on load and scrub it from the URL (don't leave a
+// bearer token sitting in the address bar / history / referrer).
+function consumeDeepLinkToken() {
+  if (typeof window === 'undefined') return
+  const url = new URL(window.location.href)
+  const t = url.searchParams.get('t')
+  if (!t) return
+  setToken(t)
+  url.searchParams.delete('t')
+  window.history.replaceState({}, '', url.pathname + url.search + url.hash)
+}
+consumeDeepLinkToken()
+
 function qs(params = {}) {
   const p = new URLSearchParams()
   Object.entries(params).forEach(([k, v]) => {
@@ -65,6 +80,11 @@ export const api = {
   login: (username, password) => api.post('/auth/login', { username, password }),
   me: () => api.get('/auth/me'),
   createUser: (body) => api.post('/auth/users', body),
+
+  // field access (technicians): PIN now, deep-link token later — same primitive.
+  fieldLogin: (building, pin) => api.post('/auth/field-login', { building, pin }),
+  setTechPin: (id, pin) => api.post(`/technicians/${id}/pin`, { pin }),
+  fieldToken: (building, technician) => api.post('/auth/field-token', { building, technician }),
 
   seeds: () => api.get('/forms/seeds'),
   seedBuilding: (body) => api.post('/forms/seed', body),

@@ -14,9 +14,17 @@ Seed demo data first so screens render: `python scratch/seed_one_anthem.py` (aga
 
 ## Auth
 - If the backend has no users and no API key, it runs **open** — the app skips login.
-- Otherwise users **sign in** (`/auth/login`); the token is stored and sent as `Bearer`.
+- **Managers** sign in (`/auth/login`); the token is stored and sent as `Bearer`.
   `viewer` role is read-only (write controls hidden). Create users on the backend
   (`POST /auth/users`, owner only) or bootstrap an owner via `ARVISX_ADMIN_USER` / `ARVISX_ADMIN_PASSWORD`.
+- **Technicians** never hit the manager wall. Two doors, one `technician`-role token:
+  - **PIN** — on a `/field` link with no token they get a keypad; the PIN (set by a
+    manager via `POST /technicians/{id}/pin`) is exchanged at `/auth/field-login` for a token.
+  - **Deep link** — the WhatsApp assignment DM carries a pre-minted token as `?t=…`
+    (see `ARVISX_PUBLIC_URL` on the backend). The app consumes it on load, scrubs it
+    from the URL, and drops the tech straight into the round — no keypad.
+  Both produce the same Bearer token, so the field session handling is identical and
+  the PIN can scale to per-tech deep-link tokens without changing the client.
 
 ## Build & deploy (pilot)
 ```
