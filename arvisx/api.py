@@ -302,10 +302,18 @@ def create_app():
                         "technician": t["name"], "building": building}
         raise HTTPException(401, "invalid PIN")
 
+    def _writer_role(authorization: str, x_api_key: str) -> Optional[str]:
+        """Resolve a write role, honoring dev-open mode the same way the middleware does
+        (no key + no users → 'system'). Endpoints that re-identify must use this, else
+        they 403 in open mode even though the middleware let the request through."""
+        if not (_api_key or state.auth_on):
+            return "system"
+        return _auth_mod.identify(authorization, x_api_key, _api_key)[1]
+
     @app.post("/api/v1/technicians/{tech_id}/pin")
     async def set_field_pin(tech_id: int, payload: Dict[str, Any] = Body(...),
                             authorization: str = Header(default=""), x_api_key: str = Header(default="")):
-        _, role = _auth_mod.identify(authorization, x_api_key, _api_key)
+        role = _writer_role(authorization, x_api_key)
         if role not in ("system", "owner", "fm"):
             raise HTTPException(403, "only owner/fm/system can set a technician PIN")
         pin = str((payload or {}).get("pin", "")).strip()
@@ -319,7 +327,7 @@ def create_app():
                           authorization: str = Header(default=""), x_api_key: str = Header(default="")):
         # Mint a deep-link token for a technician (owner/fm/system). The
         # assignment link can carry this as ?t=<token> so a tap auto-authenticates.
-        _, role = _auth_mod.identify(authorization, x_api_key, _api_key)
+        role = _writer_role(authorization, x_api_key)
         if role not in ("system", "owner", "fm"):
             raise HTTPException(403, "only owner/fm/system can mint a field token")
         p = payload or {}
@@ -1133,8 +1141,14 @@ def create_app():
     # ── Technician roster + assignment (manager assigns; the task has an owner) ──
     @app.get("/api/v1/technicians")
     async def technicians_list(building: str = "one-anthem", all: bool = False):
-        return {"building": building,
-                "technicians": state.db.list_technicians(building, active_only=not all)}
+        # Never ship the PIN hash to the client; expose only whether one is set so the
+        # console can show "PIN set" and offer to (re)set it.
+        out = []
+        for t in state.db.list_technicians(building, active_only=not all):
+            t = dict(t)
+            t["has_pin"] = bool(t.pop("pin_hash", None))
+            out.append(t)
+        return {"building": building, "technicians": out}
 
     @app.post("/api/v1/technicians")
     async def technician_add(payload: Dict[str, Any] = Body(...)):
@@ -1379,6 +1393,51 @@ def create_app():
                 + (f" → {a['assignee'] or a['vendor']}" if (a['assignee'] or a['vendor']) else "")
                 for a in aged[:6])
         return {"date": date, "text": text, "aged_open_issues": aged}
+
+    @app.get("/api/v1/forms/activity")
+    async def forms_activity(building: str = "one-anthem", date: str = "", limit: int = 50):
+        """A grounded 'what changed today' feed — real events only (rounds submitted,
+        issues opened/resolved, sign-offs), newest first. No AI, no fabrication; each
+        item is a row that actually happened."""
+        from arvisx.checklist_forms import get_template
+        date = date or _today_str()
+        events: List[Dict[str, Any]] = []
+
+        def _name(tid: str) -> str:
+            t = get_template(tid, building)
+            return t.name if t else tid
+
+        # rounds submitted today
+        for run in state.db.checklist_runs_for(building, date):
+            sub = run.get("submitted_at") or ""
+            if run.get("status") == "submitted" and sub.startswith(date):
+                events.append({"ts": sub, "kind": "round_submitted",
+                               "title": f"{_name(run['template_id'])} submitted",
+                               "who": run.get("assignee") or run.get("technician") or "",
+                               "asset": run.get("asset") or ""})
+            # sign-offs on this run today
+            for s in state.db.checklist_signoffs(run["id"]):
+                if (s.get("ts") or "").startswith(date):
+                    events.append({"ts": s["ts"], "kind": "signoff",
+                                   "title": f"{_name(run['template_id'])} signed off ({s['role']})",
+                                   "who": s.get("by_user") or "", "asset": run.get("asset") or ""})
+
+        # issues opened / resolved today
+        for iss in state.db.list_issues(building):
+            created = iss.get("created_at") or ""
+            updated = iss.get("updated_at") or ""
+            if created.startswith(date):
+                events.append({"ts": created, "kind": "issue_opened",
+                               "title": iss.get("title") or "Issue opened",
+                               "who": iss.get("raised_by") or "", "asset": iss.get("asset") or "",
+                               "severity": iss.get("severity") or ""})
+            if iss.get("status") == "resolved" and updated.startswith(date) and updated != created:
+                events.append({"ts": updated, "kind": "issue_resolved",
+                               "title": f"Resolved: {iss.get('title') or 'issue'}",
+                               "who": iss.get("assignee") or "", "asset": iss.get("asset") or ""})
+
+        events.sort(key=lambda e: e["ts"], reverse=True)
+        return {"building": building, "date": date, "events": events[:limit]}
 
     # ── Phase-S substrate: asset registry, asset history, PPM scheduling ──
     def _latest_run_hours(building: str, asset: str):

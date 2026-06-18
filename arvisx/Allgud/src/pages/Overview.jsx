@@ -1,6 +1,9 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Info, Sparkles, ArrowRight, BatteryWarning, Flame, Droplets, Waves, Box } from 'lucide-react'
+import {
+  Info, Sparkles, ArrowRight, BatteryWarning, Flame, Droplets, Waves, Box,
+  ClipboardCheck, PenLine, TriangleAlert, CheckCircle2, Clock,
+} from 'lucide-react'
 import PageHeader from '../components/PageHeader'
 import { Card, IconCircle } from '../components/ui'
 import { useAsync } from '../lib/useAsync'
@@ -22,6 +25,7 @@ export default function Overview() {
   const watchlist = useAsync(() => api.watchlist(building), [building])
   const today = useAsync(() => api.today(building), [building])
   const ppm = useAsync(() => api.ppmSchedule(building), [building])
+  const activity = useAsync(() => api.activity(building), [building])
 
   const r = readiness.data
   const band = r?.band || 'Attention Required'
@@ -124,6 +128,11 @@ export default function Overview() {
         </div>
       </div>
 
+      <div className="px-10 pt-10">
+        <div className="text-sm text-text-dim mb-4">What changed today</div>
+        <ActivityFeed data={activity.data} loading={activity.loading} />
+      </div>
+
       <div className="px-10 py-10">
         <form onSubmit={submitAsk} className="relative">
           <Sparkles className="w-4 h-4 text-purple absolute left-5 top-1/2 -translate-y-1/2" />
@@ -145,6 +154,48 @@ export default function Overview() {
       </div>
     </div>
   )
+}
+
+const ACTIVITY_STYLE = {
+  round_submitted: { icon: ClipboardCheck, tone: 'green' },
+  signoff: { icon: PenLine, tone: 'blue' },
+  issue_opened: { icon: TriangleAlert, tone: 'amber' },
+  issue_resolved: { icon: CheckCircle2, tone: 'green' },
+}
+
+function ActivityFeed({ data, loading }) {
+  const events = data?.events || []
+  if (loading) return <div className="text-sm text-text-faint">Loading…</div>
+  if (!events.length) return <div className="text-sm text-text-faint">Nothing logged yet today.</div>
+  return (
+    <div className="flex flex-col">
+      {events.map((e, i) => {
+        const st = ACTIVITY_STYLE[e.kind] || { icon: Clock, tone: 'neutral' }
+        const Icon = st.icon
+        return (
+          <div key={i} className="flex items-center gap-3 py-2.5 border-b border-border-soft last:border-0">
+            <IconCircle tone={st.tone}>
+              <Icon className="w-4 h-4" />
+            </IconCircle>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm text-text truncate">{e.title}</div>
+              <div className="text-xs text-text-faint">
+                {[e.asset, e.who].filter(Boolean).join(' · ') || '—'}
+              </div>
+            </div>
+            <div className="text-xs text-text-faint whitespace-nowrap">{fmtTime(e.ts)}</div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function fmtTime(ts) {
+  if (!ts) return ''
+  const d = new Date(ts)
+  if (isNaN(d)) return ''
+  return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
 }
 
 function buildWhyCards(health, today, ppm) {

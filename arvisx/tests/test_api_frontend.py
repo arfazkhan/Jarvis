@@ -127,10 +127,38 @@ def test_field_pin_and_deeplink_token():
                       json={"technician": "Ajith"}).status_code == 403
 
 
+def test_activity_feed_and_has_pin():
+    """The 'what changed today' feed reports REAL events (round submitted, issue
+    opened) and the roster exposes has_pin (never the hash)."""
+    with _env(ARVISX_DB=os.path.join(tempfile.mkdtemp(), "a.db")):
+        c = _app()
+        # start + submit a round -> a round_submitted event
+        rid = c.post("/api/v1/forms/run", json={"template_id": "ANTHEM-SHIFT-1",
+                                                 "technician": "Ajith"}).json()["run"]["id"]
+        assert c.post(f"/api/v1/forms/run/{rid}/submit").status_code == 200
+        # open an issue -> an issue_opened event
+        c.post("/api/v1/issues", json={"building": "one-anthem", "title": "Pump noise",
+                                       "asset": "BOOSTER", "severity": "high"})
+
+        act = c.get("/api/v1/forms/activity").json()
+        kinds = {e["kind"] for e in act["events"]}
+        assert "round_submitted" in kinds and "issue_opened" in kinds
+
+        # roster shows has_pin, redacts the hash
+        tid = c.post("/api/v1/technicians", json={"name": "Suresh", "building": "one-anthem"}).json()["id"]
+        techs = c.get("/api/v1/technicians").json()["technicians"]
+        assert all("pin_hash" not in t for t in techs)
+        assert next(t for t in techs if t["id"] == tid)["has_pin"] is False
+        c.post(f"/api/v1/technicians/{tid}/pin", json={"pin": "9090"})
+        techs = c.get("/api/v1/technicians").json()["technicians"]
+        assert next(t for t in techs if t["id"] == tid)["has_pin"] is True
+
+
 if __name__ == "__main__":
     test_open_mode_endpoints_asset_and_from_risk()
     test_pagination()
     test_sse_route_registered()
     test_user_auth_and_role_gating()
     test_field_pin_and_deeplink_token()
-    print("PASS — frontend endpoints (auth/role, field PIN + deep-link token, asset, pagination, SSE) verified")
+    test_activity_feed_and_has_pin()
+    print("PASS — frontend endpoints (auth/role, field PIN + deep-link token, activity feed, asset, pagination, SSE) verified")

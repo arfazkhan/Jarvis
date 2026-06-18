@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { UserPlus, Wrench, Phone, Power, Plus, X, BarChart3 } from 'lucide-react'
+import { UserPlus, Wrench, Phone, Power, Plus, X, BarChart3, KeyRound, Link2, Check } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
 import { Pill, Drawer, Empty, Spinner, Avatar } from '../components/ui'
 import { Input, Select } from './Issues'
@@ -7,11 +7,27 @@ import { useAsync } from '../lib/useAsync'
 import { api } from '../api/client'
 import { useBuilding } from '../lib/BuildingContext'
 
+// Build a per-technician deep link into the field app. The minted token (?t=) auths
+// the tech straight into their rounds — the same primitive the WhatsApp round link uses.
+async function copyFieldLink(building, name, setCopied) {
+  try {
+    const { token } = await api.fieldToken(building, name)
+    const url = `${window.location.origin}/field?building=${encodeURIComponent(building)}&t=${token}`
+    await navigator.clipboard.writeText(url)
+    setCopied(name)
+    setTimeout(() => setCopied(null), 2000)
+  } catch (e) {
+    alert(e.message)
+  }
+}
+
 export default function People() {
   const { building } = useBuilding()
   const [tab, setTab] = useState('technicians')
   const [refreshKey, setRefreshKey] = useState(0)
   const [add, setAdd] = useState(null) // 'tech' | 'vendor'
+  const [pinFor, setPinFor] = useState(null) // technician getting a PIN set
+  const [copied, setCopied] = useState(null) // technician whose field link was just copied
 
   const techs = useAsync(() => api.technicians(building), [building, refreshKey])
   const vendors = useAsync(() => api.vendorsList(building), [building, refreshKey])
@@ -61,12 +77,34 @@ export default function People() {
                     <Avatar name={t.name} />
                     <div>
                       <div className="text-sm text-text">{t.name}</div>
-                      <div className="text-xs text-text-faint flex items-center gap-1">
-                        <Phone className="w-3 h-3" /> {t.phone || '—'}
+                      <div className="text-xs text-text-faint flex items-center gap-3">
+                        <span className="flex items-center gap-1"><Phone className="w-3 h-3" /> {t.phone || '—'}</span>
+                        <span className={`flex items-center gap-1 ${t.has_pin ? 'text-green' : 'text-text-faint'}`}>
+                          <KeyRound className="w-3 h-3" /> {t.has_pin ? 'PIN set' : 'No PIN'}
+                        </span>
                       </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    {t.active && (
+                      <>
+                        <button
+                          onClick={() => copyFieldLink(building, t.name, setCopied)}
+                          className="flex items-center gap-1 text-xs border border-border rounded-lg px-2.5 py-1.5 text-text-dim hover:border-gold/40"
+                          title="Copy a field-app link for this technician"
+                        >
+                          {copied === t.name ? <Check className="w-3.5 h-3.5 text-green" /> : <Link2 className="w-3.5 h-3.5" />}
+                          {copied === t.name ? 'Copied' : 'Field link'}
+                        </button>
+                        <button
+                          onClick={() => setPinFor(t)}
+                          className="flex items-center gap-1 text-xs border border-border rounded-lg px-2.5 py-1.5 text-text-dim hover:border-gold/40"
+                          title="Set a field sign-in PIN"
+                        >
+                          <KeyRound className="w-3.5 h-3.5" /> {t.has_pin ? 'Reset PIN' : 'Set PIN'}
+                        </button>
+                      </>
+                    )}
                     <Pill tone={t.active ? 'green' : 'neutral'}>{t.active ? 'active' : 'inactive'}</Pill>
                     {t.active && (
                       <button
@@ -143,6 +181,7 @@ export default function People() {
 
       <AddTechDrawer open={add === 'tech'} onClose={() => setAdd(null)} building={building} onAdded={refresh} />
       <AddVendorDrawer open={add === 'vendor'} onClose={() => setAdd(null)} building={building} onAdded={refresh} />
+      <SetPinDrawer tech={pinFor} onClose={() => setPinFor(null)} onSaved={refresh} />
     </div>
   )
 }
@@ -165,6 +204,35 @@ function AddTechDrawer({ open, onClose, building, onAdded }) {
     >
       <Input label="Name" value={form.name} onChange={(v) => setForm({ ...form, name: v })} />
       <Input label="Phone" value={form.phone} onChange={(v) => setForm({ ...form, phone: v })} />
+    </FormDrawer>
+  )
+}
+
+function SetPinDrawer({ tech, onClose, onSaved }) {
+  const [pin, setPin] = useState('')
+  const [err, setErr] = useState(null)
+  const valid = /^\d{4,6}$/.test(pin)
+  return (
+    <FormDrawer
+      open={!!tech}
+      onClose={() => { setPin(''); setErr(null); onClose() }}
+      title={`Field PIN — ${tech?.name || ''}`}
+      icon={KeyRound}
+      onSubmit={async () => {
+        setErr(null)
+        if (!valid) { setErr('PIN must be 4–6 digits.'); return }
+        await api.setTechPin(tech.id, pin)
+        setPin('')
+        onSaved()
+        onClose()
+      }}
+    >
+      <div className="text-sm text-text-faint">
+        The technician types this PIN (with the building) to sign into the field app —
+        no username or password. Keep PINs distinct within a building.
+      </div>
+      <Input label="PIN (4–6 digits)" value={pin} onChange={(v) => setPin(v.replace(/\D/g, '').slice(0, 6))} />
+      {err && <div className="text-sm text-red">{err}</div>}
     </FormDrawer>
   )
 }
