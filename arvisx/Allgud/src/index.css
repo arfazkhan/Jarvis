@@ -1,0 +1,65 @@
+@import "tailwindcss";
+@import url('https://api.fontshare.com/v2/css?f[]=satoshi@300,400,500,700,900&display=swap');
+
+@theme {
+  /* AllGud brand — Satoshi everywhere (single geometric sans) */
+  --font-serif: "Satoshi", system-ui, sans-serif;
+  --font-sans: "Satoshi", system-ui, sans-serif;
+
+  /* Light theme — brand palette
+     #111827 navy · #3B4556 slate · #D5DBE3 light · #F6F7F9 off-white */
+  --color-bg: #f6f7f9;
+  --color-surface: #ffffff;
+  --color-surface-2: #eef1f5;
+  --color-border: #e2e6ec;
+  --color-border-soft: #eceff3;
+
+  /* cool brand primary — nav, logo, headings */
+  --color-primary: #111827;
+  --color-primary-soft: #3b4556;
+
+  /* warm accent — key numbers pop (kept "gold" name to stay drop-in) */
+  --color-gold: #b0843a;
+  --color-gold-soft: #946d2c;
+
+  --color-text: #111827;
+  --color-text-dim: #3b4556;
+  --color-text-faint: #8a93a3;
+
+  /* semantic status — tuned for light bg contrast */
+  --color-amber: #b5781a;
+  --color-amber-bg: #fbf1df;
+  --color-red: #cf3d3d;
+  --color-red-bg: #fbe9e9;
+  --color-green: #2c9a57;
+  --color-green-bg: #e6f4ec;
+  --color-blue: #3567cf;
+  --color-blue-bg: #e9eefb;
+  --color-purple: #6353bd;
+  --color-purple-bg: #ecebf8;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 8px;
+}
