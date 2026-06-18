@@ -1,16 +1,37 @@
-# React + Vite
+# AllGud — frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Building-operations console + field app for the AllGud product (React 19 + Vite + Tailwind 4).
+Two faces of one app:
+- **Console** (manager) — sidebar, dashboards: `/`, `/operations`, `/issues` (+ Assets/People/Intelligence under "More").
+- **Field app** (technician) — full-screen, phone-first round runner: `/field`, `/field/run/:rid`. The WhatsApp assignment link drops the technician straight into `/field/run/:rid`.
 
-Currently, two official plugins are available:
+## Run locally
+1. Start the backend (see `arvisx/FRONTEND_BRIEF.md`): `python -m arvisx.api` on port 8091.
+2. `cp .env.example .env` and set `VITE_API_BASE=http://localhost:8091/api/v1`.
+3. `npm install && npm run dev` → open the printed URL.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Seed demo data first so screens render: `python scratch/seed_one_anthem.py` (against the same `ARVISX_DB` the API uses).
 
-## React Compiler
+## Auth
+- If the backend has no users and no API key, it runs **open** — the app skips login.
+- Otherwise users **sign in** (`/auth/login`); the token is stored and sent as `Bearer`.
+  `viewer` role is read-only (write controls hidden). Create users on the backend
+  (`POST /auth/users`, owner only) or bootstrap an owner via `ARVISX_ADMIN_USER` / `ARVISX_ADMIN_PASSWORD`.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Build & deploy (pilot)
+```
+npm run build                      # → dist/ (static)
+```
+Serve `dist/` from any static host **with SPA fallback to index.html** (deep links like
+`/field/run/42` must resolve client-side). Set `VITE_API_BASE` to the deployed API URL (HTTPS)
+at build time.
 
-## Expanding the ESLint configuration
+### Docker (nginx, SPA fallback included)
+```
+docker build --build-arg VITE_API_BASE=https://api.yourhost/api/v1 -t allgud-web .
+docker run -p 8080:80 allgud-web
+```
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Conventions (do not break)
+Icons only (lucide), **no emojis**. Confidence is a band (Low/Med/High), never a %. AI output
+carries a source badge. See `arvisx/FRONTEND_BRIEF.md` §6 for the full honesty rules.

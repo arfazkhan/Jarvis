@@ -7,6 +7,20 @@ export function setCurrentBuilding(id) {
   currentBuilding = id
 }
 
+// ── auth token (user login) ───────────────────────────────────────────────
+const TOKEN_KEY = 'allgud.token'
+let authToken = localStorage.getItem(TOKEN_KEY) || ''
+
+export function setToken(t) {
+  authToken = t || ''
+  if (t) localStorage.setItem(TOKEN_KEY, t)
+  else localStorage.removeItem(TOKEN_KEY)
+}
+
+export function getToken() {
+  return authToken
+}
+
 function qs(params = {}) {
   const p = new URLSearchParams()
   Object.entries(params).forEach(([k, v]) => {
@@ -21,6 +35,7 @@ async function request(path, { method = 'GET', body, params, headers, raw } = {}
   const url = `${BASE}${path}${qs({ ...params, building })}`
   const h = { ...(headers || {}) }
   if (!raw) h['Content-Type'] = 'application/json'
+  if (authToken) h['Authorization'] = `Bearer ${authToken}`
   if (API_KEY) h['X-API-Key'] = API_KEY
 
   const res = await fetch(url, {
@@ -45,6 +60,11 @@ export const api = {
   get: (path, params) => request(path, { params }),
   post: (path, body, params) => request(path, { method: 'POST', body, params }),
   del: (path, params) => request(path, { method: 'DELETE', params }),
+
+  // auth
+  login: (username, password) => api.post('/auth/login', { username, password }),
+  me: () => api.get('/auth/me'),
+  createUser: (body) => api.post('/auth/users', body),
 
   seeds: () => api.get('/forms/seeds'),
   seedBuilding: (body) => api.post('/forms/seed', body),
