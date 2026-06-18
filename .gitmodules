@@ -1,0 +1,3 @@
+[submodule "arvisx/bot"]
+	path = arvisx/bot
+	url = https://github.com/arfazkhan/wa_bot.git
