@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Check, TriangleAlert, Camera, ChevronLeft, ChevronRight, X, CheckCircle2, Loader2, CloudOff } from 'lucide-react'
+import { Check, TriangleAlert, Camera, ChevronLeft, ChevronRight, X, CheckCircle2, Loader2, CloudOff, CalendarX } from 'lucide-react'
 import { api } from '../api/client'
 import { useBuilding } from '../lib/BuildingContext'
 import { enqueue, flush, subscribe, isNetworkError } from '../lib/fieldQueue'
@@ -129,6 +129,32 @@ export default function FieldRound() {
       </div>
     </FieldShell>
   )
+
+  // A round opened via an old link may already be closed (submitted) or have lapsed
+  // (missed its window). Entries are rejected server-side once a run isn't 'open', so
+  // show a clear read-only state instead of letting taps fail.
+  const runStatus = run.run?.status
+  if (runStatus && runStatus !== 'open') {
+    const lapsedRun = runStatus === 'lapsed'
+    return (
+      <FieldShell>
+        <div className="px-4 pt-4 pb-3 border-b border-border flex items-center justify-between">
+          <div className="text-sm font-medium text-text truncate">{run.template?.name}</div>
+          <button onClick={() => navigate('/field')} className="text-text-faint p-1"><X size={20} /></button>
+        </div>
+        <div className="flex-1 flex flex-col items-center justify-center gap-4 px-6 text-center">
+          {lapsedRun ? <CalendarX size={56} className="text-amber" /> : <CheckCircle2 size={56} className="text-green" />}
+          <div className="font-serif text-2xl text-text">{lapsedRun ? 'Round missed' : 'Already submitted'}</div>
+          <div className="text-sm text-text-faint">
+            {lapsedRun
+              ? 'This round lapsed before it was submitted and can no longer be filled.'
+              : 'This round has been submitted. Nothing left to do here.'}
+          </div>
+          <button onClick={() => navigate('/field')} className="mt-2 text-sm text-gold">Back to my rounds</button>
+        </div>
+      </FieldShell>
+    )
+  }
 
   const e = entries[item.item_id] || {}
   const hasPhoto = !!e.photo

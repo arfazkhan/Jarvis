@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom'
-import { ClipboardList, ChevronRight, CheckCircle2, Loader2, Monitor } from 'lucide-react'
+import { ClipboardList, ChevronRight, CheckCircle2, Loader2, Monitor, CalendarX } from 'lucide-react'
 import { useAsync } from '../lib/useAsync'
 import { api } from '../api/client'
 import { useBuilding } from '../lib/BuildingContext'
@@ -12,8 +12,9 @@ export default function FieldHome() {
   const today = useAsync(() => api.today(building), [building])
 
   const runs = today.data?.runs || []
-  const open = runs.filter((r) => r.status !== 'submitted')
+  const open = runs.filter((r) => r.status === 'open')
   const doneRuns = runs.filter((r) => r.status === 'submitted')
+  const lapsed = runs.filter((r) => r.status === 'lapsed')   // missed — can't be filled anymore
 
   return (
     <div className="h-screen w-full bg-bg flex justify-center">
@@ -26,7 +27,7 @@ export default function FieldHome() {
         <div className="flex-1 overflow-y-auto px-4 py-4">
           {today.loading && <div className="flex justify-center py-12 text-text-faint"><Loader2 className="animate-spin" /></div>}
           {today.error && <div className="text-red text-sm py-8 text-center">{today.error.message}</div>}
-          {!today.loading && !open.length && !doneRuns.length && (
+          {!today.loading && !open.length && !doneRuns.length && !lapsed.length && (
             <div className="text-text-faint text-sm py-12 text-center">No rounds assigned today.</div>
           )}
 
@@ -45,6 +46,20 @@ export default function FieldHome() {
               </div>
               <ChevronRight size={20} className="text-text-faint" />
             </button>
+          ))}
+
+          {/* Missed rounds — a prior round lapsed before it was submitted. Read-only,
+              never tappable: it can't be filled now, but the tech should see it happened. */}
+          {lapsed.map((r) => (
+            <div key={r.run_id} className="w-full bg-surface border border-amber/40 rounded-2xl p-4 mb-3 flex items-center gap-3">
+              <div className="w-11 h-11 rounded-full bg-amber-bg flex items-center justify-center text-amber">
+                <CalendarX size={20} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-base font-medium text-text truncate">{r.name}</div>
+                <div className="text-xs text-amber">Missed — not submitted in time ({Math.round(r.completion_pct)}% done)</div>
+              </div>
+            </div>
           ))}
 
           {doneRuns.map((r) => (
