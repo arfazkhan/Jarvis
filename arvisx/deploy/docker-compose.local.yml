@@ -1,0 +1,10 @@
+# Local smoke override: HTTP on :8095 (host Apache holds 8080), api deep-link URL
+# points at the local origin, bot behind a profile (needs a real phone/QR).
+services:
+  api:
+    environment:
+      ARVISX_PUBLIC_URL: http://localhost:8095
+  web:
+    ports: !override ["8095:80"]
+  bot:
+    profiles: ["bot"]
