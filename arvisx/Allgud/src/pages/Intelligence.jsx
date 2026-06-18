@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Sparkles,
   Send,
@@ -9,12 +9,16 @@ import {
   Gauge,
   Settings2,
   Play,
+  QrCode,
+  CheckCircle2,
+  Loader2,
 } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
 import { Card, Pill, Spinner, Empty, SourceBadge } from '../components/ui'
 import { useAsync } from '../lib/useAsync'
 import { api } from '../api/client'
 import { useBuilding } from '../lib/BuildingContext'
+import { useAuth } from '../lib/AuthContext'
 
 const READINESS_BAND = { Healthy: 'green', 'Attention Required': 'amber', Critical: 'red' }
 const CONCERN_TONE = { high: 'red', elevated: 'amber', watch: 'amber', low: 'green' }
@@ -22,6 +26,8 @@ const TEXT_TONE = { green: 'text-green', amber: 'text-amber', red: 'text-red', n
 
 export default function Intelligence() {
   const { building } = useBuilding()
+  const { role } = useAuth()
+  const canPair = role === 'owner' || role === 'fm' || role === 'system'
   const [refreshKey, setRefreshKey] = useState(0)
   const refresh = () => setRefreshKey((k) => k + 1)
 
@@ -47,6 +53,7 @@ export default function Intelligence() {
         </div>
 
         <div className="flex flex-col gap-8">
+          {canPair && <WhatsAppCard />}
           <HandoverCard data={handover.data} loading={handover.loading} />
           <SweepsCard building={building} onRun={refresh} />
           <SlaCard building={building} />
@@ -195,6 +202,78 @@ function WatchlistCard({ data, loading }) {
               </div>
             )
           })}
+        </div>
+      )}
+    </Card>
+  )
+}
+
+// WhatsApp bot pairing — the owner links the bot without SSH. The bot pushes its
+// QR + status to the API; we poll and render the QR until it's connected.
+const BRIDGE_TONE = { connected: 'green', waiting_scan: 'amber', disconnected: 'red', unknown: 'neutral' }
+const BRIDGE_LABEL = {
+  connected: 'Connected',
+  waiting_scan: 'Waiting for scan',
+  disconnected: 'Disconnected',
+  unknown: 'Not reporting yet',
+}
+
+function WhatsAppCard() {
+  const [state, setState] = useState(null)
+  const [err, setErr] = useState(null)
+
+  useEffect(() => {
+    let alive = true
+    const tick = () =>
+      api
+        .bridgeState()
+        .then((d) => { if (alive) { setState(d); setErr(null) } })
+        .catch((e) => { if (alive) setErr(e) })
+    tick()
+    const id = setInterval(tick, 3000)   // QR rotates; poll keeps it fresh
+    return () => { alive = false; clearInterval(id) }
+  }, [])
+
+  const status = state?.status || 'unknown'
+  const tone = BRIDGE_TONE[status] || 'neutral'
+
+  return (
+    <Card className="p-5">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-text-faint">
+          <QrCode className="w-4 h-4" /> WhatsApp Bot
+        </div>
+        <Pill tone={tone}>{BRIDGE_LABEL[status] || status}</Pill>
+      </div>
+
+      {err && <div className="text-sm text-red">Couldn't reach the bot bridge.</div>}
+
+      {status === 'connected' && (
+        <div className="flex items-center gap-2 text-sm text-green">
+          <CheckCircle2 className="w-4 h-4" /> Bot is linked and delivering messages.
+        </div>
+      )}
+
+      {status === 'waiting_scan' && state?.qr && (
+        <div className="flex flex-col items-center gap-3">
+          <img src={state.qr} alt="WhatsApp pairing QR" className="w-48 h-48 rounded-lg border border-border bg-white p-2" />
+          <div className="text-xs text-text-faint text-center">
+            On the bot's phone: WhatsApp → <span className="text-text-dim">Linked devices → Link a device</span> → scan this.
+          </div>
+        </div>
+      )}
+
+      {status === 'waiting_scan' && !state?.qr && (
+        <div className="flex items-center gap-2 text-sm text-text-faint">
+          <Loader2 className="w-4 h-4 animate-spin" /> Generating pairing code…
+        </div>
+      )}
+
+      {(status === 'disconnected' || status === 'unknown') && (
+        <div className="text-sm text-text-faint">
+          {status === 'disconnected'
+            ? 'Bot lost its WhatsApp link — it will show a new QR to re-pair.'
+            : 'Waiting for the bot to report in. Make sure the bot service is running.'}
         </div>
       )}
     </Card>

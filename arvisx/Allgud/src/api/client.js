@@ -156,6 +156,9 @@ export const api = {
   slaConfig: (building) => api.get('/sla/config', { building }),
   setSlaConfig: (body) => api.post('/sla/config', body),
 
+  // whatsapp bridge pairing (owner/fm) — status + QR pushed by the bot
+  bridgeState: () => api.get('/whatsapp/bridge/state'),
+
   // sweeps
   runEscalations: (building) => api.post('/escalations/run', undefined, { building }),
   runReminders: (building) => api.post('/forms/reminders/run', undefined, { building }),
