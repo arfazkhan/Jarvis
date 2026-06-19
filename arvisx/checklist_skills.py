@@ -303,9 +303,29 @@ def building_qa_deterministic(db, building: str, today: str, question: str) -> s
 _QA_SYSTEM = (
     "You are ArvisX's building assistant. Answer the user's question about the building using "
     "ONLY the tools (health_overview, open_issues, asset_history, reading_anomalies, compliance, "
-    "list_assets). Cite the asset and the figure from the tools. Concise, operational. If the "
-    "data isn't there, say so — never invent a number or a status."
+    "list_assets). Cite the asset and the figure from the tools. If the data isn't there, say so — "
+    "never invent a number or a status.\n"
+    "OUTPUT FORMAT (important): after any thinking, write your final reply as the LAST line, "
+    "prefixed EXACTLY with 'ANSWER: '. It must be 1–2 short sentences in plain language for a "
+    "building manager — do NOT narrate your steps, your reasoning, or mention tools."
 )
+
+
+def _crisp(text: str) -> str:
+    """Strip a reasoning model's chain-of-thought, leaving the crisp reply.
+    Prefers the 'ANSWER:' tag; else drops <think>…</think> / pre-</think> narration."""
+    import re as _re
+    if not text:
+        return text
+    # remove any <think>…</think> blocks, and anything before a stray closing tag
+    text = _re.sub(r"<think>.*?</think>", "", text, flags=_re.S | _re.I)
+    if "</think>" in text.lower():
+        text = _re.split(r"</think>", text, flags=_re.I)[-1]
+    # the model's tagged final answer (take the last occurrence)
+    m = list(_re.finditer(r"ANSWER:\s*", text, flags=_re.I))
+    if m:
+        text = text[m[-1].end():]
+    return text.strip()
 
 
 async def run_building_qa(llm, db, building: str, question: str, today: str) -> Dict[str, Any]:
@@ -313,7 +333,7 @@ async def run_building_qa(llm, db, building: str, question: str, today: str) -> 
         try:
             ctx = build_ctx(db, building, today)
             out = await run_agent(llm, _QA_SYSTEM, question, ctx)
-            text = (out.get("text") or "").strip()
+            text = _crisp(out.get("text") or "")
             if text and verify_grounded(text, out.get("evidence"))["grounded"]:
                 return {"text": text, "source": "agent"}
         except Exception:
