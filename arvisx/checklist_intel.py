@@ -97,24 +97,62 @@ def compliance(db, building: str, today: str) -> Dict[str, Any]:
     return analyzers.compliance_report(scheds, stale)
 
 
-def lapse_stale_rounds(db, building: str, today: str) -> List[Dict[str, Any]]:
-    """Fix #1: give incomplete rounds a TERMINAL. Any run still 'open' from a prior day is
-    lapsed (status='lapsed') with a manager notice — so it never hangs open forever or
-    silently disappears after midnight. Runs that hit 100% but weren't submitted still lapse,
-    recorded with their completion."""
+def parse_shift_window(timing: str, shift_date: str):
+    """Parse a template timing like '08:00 AM – 04:15 PM' into (start, end) datetimes on
+    shift_date. Overnight shifts (end <= start, e.g. '08:00 PM – 08:15 AM') end the NEXT day.
+    Returns None for non-clock timings (e.g. PPM 'Every 3 months')."""
+    from datetime import datetime as _dt, timedelta as _td
+    if not timing:
+        return None
+    sep = next((d for d in ("–", "—", " to ", " - ", "-") if d in timing), None)
+    if not sep:
+        return None
+    try:
+        a, b = [p.strip() for p in timing.split(sep, 1)]
+        base = _dt.strptime(shift_date, "%Y-%m-%d")
+        st = _dt.strptime(a, "%I:%M %p")
+        en = _dt.strptime(b, "%I:%M %p")
+        start = base.replace(hour=st.hour, minute=st.minute)
+        end = base.replace(hour=en.hour, minute=en.minute)
+        if end <= start:
+            end += _td(days=1)                      # overnight shift
+        return (start, end)
+    except Exception:
+        return None
+
+
+def lapse_stale_rounds(db, building: str, now=None) -> List[Dict[str, Any]]:
+    """Give incomplete rounds a TERMINAL. A run lapses once its shift window has ENDED
+    (shift-end-aware; overnight shifts end next morning). Templates without a clock window
+    fall back to the prior-day rule. Manager gets a notice; a round never hangs open or
+    silently disappears. Runs at 100% but unsubmitted still lapse, recorded with completion."""
+    from datetime import datetime as _dt, timedelta as _td
+    now = now or _dt.now()
+    today = now.strftime("%Y-%m-%d")
     fired: List[Dict[str, Any]] = []
-    for run in db.open_runs_before(building, today):
-        tmpl = get_template(run["template_id"], building)
-        pct = 0.0
-        if tmpl is not None:
-            pct = run_summary(tmpl, db.checklist_entries(run["id"]))["completion_pct"]
-        db.set_run_status(run["id"], "lapsed")
-        name = tmpl.name if tmpl else run["template_id"]
-        who = run.get("assignee") or run.get("technician") or "unassigned"
-        db.enqueue_notification(
-            building, f"⚠️ {name} ({run['shift_date']}) closed INCOMPLETE at {pct:.0f}% "
-                      f"— assigned: {who}. Carry over / follow up.", to_number="", kind="round_lapsed")
-        fired.append({"run_id": run["id"], "shift_date": run["shift_date"], "completion_pct": pct})
+    # today + a few prior days covers same-day shift-end, overnight, and carryover.
+    dates = sorted({today} | {(now - _td(days=i)).strftime("%Y-%m-%d") for i in range(1, 4)})
+    seen = set()
+    for d in dates:
+        for run in db.checklist_runs_for(building, d):
+            if run["id"] in seen:
+                continue
+            seen.add(run["id"])
+            if run.get("status") != "open":
+                continue
+            tmpl = get_template(run["template_id"], building)
+            win = parse_shift_window(tmpl.timing, run["shift_date"]) if tmpl else None
+            ended = (now >= win[1]) if win else (run["shift_date"] < today)
+            if not ended:
+                continue
+            pct = run_summary(tmpl, db.checklist_entries(run["id"]))["completion_pct"] if tmpl else 0.0
+            db.set_run_status(run["id"], "lapsed")
+            name = tmpl.name if tmpl else run["template_id"]
+            who = run.get("assignee") or run.get("technician") or "unassigned"
+            db.enqueue_notification(
+                building, f"⚠️ {name} ({run['shift_date']}) closed INCOMPLETE at {pct:.0f}% "
+                          f"— assigned: {who}. Carry over / follow up.", to_number="", kind="round_lapsed")
+            fired.append({"run_id": run["id"], "shift_date": run["shift_date"], "completion_pct": pct})
     return fired
 
 
@@ -141,50 +179,70 @@ def aged_open_issues(db, building: str, now: Optional["datetime"] = None,
 
 
 def round_reminders(db, building: str, now: Optional["datetime"] = None,
-                    remind_after_h: float = 6.0, escalate_after_h: float = 10.0) -> List[Dict[str, Any]]:
-    """Chase ASSIGNED rounds that aren't finished. After remind_after_h → DM the assigned
-    technician (their pending items); after escalate_after_h still incomplete → escalate to
-    the manager (ops). One notification per level (reminded_level guard). Submitted/complete
-    rounds are skipped. This is the 'if not done → WhatsApp alert' half for ROUNDS (the SLA
-    sweep covers ISSUES)."""
-    from datetime import datetime as _dt
+                    remind_after_h: float = 6.0, escalate_after_h: float = 10.0,
+                    nudge_frac: float = 0.6, escalate_before_min: int = 30) -> List[Dict[str, Any]]:
+    """Chase ASSIGNED, unfinished rounds — SHIFT-END AWARE. When the template has a clock
+    window (timing), nudge the technician partway through the shift (nudge_frac of the way)
+    and escalate to the manager shortly before shift close (escalate_before_min). Templates
+    without a clock window fall back to fixed hours-since-start (remind_after_h/escalate_after_h).
+    Past shift end, the lapse sweep takes over. One notification per level (reminded_level
+    guard). This is the 'if not done → WhatsApp' half for ROUNDS (the SLA sweep covers ISSUES)."""
+    from datetime import datetime as _dt, timedelta as _td
     now = now or _dt.now()
-    today = now.strftime("%Y-%m-%d")
     fired: List[Dict[str, Any]] = []
-    for run in db.checklist_runs_for(building, today):
-        if run.get("status") == "submitted":
-            continue
-        tmpl = get_template(run["template_id"], building)
-        if tmpl is None:
-            continue
-        summ = run_summary(tmpl, db.checklist_entries(run["id"]))
-        if summ["completion_pct"] >= 100:
-            continue
-        try:
-            age_h = (now - _dt.fromisoformat(str(run["started_at"])[:19])).total_seconds() / 3600.0
-        except Exception:
-            continue
-        prev = int(run.get("reminded_level") or 0)
-        assignee = run.get("assignee") or ""
-        pending = summ["total"] - summ["done"]
-        pct = summ["completion_pct"]
-        if age_h >= escalate_after_h and prev < 2:
-            who = assignee or "unassigned"
-            db.enqueue_notification(
-                building, f"⚠️ {tmpl.name} ({today}) only {pct:.0f}% done by {who} — "
-                          f"{pending} item(s) pending, shift closing.", to_number="", kind="round_escalation")
-            db.set_run_reminded(run["id"], 2)
-            fired.append({"run_id": run["id"], "level": 2, "assignee": assignee})
-        elif age_h >= remind_after_h and prev < 1:
-            to_number = ""
-            if assignee:
-                tech = db.get_technician(building, assignee)
-                to_number = (tech or {}).get("phone", "") or ""
-            db.enqueue_notification(
-                building, f"📋 {tmpl.name} is {pct:.0f}% done — {pending} item(s) still pending. "
-                          "Please complete before shift close.", to_number=to_number, kind="round_reminder")
-            db.set_run_reminded(run["id"], 1)
-            fired.append({"run_id": run["id"], "level": 1, "assignee": assignee})
+    # today + yesterday so overnight shifts (which end next morning) are still chased.
+    dates = {now.strftime("%Y-%m-%d"), (now - _td(days=1)).strftime("%Y-%m-%d")}
+    seen = set()
+    for d in sorted(dates):
+        for run in db.checklist_runs_for(building, d):
+            if run["id"] in seen:
+                continue
+            seen.add(run["id"])
+            if run.get("status") != "open":          # submitted/lapsed → skip
+                continue
+            tmpl = get_template(run["template_id"], building)
+            if tmpl is None:
+                continue
+            summ = run_summary(tmpl, db.checklist_entries(run["id"]))
+            if summ["completion_pct"] >= 100:
+                continue
+            prev = int(run.get("reminded_level") or 0)
+            assignee = run.get("assignee") or ""
+            pending = summ["total"] - summ["done"]
+            pct = summ["completion_pct"]
+
+            win = parse_shift_window(tmpl.timing, run["shift_date"])
+            if win:
+                start, end = win
+                if now >= end:                       # shift over → lapse sweep handles it
+                    continue
+                nudge_at = start + (end - start) * nudge_frac
+                esc_at = max(nudge_at, end - _td(minutes=escalate_before_min))
+                do_nudge, do_escalate = now >= nudge_at, now >= esc_at
+            else:                                    # no clock window → fixed hours since start
+                try:
+                    age_h = (now - _dt.fromisoformat(str(run["started_at"])[:19])).total_seconds() / 3600.0
+                except Exception:
+                    continue
+                do_nudge, do_escalate = age_h >= remind_after_h, age_h >= escalate_after_h
+
+            if do_escalate and prev < 2:
+                who = assignee or "unassigned"
+                db.enqueue_notification(
+                    building, f"⚠️ {tmpl.name} ({run['shift_date']}) only {pct:.0f}% done by {who} — "
+                              f"{pending} item(s) pending, shift closing.", to_number="", kind="round_escalation")
+                db.set_run_reminded(run["id"], 2)
+                fired.append({"run_id": run["id"], "level": 2, "assignee": assignee})
+            elif do_nudge and prev < 1:
+                to_number = ""
+                if assignee:
+                    tech = db.get_technician(building, assignee)
+                    to_number = (tech or {}).get("phone", "") or ""
+                db.enqueue_notification(
+                    building, f"📋 {tmpl.name} is {pct:.0f}% done — {pending} item(s) still pending. "
+                              "Please complete before shift close.", to_number=to_number, kind="round_reminder")
+                db.set_run_reminded(run["id"], 1)
+                fired.append({"run_id": run["id"], "level": 1, "assignee": assignee})
     return fired
 
 

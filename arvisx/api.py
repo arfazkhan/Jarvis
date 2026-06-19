@@ -1325,13 +1325,14 @@ def create_app():
 
     @app.post("/api/v1/forms/reminders/run")
     async def round_reminders_run(building: str = "one-anthem"):
-        """Chase assigned-but-unfinished rounds: DM the technician, then escalate to the
-        manager. One notification per level. Bot calls each poll. Cutoffs via env
-        ARVISX_ROUND_REMIND_H (default 6) / ARVISX_ROUND_ESCALATE_H (default 10)."""
+        """Chase assigned-but-unfinished rounds: DM the technician partway through the shift,
+        escalate to the manager near shift close, lapse at shift end (shift-end-aware via the
+        template timing). Bot calls each poll. Fixed-hours fallback for templates without a
+        clock window: ARVISX_ROUND_REMIND_H (6) / ARVISX_ROUND_ESCALATE_H (10)."""
         from arvisx import checklist_intel as ci
         remind_h = float(os.environ.get("ARVISX_ROUND_REMIND_H", "6"))
         esc_h = float(os.environ.get("ARVISX_ROUND_ESCALATE_H", "10"))
-        lapsed = ci.lapse_stale_rounds(state.db, building, _today_str())   # prior-day open → terminal
+        lapsed = ci.lapse_stale_rounds(state.db, building)                 # shift-end → terminal
         fired = ci.round_reminders(state.db, building, remind_after_h=remind_h, escalate_after_h=esc_h)
         return {"building": building, "lapsed": lapsed, "fired": fired}
 

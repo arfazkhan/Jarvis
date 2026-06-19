@@ -358,30 +358,25 @@ def test_custom_loader_merges_and_overrides():
 
 # ── round-completion reminder sweep ─────────────────────────────────────
 def test_round_reminders_nudge_then_escalate(tmp_path):
-    from datetime import datetime, timedelta
+    # Shift-end aware: Shift II window = 12:00 PM – 08:15 PM. nudge ~16:57, escalate ~19:45.
+    from datetime import datetime
     from arvisx import checklist_intel as ci
     db = ArvisxDb(str(tmp_path / "rr.db"))
-    today = datetime.now().strftime("%Y-%m-%d")
-    rid = db.create_checklist_run("one-anthem", "ANTHEM-SHIFT-2", today,
+    D = "2026-06-15"
+    rid = db.create_checklist_run("one-anthem", "ANTHEM-SHIFT-2", D,
                                   technician="Ajith", assignee="Ajith")
     db.add_technician("one-anthem", "Ajith", "919000")
-    db.save_checklist_entry(rid, "wtp_backwash", value="done", status="ok")   # ~4% done
-    # backdate start to 7h ago → past remind (6h), before escalate (10h)
-    with db._conn() as c:
-        c.execute("UPDATE checklist_runs SET started_at=? WHERE id=?",
-                  ((datetime.now() - timedelta(hours=7)).isoformat(timespec="seconds"), rid))
-    fired = ci.round_reminders(db, "one-anthem")
-    assert fired and fired[0]["level"] == 1                       # tech nudged
-    assert ci.round_reminders(db, "one-anthem") == []            # dedup — no repeat at level 1
-    n = db.pending_notifications()
-    assert any(x["kind"] == "round_reminder" and x["to_number"] == "919000" for x in n)
+    db.save_checklist_entry(rid, "wtp_backwash", value="done", status="ok")   # partial
 
-    # now backdate to 11h → escalate to manager (ops broadcast)
-    with db._conn() as c:
-        c.execute("UPDATE checklist_runs SET started_at=? WHERE id=?",
-                  ((datetime.now() - timedelta(hours=11)).isoformat(timespec="seconds"), rid))
-    fired2 = ci.round_reminders(db, "one-anthem")
-    assert fired2 and fired2[0]["level"] == 2
+    nudge_now = datetime(2026, 6, 15, 17, 30)                     # past nudge, before escalate
+    fired = ci.round_reminders(db, "one-anthem", now=nudge_now)
+    assert fired and fired[0]["level"] == 1                       # tech nudged
+    assert ci.round_reminders(db, "one-anthem", now=nudge_now) == []   # dedup
+    assert any(x["kind"] == "round_reminder" and x["to_number"] == "919000" for x in db.pending_notifications())
+
+    esc_now = datetime(2026, 6, 15, 20, 0)                        # within 30m of 20:15 close
+    fired2 = ci.round_reminders(db, "one-anthem", now=esc_now)
+    assert fired2 and fired2[0]["level"] == 2                     # escalated to manager
     assert any(x["kind"] == "round_escalation" and x["to_number"] == "" for x in db.pending_notifications())
 
 
@@ -400,18 +395,21 @@ def test_round_reminders_skip_complete_and_submitted(tmp_path):
 
 # ── Fix #1: incomplete prior-day rounds get a terminal (lapse) ──────────
 def test_lapse_stale_rounds(tmp_path):
+    # Shift-end aware: a prior shift whose window has ended lapses; today's open shift (window
+    # not yet ended) is untouched.
+    from datetime import datetime
     from arvisx import checklist_intel as ci
     db = ArvisxDb(str(tmp_path / "lapse.db"))
-    yesterday = "2026-06-13"
-    rid = db.create_checklist_run("one-anthem", "ANTHEM-SHIFT-2", yesterday, assignee="Ajith")
+    old = "2026-06-13"
+    rid = db.create_checklist_run("one-anthem", "ANTHEM-SHIFT-2", old, assignee="Ajith")
     db.save_checklist_entry(rid, "wtp_backwash", value="done", status="ok")   # incomplete
-    today_rid = db.create_checklist_run("one-anthem", "ANTHEM-SHIFT-2", "2026-06-14")
-    lapsed = ci.lapse_stale_rounds(db, "one-anthem", "2026-06-14")
+    today_rid = db.create_checklist_run("one-anthem", "ANTHEM-SHIFT-2", "2026-06-15")
+    now = datetime(2026, 6, 15, 10, 0)                              # before today's noon shift
+    lapsed = ci.lapse_stale_rounds(db, "one-anthem", now=now)
     assert len(lapsed) == 1 and lapsed[0]["run_id"] == rid
     assert db.get_checklist_run(rid)["status"] == "lapsed"          # terminal reached
     assert db.get_checklist_run(today_rid)["status"] == "open"      # today untouched
-    # idempotent — lapsed run not re-swept
-    assert ci.lapse_stale_rounds(db, "one-anthem", "2026-06-14") == []
+    assert ci.lapse_stale_rounds(db, "one-anthem", now=now) == []   # idempotent
     assert any(n["kind"] == "round_lapsed" for n in db.pending_notifications())
 
 

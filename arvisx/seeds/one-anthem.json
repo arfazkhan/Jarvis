@@ -221,7 +221,7 @@
       "template_id": "ANTHEM-SHIFT-2",
       "name": "Shift II — Daily Operations",
       "cadence": "daily",
-      "timing": "12:00 AM – 08:15 PM",
+      "timing": "12:00 PM – 08:15 PM",
       "signoff_roles": [
         "technician",
         "supervisor",
