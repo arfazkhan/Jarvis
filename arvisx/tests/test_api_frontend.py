@@ -154,6 +154,37 @@ def test_activity_feed_and_has_pin():
         assert next(t for t in techs if t["id"] == tid)["has_pin"] is True
 
 
+def test_admin_panel_role_and_endpoints():
+    """Admin panel: a dedicated `admin` operator account reaches /admin/* (bot bridge +
+    analytics); the building owner does NOT (separation). Bridge QR flows admin-only."""
+    with _env(ARVISX_DB=os.path.join(tempfile.mkdtemp(), "a.db"),
+              ARVISX_ADMIN_USER="boss", ARVISX_ADMIN_PASSWORD="s3cret",
+              ARVISX_PANEL_USER="ops", ARVISX_PANEL_PASSWORD="opspass",
+              ARVISX_AUTH_SECRET="test-secret"):
+        c = _app()
+        admin_login = c.post("/api/v1/auth/login", json={"username": "ops", "password": "opspass"})
+        assert admin_login.status_code == 200 and admin_login.json()["role"] == "admin"
+        admin = {"Authorization": "Bearer " + admin_login.json()["token"]}
+        owner = {"Authorization": "Bearer " + c.post(
+            "/api/v1/auth/login", json={"username": "boss", "password": "s3cret"}).json()["token"]}
+
+        # admin reaches the panel endpoints; owner is forbidden (separation of concerns)
+        assert c.get("/api/v1/admin/analytics", headers=admin).status_code == 200
+        assert c.get("/api/v1/admin/bridge/state", headers=admin).status_code == 200
+        assert c.get("/api/v1/admin/analytics", headers=owner).status_code == 403
+        assert c.get("/api/v1/admin/bridge/state", headers=owner).status_code == 403
+
+        # analytics shape
+        a = c.get("/api/v1/admin/analytics", headers=admin).json()
+        assert "rounds" in a and "issues" in a and "ppm" in a and "technicians" in a
+
+        # bot pushes a QR → admin can read it back
+        c.post("/api/v1/whatsapp/bridge/state", headers=admin,
+               json={"status": "waiting_scan", "qr": "data:image/png;base64,AAAA"})
+        b = c.get("/api/v1/admin/bridge/state", headers=admin).json()
+        assert b["status"] == "waiting_scan" and b["qr"].startswith("data:image/png")
+
+
 if __name__ == "__main__":
     test_open_mode_endpoints_asset_and_from_risk()
     test_pagination()

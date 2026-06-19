@@ -19,8 +19,13 @@ import os
 import time
 from typing import Optional, Tuple
 
-WRITE_ROLES = {"system", "owner", "fm", "technician"}   # may mutate (technician fills rounds)
-ALL_ROLES = {"owner", "fm", "viewer", "technician"}
+WRITE_ROLES = {"system", "admin", "owner", "fm", "technician"}   # may mutate (technician fills rounds)
+ALL_ROLES = {"admin", "owner", "fm", "viewer", "technician"}
+ADMIN_ROLES = {"system", "admin"}                       # AllGud operator — admin panel / bot / analytics
+
+
+def is_admin(role: Optional[str]) -> bool:
+    return role in ADMIN_ROLES
 TOKEN_TTL = int(os.environ.get("ARVISX_TOKEN_TTL", "86400"))   # seconds
 
 

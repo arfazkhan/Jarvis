@@ -71,6 +71,9 @@ class _State:
         from arvisx.commissioning import CommissioningManager
         self.commissioner = CommissioningManager(self.db)
         self._sent_alerts: set = set()      # WhatsApp alert dedup across polls
+        # WhatsApp bridge pairing state, pushed by the bot for the ADMIN panel (status:
+        # unknown|waiting_scan|connected|disconnected). Transient.
+        self._bridge: Dict[str, Any] = {"status": "unknown", "qr": "", "ts": ""}
         try:
             self.baselines.load_from(self.db)
             self.wo_store.load_from(self.db)
@@ -82,6 +85,13 @@ class _State:
         if admin_u and admin_p and self.db.count_users() == 0:
             from arvisx.auth import hash_password
             self.db.create_user(admin_u, "owner", hash_password(admin_p))
+        # Bootstrap the AllGud OPERATOR (admin panel) account — separate from the building
+        # owner. Idempotent: only created if that username doesn't already exist.
+        panel_u = os.environ.get("ARVISX_PANEL_USER", "").strip()
+        panel_p = os.environ.get("ARVISX_PANEL_PASSWORD", "").strip()
+        if panel_u and panel_p and not self.db.get_user(panel_u):
+            from arvisx.auth import hash_password
+            self.db.create_user(panel_u, "admin", hash_password(panel_p))
         # User auth is enforced when any user exists OR an API key is set.
         self.auth_on = bool(self.db.count_users() > 0 or os.environ.get("ARVISX_API_KEY", "").strip())
         if os.environ.get("ARVISX_SOURCE", "sim").lower() == "mqtt":
@@ -1177,6 +1187,34 @@ def create_app():
         ids = (payload or {}).get("ids") or []
         state.db.mark_notifications_sent([int(i) for i in ids if str(i).isdigit()])
         return {"acked": ids}
+
+    # ── Admin panel (AllGud operator) — bot pairing + building analytics ────────
+    @app.post("/api/v1/whatsapp/bridge/state")
+    async def wa_bridge_set(payload: Dict[str, Any] = Body(...)):
+        """The bot pushes its pairing state (write-role/api-key gated by middleware).
+        QR retained only while waiting to scan."""
+        p = payload or {}
+        status = str(p.get("status", "")).strip() or "unknown"
+        state._bridge = {"status": status,
+                         "qr": str(p.get("qr", "")) if status == "waiting_scan" else "",
+                         "ts": datetime.now().isoformat(timespec="seconds")}
+        return {"ok": True}
+
+    @app.get("/api/v1/admin/bridge/state")
+    async def admin_bridge_get(authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        """Bridge pairing state for the admin panel. QR is a sensitive pairing secret → admin only."""
+        if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
+            raise HTTPException(403, "admin only")
+        return state._bridge
+
+    @app.get("/api/v1/admin/analytics")
+    async def admin_analytics(building: str = "one-anthem", days: int = 7,
+                              authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        """Building performance rollup for the admin panel (admin only)."""
+        if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
+            raise HTTPException(403, "admin only")
+        from arvisx import checklist_intel as ci
+        return ci.building_evaluation(state.db, building, days=int(days))
 
     @app.post("/api/v1/forms/run/{rid}/assign")
     async def forms_assign_run(rid: int, payload: Dict[str, Any] = Body(...)):

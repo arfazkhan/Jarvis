@@ -156,6 +156,66 @@ def lapse_stale_rounds(db, building: str, now=None) -> List[Dict[str, Any]]:
     return fired
 
 
+def building_evaluation(db, building: str, now=None, days: int = 7) -> Dict[str, Any]:
+    """Grounded performance rollup for the admin panel — how AllGud is doing at a building
+    over the last `days`. Real counts only (rounds, issues, PPM, per-technician)."""
+    from datetime import datetime as _dt, timedelta as _td
+    now = now or _dt.now()
+    today = now.strftime("%Y-%m-%d")
+    dates = [(now - _td(days=i)).strftime("%Y-%m-%d") for i in range(days)]
+    runs = [r for d in dates for r in db.checklist_runs_for(building, d)]
+
+    total = len(runs)
+    submitted = sum(1 for r in runs if r["status"] == "submitted")
+    lapsed = sum(1 for r in runs if r["status"] == "lapsed")
+    openn = sum(1 for r in runs if r["status"] == "open")
+    comps = []
+    for r in runs:
+        t = get_template(r["template_id"], building)
+        if t:
+            comps.append(run_summary(t, db.checklist_entries(r["id"]))["completion_pct"])
+    avg_completion = round(sum(comps) / len(comps), 1) if comps else 0.0
+
+    issues = db.list_issues(building)
+    recent = [i for i in issues if (i.get("created_at") or "")[:10] in dates]
+    raised = len(recent)
+    resolved = sum(1 for i in recent if i["status"] == "resolved")
+    res_hrs = []
+    for i in recent:
+        if i["status"] == "resolved" and i.get("created_at") and i.get("updated_at"):
+            try:
+                res_hrs.append((_dt.fromisoformat(i["updated_at"][:19])
+                                - _dt.fromisoformat(i["created_at"][:19])).total_seconds() / 3600.0)
+            except Exception:
+                pass
+
+    scheds = db.list_ppm_schedules(building)
+    pstates = [ppm_status(s, today, None) for s in scheds]
+
+    techs = []
+    for t in db.list_technicians(building):
+        trs = [r for r in runs if t["name"] in (r.get("assignee"), r.get("technician"))]
+        sub = sum(1 for r in trs if r["status"] == "submitted")
+        techs.append({"name": t["name"], "assigned": len(trs), "submitted": sub,
+                      "completion_pct": round(100 * sub / len(trs), 1) if trs else 0.0})
+
+    return {
+        "building": building, "window_days": days, "generated_at": now.isoformat(timespec="seconds"),
+        "rounds": {"total": total, "submitted": submitted, "lapsed": lapsed, "open": openn,
+                   "submit_rate_pct": round(100 * submitted / total, 1) if total else 0.0,
+                   "avg_completion_pct": avg_completion},
+        "issues": {"raised": raised, "resolved": resolved,
+                   "open": sum(1 for i in issues if i["status"] != "resolved"),
+                   "avg_resolution_hrs": round(sum(res_hrs) / len(res_hrs), 1) if res_hrs else None,
+                   "action_rate_pct": round(100 * resolved / raised, 1) if raised else None},
+        "ppm": {"scheduled": len(scheds),
+                "overdue": sum(1 for p in pstates if p.get("status") == "overdue"),
+                "due_soon": sum(1 for p in pstates if p.get("status") == "due_soon")},
+        "technicians": sorted(techs, key=lambda x: -x["assigned"]),
+        "bot": {"pending_notifications": len(db.pending_notifications())},
+    }
+
+
 def aged_open_issues(db, building: str, now: Optional["datetime"] = None,
                      days: float = 2.0) -> List[Dict[str, Any]]:
     """Fix #2: issues open longer than `days` — so a long-unresolved issue can't fade even
