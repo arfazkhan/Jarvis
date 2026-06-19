@@ -143,9 +143,12 @@ function Analytics() {
       </div>
 
       <Card className="p-5 mb-6">
-        <div className="text-xs uppercase tracking-wide text-text-faint mb-1">Issue resolution</div>
-        <div className="text-sm text-text-dim">
-          {issues.avg_resolution_hrs == null ? 'No resolved issues in window.' : `Avg ${issues.avg_resolution_hrs}h to resolve · ${issues.open} currently open`}
+        <div className="text-xs uppercase tracking-wide text-text-faint mb-3">Issue SLA</div>
+        <div className="grid grid-cols-4 gap-4">
+          <Mini label="SLA breached" value={issues.sla_breached ?? 0} tone={issues.sla_breached ? 'red' : 'green'} />
+          <Mini label="At risk" value={issues.sla_at_risk ?? 0} tone={issues.sla_at_risk ? 'amber' : 'green'} />
+          <Mini label="Open" value={issues.open} />
+          <Mini label="Avg resolution" value={issues.avg_resolution_hrs == null ? '—' : `${issues.avg_resolution_hrs}h`} />
         </div>
       </Card>
 
@@ -171,6 +174,15 @@ function Analytics() {
   )
 }
 function tone(pct) { return pct >= 80 ? 'green' : pct >= 50 ? 'amber' : 'red' }
+function Mini({ label, value, tone }) {
+  const tt = { green: 'text-green', amber: 'text-amber', red: 'text-red' }[tone] || 'text-text'
+  return (
+    <div>
+      <div className="text-xs text-text-faint">{label}</div>
+      <div className={`text-2xl font-serif ${tt}`}>{value}</div>
+    </div>
+  )
+}
 function Stat({ icon: Icon, label, value, sub, tone }) {
   const tt = { green: 'text-green', amber: 'text-amber', red: 'text-red' }[tone] || 'text-text'
   return (

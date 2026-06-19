@@ -189,6 +189,17 @@ def building_evaluation(db, building: str, now=None, days: int = 7) -> Dict[str,
             except Exception:
                 pass
 
+    from arvisx.sla import sla_status
+    cfg = db.get_sla_config(building)
+    open_iss = [i for i in issues if i["status"] != "resolved"]
+    sla_breached = sla_at_risk = 0
+    for i in open_iss:
+        st = sla_status(i, cfg, now)
+        if st["breached_resolution"]:
+            sla_breached += 1
+        elif st["escalation_level"] >= 1:
+            sla_at_risk += 1
+
     scheds = db.list_ppm_schedules(building)
     pstates = [ppm_status(s, today, None) for s in scheds]
 
@@ -204,8 +215,8 @@ def building_evaluation(db, building: str, now=None, days: int = 7) -> Dict[str,
         "rounds": {"total": total, "submitted": submitted, "lapsed": lapsed, "open": openn,
                    "submit_rate_pct": round(100 * submitted / total, 1) if total else 0.0,
                    "avg_completion_pct": avg_completion},
-        "issues": {"raised": raised, "resolved": resolved,
-                   "open": sum(1 for i in issues if i["status"] != "resolved"),
+        "issues": {"raised": raised, "resolved": resolved, "open": len(open_iss),
+                   "sla_breached": sla_breached, "sla_at_risk": sla_at_risk,
                    "avg_resolution_hrs": round(sum(res_hrs) / len(res_hrs), 1) if res_hrs else None,
                    "action_rate_pct": round(100 * resolved / raised, 1) if raised else None},
         "ppm": {"scheduled": len(scheds),

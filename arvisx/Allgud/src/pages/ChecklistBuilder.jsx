@@ -65,21 +65,47 @@ export default function ChecklistBuilder({ building, initial, onSaved, onCancel 
   const setItem = (sid, iid, patch) =>
     setSection(sid, { items: sections.find((s) => s.id === sid).items.map((it) => (it.id === iid ? { ...it, ...patch } : it)) })
 
+  const secOfItem = (id) => sections.find((s) => s.items.some((it) => it.id === id))?.id
+  const isSection = (id) => sections.some((s) => s.id === id)
+
+  // Live move items BETWEEN sections while dragging (multi-container pattern).
+  function onDragOver({ active, over }) {
+    if (!over) return
+    const a = active.id, o = over.id
+    const aSec = secOfItem(a)
+    if (!aSec) return // dragging a section, not an item
+    const oSec = secOfItem(o) || (isSection(o) ? o : null)
+    if (!oSec || aSec === oSec) return
+    setSections((prev) => {
+      const from = prev.find((s) => s.id === aSec)
+      const to = prev.find((s) => s.id === oSec)
+      const item = from.items.find((it) => it.id === a)
+      if (!item) return prev
+      const overIdx = to.items.findIndex((it) => it.id === o)
+      const insertAt = overIdx >= 0 ? overIdx : to.items.length
+      const toItems = [...to.items]
+      toItems.splice(insertAt, 0, item)
+      return prev.map((s) =>
+        s.id === aSec ? { ...s, items: s.items.filter((it) => it.id !== a) }
+          : s.id === oSec ? { ...s, items: toItems } : s)
+    })
+  }
+
   function onDragEnd({ active, over }) {
     if (!over || active.id === over.id) return
-    const si = sections.findIndex((s) => s.id === active.id)
-    if (si >= 0) { // section reorder
-      const oi = sections.findIndex((s) => s.id === over.id)
-      if (oi >= 0) setSections(arrayMove(sections, si, oi))
+    const a = active.id, o = over.id
+    if (isSection(a)) { // section reorder
+      const si = sections.findIndex((s) => s.id === a)
+      const oi = sections.findIndex((s) => s.id === o)
+      if (si >= 0 && oi >= 0) setSections(arrayMove(sections, si, oi))
       return
     }
-    for (const s of sections) { // item reorder within its section
-      const ai = s.items.findIndex((it) => it.id === active.id)
-      if (ai >= 0) {
-        const oi = s.items.findIndex((it) => it.id === over.id)
-        if (oi >= 0) setSection(s.id, { items: arrayMove(s.items, ai, oi) })
-        return
-      }
+    const aSec = secOfItem(a), oSec = secOfItem(o) || (isSection(o) ? o : null)
+    if (aSec && oSec && aSec === oSec) { // item reorder within a section
+      const sec = sections.find((s) => s.id === aSec)
+      const ai = sec.items.findIndex((it) => it.id === a)
+      const oi = sec.items.findIndex((it) => it.id === o)
+      if (ai >= 0 && oi >= 0 && ai !== oi) setSection(aSec, { items: arrayMove(sec.items, ai, oi) })
     }
   }
 
@@ -140,7 +166,7 @@ export default function ChecklistBuilder({ building, initial, onSaved, onCancel 
       <div className={showPreview ? 'grid grid-cols-[1fr_360px] gap-6 items-start' : ''}>
         {/* canvas */}
         <div>
-          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragOver={onDragOver} onDragEnd={onDragEnd}>
             <SortableContext items={sections.map((s) => s.id)} strategy={verticalListSortingStrategy}>
               {sections.map((s) => (
                 <SortableSection key={s.id} section={s}
