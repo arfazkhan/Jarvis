@@ -97,11 +97,14 @@ docker compose -f docker-compose.cloud.yml exec api python -m arvisx.onboard /da
 
 ---
 
-## 8. Pair the WhatsApp bot — remotely, from the console
-- Open `https://oneanthem.<yourdomain>`, log in as owner.
-- **Intelligence ▸ WhatsApp Bot** card shows the QR.
-- Scan it with the **building-owned WhatsApp number's phone** (dedicated SIM — not your
-  personal/dev number; one number per bot). Card flips to **Connected**.
+## 8. Pair the WhatsApp bot — remotely (deployer step, separate from AllGud)
+On the Droplet, watch the bot logs for the QR and scan it:
+```sh
+docker compose -f docker-compose.cloud.yml logs -f bot     # ASCII QR prints here
+```
+Scan with the **building-owned WhatsApp number's phone** (dedicated SIM — not your
+personal/dev number; one number per bot). The session persists in `bot-session`.
+Pairing is intentionally a deployer/CLI step, not part of the AllGud console.
 
 ---
 

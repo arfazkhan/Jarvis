@@ -9,7 +9,7 @@ WhatsApp whose number is in the roster. Tick PASS/FAIL as you go.
 ## 0. Pre-flight
 - [ ] Open `https://<your-domain>` — loads with a **padlock** (HTTPS).
 - [ ] Owner logs in (the `ARVISX_ADMIN_USER` / password).
-- [ ] **Intelligence → WhatsApp Bot** card shows **Connected** (if it shows a QR, scan it with the bot's phone first).
+- [ ] Bot is paired — `docker compose logs bot` shows it connected (scan the QR from the logs first if not).
 - [ ] People shows the real roster, each tech "PIN set".
 
 ## 1. Assign a round (manager, console)

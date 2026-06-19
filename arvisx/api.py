@@ -71,9 +71,6 @@ class _State:
         from arvisx.commissioning import CommissioningManager
         self.commissioner = CommissioningManager(self.db)
         self._sent_alerts: set = set()      # WhatsApp alert dedup across polls
-        # WhatsApp bridge pairing state, pushed by the bot so the console can show
-        # the QR (status: unknown|waiting_scan|connected|disconnected). Transient.
-        self._bridge: Dict[str, Any] = {"status": "unknown", "qr": "", "ts": ""}
         try:
             self.baselines.load_from(self.db)
             self.wo_store.load_from(self.db)
@@ -1180,26 +1177,6 @@ def create_app():
         ids = (payload or {}).get("ids") or []
         state.db.mark_notifications_sent([int(i) for i in ids if str(i).isdigit()])
         return {"acked": ids}
-
-    @app.post("/api/v1/whatsapp/bridge/state")
-    async def wa_bridge_set(payload: Dict[str, Any] = Body(...)):
-        """The bot pushes its pairing state here (write-role/api-key gated by middleware).
-        QR is only retained while waiting to scan."""
-        p = payload or {}
-        status = str(p.get("status", "")).strip() or "unknown"
-        state._bridge = {"status": status,
-                         "qr": str(p.get("qr", "")) if status == "waiting_scan" else "",
-                         "ts": datetime.now().isoformat(timespec="seconds")}
-        return {"ok": True}
-
-    @app.get("/api/v1/whatsapp/bridge/state")
-    async def wa_bridge_get(authorization: str = Header(default=""), x_api_key: str = Header(default="")):
-        """Bridge pairing state for the console. The QR is a sensitive pairing secret
-        (whoever scans it links the bot to their WhatsApp), so restrict to owner/fm/system."""
-        role = _writer_role(authorization, x_api_key)
-        if role not in ("system", "owner", "fm"):
-            raise HTTPException(403, "owner/fm only — WhatsApp pairing is restricted")
-        return state._bridge
 
     @app.post("/api/v1/forms/run/{rid}/assign")
     async def forms_assign_run(rid: int, payload: Dict[str, Any] = Body(...)):

@@ -107,14 +107,12 @@ Expected: `technicians: N (N with a field PIN)`. The 4 checklist templates
 > number. For a short design-partner pilot it's acceptable; for anything longer, plan
 > a move to the WhatsApp Business API. Use a dedicated number either way.
 
-Pair once. **Easiest: from the console** — log in as owner → **Intelligence → WhatsApp Bot**
-card shows the QR; scan it with WhatsApp → Linked devices → Link a device. The card
-flips to "Connected" when done (the bot pushes its QR + status to the API; the QR is
-owner/fm-only and clears once paired).
+Pair once (interactive — the bot prints a QR to its logs; scan it with WhatsApp →
+Linked devices → Link a device). Pairing is a deployer step, kept separate from the
+AllGud console on purpose.
 ```sh
 docker compose -f docker-compose.pilot.yml up -d --build bot
-# Alternative (CLI): scan the ASCII QR from the logs instead of the console
-docker compose -f docker-compose.pilot.yml logs -f bot
+docker compose -f docker-compose.pilot.yml logs -f bot     # scan the ASCII QR
 ```
 The session persists in the `bot-session` volume — no re-scan on restart.
 
