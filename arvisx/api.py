@@ -1121,9 +1121,16 @@ def create_app():
 
     @app.post("/api/v1/forms/run/{rid}/submit")
     async def forms_submit_run(rid: int):
-        if not state.db.get_checklist_run(rid):
+        from arvisx.checklist_forms import get_template
+        run = state.db.get_checklist_run(rid)
+        if not run:
             raise HTTPException(404, f"unknown run {rid}")
         state.db.submit_checklist_run(rid)
+        # Submitting a PPM round (non-daily template) for an asset closes its PPM loop —
+        # resets the schedule from today, recording who did it via the run's technician.
+        tmpl = get_template(run["template_id"], run["building_id"])
+        if tmpl and tmpl.cadence != "daily" and run.get("asset"):
+            state.db.mark_ppm_done(run["building_id"], run["asset"], _today_str())
         return _run_view(rid)
 
     @app.post("/api/v1/forms/run/{rid}/signoff")

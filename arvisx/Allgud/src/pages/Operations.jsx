@@ -52,6 +52,7 @@ export default function Operations() {
   const navigate = useNavigate()
   const { building } = useBuilding()
   const [drawer, setDrawer] = useState(null) // assign | start | signoff | issue
+  const [ppmRow, setPpmRow] = useState(null) // selected PPM schedule row
   const [refreshKey, setRefreshKey] = useState(0)
   const refresh = () => setRefreshKey((k) => k + 1)
   const today = useAsync(() => api.today(building), [building, refreshKey])
@@ -92,7 +93,7 @@ export default function Operations() {
               {rows.map((r, i) => (
                 <tr
                   key={i}
-                  onClick={() => r.runId && navigate(`/operations/round/${r.runId}`)}
+                  onClick={() => (r.kind === 'ppm' ? setPpmRow(r) : r.runId && navigate(`/operations/round/${r.runId}`))}
                   className="border-b border-border-soft hover:bg-surface/60 cursor-pointer transition-colors"
                 >
                   <td className="py-4">
@@ -217,16 +218,81 @@ export default function Operations() {
         onCreated={() => { refresh(); setDrawer(null) }} />
       <SignoffDrawer open={drawer === 'signoff'} onClose={() => setDrawer(null)} building={building}
         onDone={() => { refresh(); setDrawer(null) }} />
+      <PpmDrawer row={ppmRow} onClose={() => setPpmRow(null)} building={building}
+        onAssigned={(rid) => { setPpmRow(null); navigate(`/operations/round/${rid}`) }}
+        onLogged={() => { refresh(); setPpmRow(null) }} />
     </div>
   )
 }
 
-function pickTemplates(building) {
+function PpmDrawer({ row, onClose, building, onAssigned, onLogged }) {
+  const tpls = useTemplates(building)
+  const techs = useAsync(() => api.technicians(building), [building])
+  const [tid, setTid] = useState('')
+  const [tech, setTech] = useState('')
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const [busy, setBusy] = useState(false)
+  if (!row) return null
+  const ppmTemplates = (tpls.data?.templates || []).filter((t) => t.cadence !== 'daily')
+  const techlist = techs.data?.technicians || []
+
+  async function assign() {
+    if (!tid || !tech) return
+    setBusy(true)
+    try {
+      const r = await api.startRun({ building, template_id: tid, asset: row.asset, technician: tech, assignee: tech })
+      onAssigned(r.run.id)
+    } catch (e) { alert(e.message) } finally { setBusy(false) }
+  }
+  async function logDone() {
+    setBusy(true)
+    try { await api.ppmDone(row.asset, { date, building }); onLogged() }
+    catch (e) { alert(e.message) } finally { setBusy(false) }
+  }
+
+  return (
+    <Drawer open={!!row} onClose={onClose} width={420}>
+      <div className="p-6">
+        <div className="flex items-center justify-between mb-1">
+          <div className="font-serif text-xl text-text">{row.asset} — PPM</div>
+          <button onClick={onClose} className="text-text-faint"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="text-xs text-text-faint mb-6">{row.status} · due {row.updated}</div>
+
+        <div className="text-xs uppercase tracking-wide text-text-faint mb-2">Assign as a maintenance round</div>
+        <div className="flex flex-col gap-3 mb-3">
+          <SelectField label="PPM checklist" value={tid} onChange={setTid}
+            options={ppmTemplates.map((t) => ({ value: t.template_id, label: t.name }))} />
+          <SelectField label="Technician" value={tech} onChange={setTech}
+            options={techlist.map((t) => ({ value: t.name, label: t.phone ? `${t.name} (${t.phone})` : t.name }))} />
+          <button disabled={busy || !tid || !tech} onClick={assign}
+            className="bg-primary text-white rounded-lg py-2.5 text-sm font-medium disabled:opacity-50">
+            Assign + notify
+          </button>
+          <div className="text-xs text-text-faint">Submitting the round auto-marks this PPM done.</div>
+        </div>
+
+        <div className="border-t border-border-soft my-5" />
+        <div className="text-xs uppercase tracking-wide text-text-faint mb-2">Or log external service done</div>
+        <div className="flex items-end gap-2">
+          <label className="flex-1 flex flex-col gap-1 text-xs text-text-faint">Service date
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
+              className="bg-surface border border-border rounded-lg px-3 py-2 text-sm text-text outline-none focus:border-gold/50" />
+          </label>
+          <button disabled={busy} onClick={logDone}
+            className="border border-green/40 text-green rounded-lg px-3 py-2.5 text-sm disabled:opacity-50">Log done</button>
+        </div>
+      </div>
+    </Drawer>
+  )
+}
+
+function useTemplates(building) {
   return useAsync(() => api.templates(building), [building])
 }
 
 function AssignRoundDrawer({ open, onClose, building, onDone }) {
-  const tpls = pickTemplates(building)
+  const tpls = useTemplates(building)
   const techs = useAsync(() => api.technicians(building), [building])
   const [tid, setTid] = useState('')
   const [tech, setTech] = useState('')
@@ -251,7 +317,7 @@ function AssignRoundDrawer({ open, onClose, building, onDone }) {
 }
 
 function StartInspectionDrawer({ open, onClose, building, onStarted }) {
-  const tpls = pickTemplates(building)
+  const tpls = useTemplates(building)
   const [tid, setTid] = useState('')
   const [busy, setBusy] = useState(false)
   const tlist = tpls.data?.templates || []
@@ -364,6 +430,7 @@ function buildRows(today, ppm) {
     rows.push({
       kind: 'ppm',
       runId: null,
+      asset: p.asset,
       name: `${p.asset} PPM`,
       subtitle: `PPM Schedule · ${p.asset}`,
       assignee: '',

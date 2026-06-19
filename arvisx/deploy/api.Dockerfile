@@ -6,6 +6,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# tzdata so TZ=Asia/Kolkata (etc.) actually resolves — shift windows, reminders,
+# "today" boundaries and digests are computed in the building's local time.
+RUN apt-get update && apt-get install -y --no-install-recommends tzdata && rm -rf /var/lib/apt/lists/*
+
 # Deps first for layer caching. requirements-llm gives the (lazy) provider SDKs;
 # with no key set the agent endpoints degrade to the deterministic floor.
 COPY requirements-pilot.txt requirements-llm.txt ./

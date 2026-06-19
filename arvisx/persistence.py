@@ -500,6 +500,14 @@ class ArvisxDb:
     def mark_ppm_done(self, building_id: str, asset: str, done_date: str) -> None:
         self.set_ppm_schedule(building_id, asset, last_done=done_date)
 
+    def checklist_buildings(self) -> List[str]:
+        """Every building with checklist activity — so the heartbeat can sweep them all."""
+        with self._lock, self._conn() as c:
+            rows = c.execute(
+                "SELECT DISTINCT building_id FROM checklist_runs "
+                "UNION SELECT DISTINCT building_id FROM checklist_issues").fetchall()
+        return [r[0] for r in rows if r and r[0]]
+
     # ── Checklist builder: custom templates ──────────────────────────────
     def save_template(self, building_id: str, template_id: str, data: Dict[str, Any]) -> None:
         with self._lock, self._conn() as c:

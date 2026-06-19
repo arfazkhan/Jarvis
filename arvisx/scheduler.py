@@ -78,6 +78,20 @@ async def community_tick(state, llm=None, max_investigations: int = 3) -> Dict[s
             except Exception as e:
                 logger.warning(f"[heartbeat] persist investigation failed: {e}")
 
+    # Checklist sweeps — round reminders/lapse + issue-SLA escalation, per building.
+    # Runs on the heartbeat so chasing advances even if the WhatsApp bot is down
+    # (notifications queue persistently and deliver when the bot is back).
+    if db is not None:
+        try:
+            from arvisx import checklist_intel as ci
+            from arvisx.sla import run_escalations
+            for b in db.checklist_buildings():
+                ci.lapse_stale_rounds(db, b)
+                ci.round_reminders(db, b)
+                run_escalations(db, b)
+        except Exception as e:
+            logger.warning(f"[heartbeat] checklist sweep failed: {e}")
+
     readiness: List[Dict[str, Any]] = []
     commissioner = getattr(state, "commissioner", None)
     if commissioner is not None:

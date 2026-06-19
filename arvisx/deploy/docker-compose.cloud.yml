@@ -15,6 +15,9 @@ services:
     environment:
       ARVISX_SOURCE: sim
       ARVISX_DB: /data/arvisx.db
+      TZ: ${TZ:-Asia/Kolkata}                 # local time for shifts/reminders/digest
+      ARVISX_HEARTBEAT: "1"                    # run sweeps in-api (chasing survives a bot outage)
+      ARVISX_HEARTBEAT_INTERVAL: "300"
       ARVISX_PUBLIC_URL: https://${DOMAIN}
     volumes:
       - api-data:/data
@@ -43,6 +46,7 @@ services:
     environment:
       ARVIS_API_URL: http://api:8090
       ARVIS_API_KEY: ${ARVISX_API_KEY}
+      TZ: ${TZ:-Asia/Kolkata}                 # digest/reminder scheduling in local time
     volumes:
       - bot-session:/app/session   # WhatsApp pairing — scan QR once, persists
       - bot-data:/app/data
