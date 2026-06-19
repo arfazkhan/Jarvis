@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   TriangleAlert,
   ShieldAlert,
@@ -37,11 +38,14 @@ export default function Issues() {
   const [refreshKey, setRefreshKey] = useState(0)
   const [showCreate, setShowCreate] = useState(false)
 
+  const [params] = useSearchParams()
+  const assetFilter = params.get('asset') || ''
+
   const issues = useAsync(
     () => api.issues(building, filter === 'all' ? '' : filter),
     [building, filter, refreshKey]
   )
-  const list = issues.data?.issues || []
+  const list = (issues.data?.issues || []).filter((i) => !assetFilter || i.asset === assetFilter)
 
   const refresh = () => setRefreshKey((k) => k + 1)
 
@@ -261,7 +265,7 @@ function assignPrompt() {
   return { assignee, vendor: assignee, priority }
 }
 
-function CreateIssueDrawer({ open, onClose, building, onCreated }) {
+export function CreateIssueDrawer({ open, onClose, building, onCreated }) {
   const [form, setForm] = useState({ title: '', detail: '', asset: '', severity: 'issue', priority: 'medium' })
   const [busy, setBusy] = useState(false)
 

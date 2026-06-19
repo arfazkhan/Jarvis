@@ -70,6 +70,7 @@ function AdminLogin({ onAuthed }) {
     try {
       const res = await api.login(u.trim(), p)
       if (res.role !== 'admin') { setToken(''); setErr('Not an operator account.'); setBusy(false); return }
+      setToken(res.token)          // persist the token, else /auth/me 401s
       onAuthed()
     } catch (e2) {
       setErr(String(e2.message).startsWith('401') ? 'Wrong username or password.' : e2.message); setBusy(false)

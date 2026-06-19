@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ClipboardList,
@@ -14,9 +14,11 @@ import {
   TriangleAlert,
   PenLine,
   ChevronRight,
+  X,
 } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
-import { Pill, ProgressBar, Avatar } from '../components/ui'
+import { Pill, ProgressBar, Avatar, Drawer, Spinner, Empty } from '../components/ui'
+import { CreateIssueDrawer } from './Issues'
 import { useAsync } from '../lib/useAsync'
 import { api } from '../api/client'
 import { useBuilding } from '../lib/BuildingContext'
@@ -49,9 +51,12 @@ function deriveRunStatus(run, today) {
 export default function Operations() {
   const navigate = useNavigate()
   const { building } = useBuilding()
-  const today = useAsync(() => api.today(building), [building])
-  const ppm = useAsync(() => api.ppmSchedule(building), [building])
-  const issues = useAsync(() => api.issues(building, 'open'), [building])
+  const [drawer, setDrawer] = useState(null) // assign | start | signoff | issue
+  const [refreshKey, setRefreshKey] = useState(0)
+  const refresh = () => setRefreshKey((k) => k + 1)
+  const today = useAsync(() => api.today(building), [building, refreshKey])
+  const ppm = useAsync(() => api.ppmSchedule(building), [building, refreshKey])
+  const issues = useAsync(() => api.issues(building, 'open'), [building, refreshKey])
 
   const rows = useMemo(() => buildRows(today.data, ppm.data), [today.data, ppm.data])
   const openIssues = issues.data?.issues || []
@@ -183,7 +188,7 @@ export default function Operations() {
             <ContextRow icon={CircleDot} label="In progress" value={counts.inProgress} />
             <ContextRow icon={Timer} label="Awaiting review" value={counts.review} />
             <ContextRow icon={CheckCircle2} label="Completed" value={counts.completed} />
-            <button className="flex items-center justify-between text-gold mt-1">
+            <button onClick={() => navigate('/operations/calendar')} className="flex items-center justify-between text-gold mt-1">
               <span className="flex items-center gap-2">
                 <CalendarDays className="w-4 h-4" /> View calendar
               </span>
@@ -194,13 +199,140 @@ export default function Operations() {
       </div>
 
       <div className="sticky bottom-0 mt-10 border-t border-border bg-bg/95 backdrop-blur px-10 py-4 grid grid-cols-5 gap-4">
-        <ActionButton icon={UserPlus} title="Assign Round" sub="Assign to technician" />
-        <ActionButton icon={PlayCircle} title="Start Inspection" sub="Begin a checklist" />
-        <ActionButton icon={TriangleAlert} title="Create Issue" sub="Log an observation" />
-        <ActionButton icon={PenLine} title="Request Sign-off" sub="Ask for approval" />
-        <ActionButton icon={Sparkles} title="Ask Arvis" sub="Get instant help" />
+        <ActionButton icon={UserPlus} title="Assign Round" sub="Assign to technician" onClick={() => setDrawer('assign')} />
+        <ActionButton icon={PlayCircle} title="Start Inspection" sub="Begin a checklist" onClick={() => setDrawer('start')} />
+        <ActionButton icon={TriangleAlert} title="Create Issue" sub="Log an observation" onClick={() => setDrawer('issue')} />
+        <ActionButton icon={PenLine} title="Request Sign-off" sub="Approve a round" onClick={() => setDrawer('signoff')} />
+        <ActionButton icon={Sparkles} title="Ask Arvis" sub="Get instant help" onClick={() => navigate('/intelligence')} />
       </div>
+
+      <AssignRoundDrawer open={drawer === 'assign'} onClose={() => setDrawer(null)} building={building}
+        onDone={() => { refresh(); setDrawer(null) }} />
+      <StartInspectionDrawer open={drawer === 'start'} onClose={() => setDrawer(null)} building={building}
+        onStarted={(rid) => { setDrawer(null); navigate(`/operations/round/${rid}`) }} />
+      <CreateIssueDrawer open={drawer === 'issue'} onClose={() => setDrawer(null)} building={building}
+        onCreated={() => { refresh(); setDrawer(null) }} />
+      <SignoffDrawer open={drawer === 'signoff'} onClose={() => setDrawer(null)} building={building}
+        onDone={() => { refresh(); setDrawer(null) }} />
     </div>
+  )
+}
+
+function pickTemplates(building) {
+  return useAsync(() => api.templates(building), [building])
+}
+
+function AssignRoundDrawer({ open, onClose, building, onDone }) {
+  const tpls = pickTemplates(building)
+  const techs = useAsync(() => api.technicians(building), [building])
+  const [tid, setTid] = useState('')
+  const [tech, setTech] = useState('')
+  const [busy, setBusy] = useState(false)
+  const tlist = tpls.data?.templates || []
+  const techlist = techs.data?.technicians || []
+  async function submit() {
+    if (!tid || !tech) return
+    setBusy(true)
+    try { await api.startRun({ building, template_id: tid, technician: tech, assignee: tech }); onDone() }
+    catch (e) { alert(e.message) } finally { setBusy(false) }
+  }
+  return (
+    <FormDrawer open={open} onClose={onClose} title="Assign Round" busy={busy} onSubmit={submit} cta="Assign + notify">
+      <SelectField label="Checklist" value={tid} onChange={setTid}
+        options={tlist.map((t) => ({ value: t.template_id, label: t.name }))} />
+      <SelectField label="Technician" value={tech} onChange={setTech}
+        options={techlist.map((t) => ({ value: t.name, label: t.phone ? `${t.name} (${t.phone})` : t.name }))} />
+      <div className="text-xs text-text-faint">Assigning sends the technician a WhatsApp link to the round.</div>
+    </FormDrawer>
+  )
+}
+
+function StartInspectionDrawer({ open, onClose, building, onStarted }) {
+  const tpls = pickTemplates(building)
+  const [tid, setTid] = useState('')
+  const [busy, setBusy] = useState(false)
+  const tlist = tpls.data?.templates || []
+  async function submit() {
+    if (!tid) return
+    setBusy(true)
+    try { const r = await api.startRun({ building, template_id: tid }); onStarted(r.run.id) }
+    catch (e) { alert(e.message) } finally { setBusy(false) }
+  }
+  return (
+    <FormDrawer open={open} onClose={onClose} title="Start Inspection" busy={busy} onSubmit={submit} cta="Start">
+      <SelectField label="Checklist" value={tid} onChange={setTid}
+        options={tlist.map((t) => ({ value: t.template_id, label: t.name }))} />
+    </FormDrawer>
+  )
+}
+
+function SignoffDrawer({ open, onClose, building, onDone }) {
+  const today = useAsync(() => (open ? api.today(building) : Promise.resolve(null)), [building, open])
+  const [busy, setBusy] = useState('')
+  const runs = (today.data?.runs || []).filter((r) => r.status === 'submitted')
+  async function sign(rid) {
+    setBusy(rid)
+    try { await api.signoff(rid, { role: 'supervisor', by: 'Athul G' }); onDone() }
+    catch (e) { alert(e.message) } finally { setBusy('') }
+  }
+  return (
+    <Drawer open={open} onClose={onClose} width={420}>
+      <div className="p-6">
+        <div className="flex items-center justify-between mb-6">
+          <div className="font-serif text-xl text-text">Request Sign-off</div>
+          <button onClick={onClose} className="text-text-faint"><X className="w-5 h-5" /></button>
+        </div>
+        {today.loading ? <Spinner /> : runs.length === 0 ? <Empty>No submitted rounds awaiting sign-off.</Empty> : (
+          <div className="flex flex-col gap-2">
+            {runs.map((r) => (
+              <div key={r.run_id} className="flex items-center justify-between border border-border-soft rounded-xl px-4 py-3">
+                <div>
+                  <div className="text-sm text-text">{r.name}</div>
+                  <div className="text-xs text-text-faint">{r.assignee || r.technician} · {r.signoffs?.length || 0} signoff(s)</div>
+                </div>
+                <button disabled={busy === r.run_id} onClick={() => sign(r.run_id)}
+                  className="text-xs border border-green/40 text-green rounded-lg px-3 py-1.5 disabled:opacity-50">
+                  Sign off
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </Drawer>
+  )
+}
+
+function FormDrawer({ open, onClose, title, busy, onSubmit, cta, children }) {
+  return (
+    <Drawer open={open} onClose={onClose} width={420}>
+      <div className="p-6">
+        <div className="flex items-center justify-between mb-6">
+          <div className="font-serif text-xl text-text">{title}</div>
+          <button onClick={onClose} className="text-text-faint"><X className="w-5 h-5" /></button>
+        </div>
+        <div className="flex flex-col gap-4">
+          {children}
+          <button disabled={busy} onClick={onSubmit}
+            className="bg-primary text-white rounded-lg py-2.5 text-sm font-medium disabled:opacity-50">
+            {cta}
+          </button>
+        </div>
+      </div>
+    </Drawer>
+  )
+}
+
+function SelectField({ label, value, onChange, options }) {
+  return (
+    <label className="block">
+      <div className="text-xs text-text-faint mb-1">{label}</div>
+      <select value={value} onChange={(e) => onChange(e.target.value)}
+        className="w-full bg-surface border border-border rounded-lg px-3 py-2 text-sm text-text outline-none focus:border-gold/50">
+        <option value="">Select…</option>
+        {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    </label>
   )
 }
 

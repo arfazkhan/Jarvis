@@ -4,6 +4,7 @@ import Login from './components/Login'
 import FieldLogin from './components/FieldLogin'
 import Overview from './pages/Overview'
 import Operations from './pages/Operations'
+import Calendar from './pages/Calendar'
 import RoundDetail from './pages/RoundDetail'
 import CheckItem from './pages/CheckItem'
 import Issues from './pages/Issues'
@@ -81,6 +82,7 @@ function Shell() {
         <Route element={<ConsoleLayout />}>
           <Route path="/" element={isTechnician ? <Navigate to="/field" replace /> : <Overview />} />
           <Route path="/operations" element={<Operations />} />
+          <Route path="/operations/calendar" element={<Calendar />} />
           <Route path="/operations/round/:rid" element={<RoundDetail />} />
           <Route path="/operations/round/:rid/check/:itemIndex" element={<CheckItem />} />
           <Route path="/issues" element={<Issues />} />

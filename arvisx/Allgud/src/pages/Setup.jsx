@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Users, Wrench, CalendarCheck, ShieldCheck, Plus, Power, KeyRound, Check, ChevronRight } from 'lucide-react'
+import { Users, Wrench, CalendarCheck, ShieldCheck, Plus, Power, KeyRound, Check, ChevronRight, ClipboardList, Trash2, X } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
 import { Pill, Spinner, Empty } from '../components/ui'
 import { Input, Select } from './Issues'
@@ -11,6 +11,7 @@ import { useBuilding } from '../lib/BuildingContext'
 // roster + field PINs, vendors, PPM schedules, manager logins. All backend endpoints
 // already exist; this just chains them into one flow.
 const STEPS = [
+  { key: 'checklists', label: 'Checklists', icon: ClipboardList },
   { key: 'roster', label: 'Roster & PINs', icon: Users },
   { key: 'vendors', label: 'Vendors', icon: Wrench },
   { key: 'ppm', label: 'PPM schedules', icon: CalendarCheck },
@@ -46,6 +47,7 @@ export default function Setup() {
         </div>
 
         <div>
+          {step === 'checklists' && <ChecklistStep building={building} />}
           {step === 'roster' && <RosterStep building={building} />}
           {step === 'vendors' && <VendorStep building={building} />}
           {step === 'ppm' && <PpmStep building={building} />}
@@ -83,6 +85,134 @@ function AddBar({ children, onAdd, busy, label = 'Add' }) {
 
 function err(e) {
   alert(e.message || String(e))
+}
+
+// ── Checklist builder ────────────────────────────────────────────────────────
+const KINDS = ['tick', 'reading', 'state', 'note']
+const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 36)
+const blankItem = () => ({ label: '', kind: 'tick', unit: '', options: '', alert: '', asset: '' })
+const blankSection = () => ({ name: '', items: [blankItem()] })
+
+function ChecklistStep({ building }) {
+  const [key, setKey] = useState(0)
+  const tpls = useAsync(() => api.templates(building), [building, key])
+  const [draft, setDraft] = useState(null) // building a new checklist
+  const refresh = () => setKey((k) => k + 1)
+
+  if (draft) return <ChecklistBuilder building={building} draft={draft} setDraft={setDraft} onSaved={() => { setDraft(null); refresh() }} />
+
+  return (
+    <Section title="Checklists" hint="The shift rounds + PPM sheets technicians fill. Build your own or edit the seeded ones.">
+      <button onClick={() => setDraft({ template_id: '', name: '', cadence: 'daily', timing: '', sections: [blankSection()] })}
+        className="flex items-center gap-1.5 bg-primary text-white rounded-lg px-3 py-2.5 text-sm font-medium mb-5">
+        <Plus className="w-4 h-4" /> New checklist
+      </button>
+      {tpls.loading ? <Spinner /> : (
+        <div className="flex flex-col gap-2">
+          {(tpls.data?.templates || []).map((t) => (
+            <Row key={t.template_id}>
+              <div className="flex-1">
+                <div className="text-sm text-text">{t.name}</div>
+                <div className="text-xs text-text-faint">{t.template_id} · {t.cadence} · {t.items} checks{t.timing ? ` · ${t.timing}` : ''}</div>
+              </div>
+              <button
+                onClick={async () => { if (confirm(`Delete ${t.name}? (a building default will reappear if one exists)`)) { try { await api.deleteTemplate(t.template_id, building); refresh() } catch (e) { err(e) } } }}
+                className="text-text-faint hover:text-red" title="Delete"><Trash2 className="w-4 h-4" /></button>
+            </Row>
+          ))}
+          {!tpls.data?.templates?.length && <Empty>No checklists yet — create one.</Empty>}
+        </div>
+      )}
+    </Section>
+  )
+}
+
+function ChecklistBuilder({ building, draft, setDraft, onSaved }) {
+  const [busy, setBusy] = useState(false)
+  const set = (patch) => setDraft({ ...draft, ...patch })
+  const setSection = (i, patch) => set({ sections: draft.sections.map((s, j) => (j === i ? { ...s, ...patch } : s)) })
+  const setItem = (si, ii, patch) =>
+    setSection(si, { items: draft.sections[si].items.map((it, j) => (j === ii ? { ...it, ...patch } : it)) })
+
+  async function save() {
+    const tid = (draft.template_id || slug(draft.name).toUpperCase().replace(/_/g, '-')).trim()
+    if (!draft.name.trim() || !tid) return err({ message: 'Name is required' })
+    const seen = new Set()
+    const sections = draft.sections
+      .filter((s) => s.name.trim() && s.items.some((it) => it.label.trim()))
+      .map((s) => ({
+        name: s.name.trim(),
+        items: s.items.filter((it) => it.label.trim()).map((it) => {
+          let id = slug(it.label) || 'item'
+          while (seen.has(id)) id += '_x'
+          seen.add(id)
+          const o = { item_id: id, label: it.label.trim(), kind: it.kind }
+          if (it.kind === 'reading' && it.unit) o.unit = it.unit.trim()
+          if (it.kind === 'state') {
+            o.options = it.options.split(',').map((x) => x.trim()).filter(Boolean)
+            if (it.alert) o.alert_states = it.alert.split(',').map((x) => x.trim()).filter(Boolean)
+          }
+          if (it.asset) o.asset = it.asset.trim()
+          return o
+        }),
+      }))
+    if (!sections.length || !seen.size) return err({ message: 'Add at least one section with one item' })
+    setBusy(true)
+    try {
+      await api.saveTemplate({ building, template: { template_id: tid, name: draft.name.trim(), cadence: draft.cadence, timing: draft.timing.trim(), signoff_roles: ['technician', 'supervisor'], sections } })
+      onSaved()
+    } catch (e) { err(e) } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="max-w-3xl">
+      <div className="flex items-center justify-between mb-4">
+        <div className="text-xl font-serif text-text">New checklist</div>
+        <button onClick={() => setDraft(null)} className="text-text-faint text-sm flex items-center gap-1"><X className="w-4 h-4" /> Cancel</button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 bg-surface border border-border rounded-xl p-4 mb-5">
+        <Field label="Name"><Input value={draft.name} onChange={(v) => set({ name: v })} /></Field>
+        <Field label="ID (auto if blank)"><Input value={draft.template_id} onChange={(v) => set({ template_id: v })} /></Field>
+        <Field label="Cadence"><Select value={draft.cadence} options={['daily', 'weekly', 'monthly', 'quarterly']} onChange={(v) => set({ cadence: v })} /></Field>
+        <Field label="Timing (e.g. 08:00 AM – 04:15 PM)"><Input value={draft.timing} onChange={(v) => set({ timing: v })} /></Field>
+      </div>
+
+      {draft.sections.map((s, si) => (
+        <div key={si} className="border border-border-soft rounded-xl p-4 mb-3">
+          <div className="flex items-center gap-2 mb-3">
+            <Input value={s.name} onChange={(v) => setSection(si, { name: v })} />
+            <button onClick={() => set({ sections: draft.sections.filter((_, j) => j !== si) })} className="text-text-faint hover:text-red"><Trash2 className="w-4 h-4" /></button>
+          </div>
+          <div className="flex flex-col gap-2">
+            {s.items.map((it, ii) => (
+              <div key={ii} className="grid grid-cols-[1fr_110px_1fr_28px] gap-2 items-end">
+                <Field label="Check"><Input value={it.label} onChange={(v) => setItem(si, ii, { label: v })} /></Field>
+                <Field label="Kind"><Select value={it.kind} options={KINDS} onChange={(v) => setItem(si, ii, { kind: v })} /></Field>
+                <Field label={it.kind === 'reading' ? 'Unit' : it.kind === 'state' ? 'Options (comma)' : ' '}>
+                  {it.kind === 'reading' ? <Input value={it.unit} onChange={(v) => setItem(si, ii, { unit: v })} />
+                    : it.kind === 'state' ? <Input value={it.options} onChange={(v) => setItem(si, ii, { options: v })} />
+                    : <div className="text-xs text-text-faint py-2">—</div>}
+                </Field>
+                <button onClick={() => setSection(si, { items: s.items.filter((_, j) => j !== ii) })} className="text-text-faint hover:text-red pb-2"><X className="w-4 h-4" /></button>
+                {it.kind === 'state' && (
+                  <div className="col-span-4">
+                    <Field label="Which options are an issue? (comma)"><Input value={it.alert} onChange={(v) => setItem(si, ii, { alert: v })} /></Field>
+                  </div>
+                )}
+              </div>
+            ))}
+            <button onClick={() => setSection(si, { items: [...s.items, blankItem()] })} className="text-xs text-gold flex items-center gap-1 mt-1"><Plus className="w-3 h-3" /> Add check</button>
+          </div>
+        </div>
+      ))}
+      <button onClick={() => set({ sections: [...draft.sections, blankSection()] })} className="text-sm text-gold flex items-center gap-1 mb-5"><Plus className="w-4 h-4" /> Add section</button>
+
+      <div>
+        <button disabled={busy} onClick={save} className="bg-primary text-white rounded-lg px-4 py-2.5 text-sm font-medium disabled:opacity-50">Save checklist</button>
+      </div>
+    </div>
+  )
 }
 
 // ── Roster + PINs ──────────────────────────────────────────────────────────

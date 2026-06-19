@@ -115,7 +115,7 @@ export default function RoundDetail() {
                   )
                 })}
               </div>
-              <button className="flex items-center gap-1 text-sm text-gold mt-3">
+              <button onClick={() => navigate(`/operations/round/${rid}/check/0`)} className="flex items-center gap-1 text-sm text-gold mt-3">
                 View all checks <ChevronRight className="w-4 h-4" />
               </button>
             </div>
@@ -147,7 +147,7 @@ export default function RoundDetail() {
                 })}
                 {attention.length === 0 && <div className="text-sm text-text-faint py-3">All clear.</div>}
               </div>
-              <button className="flex items-center gap-1 text-sm text-gold mt-3">
+              <button onClick={() => navigate(`/issues?asset=${encodeURIComponent(run.asset || '')}`)} className="flex items-center gap-1 text-sm text-gold mt-3">
                 View all issues <ChevronRight className="w-4 h-4" />
               </button>
             </div>
@@ -215,14 +215,20 @@ export default function RoundDetail() {
             <div className="text-xs text-text-faint">Continue where you left off</div>
           </div>
         </button>
-        <button className="flex items-center gap-3 bg-surface border border-border rounded-xl px-4 py-3 text-left">
+        <button
+          onClick={() => navigate(`/operations/round/${rid}/check/0`)}
+          className="flex items-center gap-3 bg-surface border border-border rounded-xl px-4 py-3 text-left hover:border-gold/40"
+        >
           <FileText className="w-5 h-5 text-text-dim" />
           <div>
             <div className="text-sm text-text">Review Entries</div>
             <div className="text-xs text-text-faint">See all recorded checks</div>
           </div>
         </button>
-        <button className="flex items-center gap-3 bg-surface border border-border rounded-xl px-4 py-3 text-left">
+        <button
+          onClick={() => navigate(`/issues?asset=${encodeURIComponent(run.asset || '')}`)}
+          className="flex items-center gap-3 bg-surface border border-border rounded-xl px-4 py-3 text-left hover:border-gold/40"
+        >
           <TriangleAlert className="w-5 h-5 text-text-dim" />
           <div>
             <div className="text-sm text-text">View Issues</div>
