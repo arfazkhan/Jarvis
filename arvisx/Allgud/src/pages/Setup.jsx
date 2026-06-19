@@ -308,40 +308,59 @@ function VendorStep({ building }) {
 }
 
 // ── PPM schedules ────────────────────────────────────────────────────────────
+const PPM_BLANK = { asset: '', interval_days: '90', last_done: '', run_hours_limit: '' }
 function PpmStep({ building }) {
   const [key, setKey] = useState(0)
   const ppm = useAsync(() => api.ppmSchedule(building), [building, key])
-  const [f, setF] = useState({ asset: '', interval_days: '90', last_done: '' })
+  const assets = useAsync(() => api.assets(building), [building])
+  const [f, setF] = useState(PPM_BLANK)
   const [busy, setBusy] = useState(false)
   const refresh = () => setKey((k) => k + 1)
+  const editing = (ppm.data?.schedules || []).some((p) => p.asset === f.asset)
+  const assetOpts = (assets.data?.assets || [])
 
   async function save() {
     if (!f.asset.trim()) return
     setBusy(true)
     try {
-      await api.setPpm({ building, asset: f.asset.trim(), interval_days: Number(f.interval_days) || 90, last_done: f.last_done || undefined })
-      setF({ asset: '', interval_days: '90', last_done: '' })
+      await api.setPpm({
+        building, asset: f.asset.trim(),
+        interval_days: Number(f.interval_days) || 90,
+        last_done: f.last_done || undefined,
+        run_hours_limit: f.run_hours_limit ? Number(f.run_hours_limit) : undefined,
+      })
+      setF(PPM_BLANK)
       refresh()
     } catch (e) { err(e) } finally { setBusy(false) }
   }
 
   return (
-    <Section title="PPM schedules" hint="Set each asset's service interval + last-service date so preventive maintenance is tracked.">
-      <AddBar onAdd={save} busy={busy} label="Save schedule">
-        <Field label="Asset"><Input value={f.asset} onChange={(v) => setF({ ...f, asset: v })} /></Field>
+    <Section title="PPM schedules" hint="Set each asset's service interval + last-service date. For run-hour assets (DG sets) add a run-hours limit — whichever comes first triggers service.">
+      <AddBar onAdd={save} busy={busy} label={editing ? 'Update schedule' : 'Add schedule'}>
+        <label className="flex flex-col gap-1 text-xs text-text-faint">
+          Asset
+          <input list="ppm-assets" value={f.asset} onChange={(e) => setF({ ...f, asset: e.target.value })}
+            className="bg-surface border border-border rounded-lg px-3 py-2 text-sm text-text outline-none focus:border-gold/50" />
+          <datalist id="ppm-assets">{assetOpts.map((a) => <option key={a} value={a} />)}</datalist>
+        </label>
         <Field label="Interval (days)"><Input value={f.interval_days} onChange={(v) => setF({ ...f, interval_days: v.replace(/\D/g, '') })} /></Field>
         <Field label="Last done (YYYY-MM-DD)"><Input value={f.last_done} onChange={(v) => setF({ ...f, last_done: v })} /></Field>
+        <Field label="Run-hours limit (optional)"><Input value={f.run_hours_limit} onChange={(v) => setF({ ...f, run_hours_limit: v.replace(/\D/g, '') })} /></Field>
       </AddBar>
+      {editing && <div className="text-xs text-amber -mt-3 mb-3">Editing {f.asset} — saving overwrites its schedule. <button onClick={() => setF(PPM_BLANK)} className="text-gold">clear</button></div>}
       {ppm.loading ? <Spinner /> : (
         <div className="flex flex-col gap-2">
           {(ppm.data?.schedules || []).map((p) => (
             <Row key={p.asset}>
               <div className="flex-1">
                 <div className="text-sm text-text">{p.asset}</div>
-                <div className="text-xs text-text-faint">every {p.interval_days}d · last {p.last_done || '—'} · due {p.due_date || '—'}</div>
+                <div className="text-xs text-text-faint">
+                  every {p.interval_days}d · last {p.last_done || '—'} · due {p.due_date || '—'}
+                  {p.run_hours_limit ? ` · ${p.run_hours_limit} run-hrs limit` : ''}
+                </div>
               </div>
               <Pill tone={p.overdue ? 'red' : p.status === 'due_soon' ? 'amber' : 'green'}>{p.status}</Pill>
-              <button onClick={() => setF({ asset: p.asset, interval_days: String(p.interval_days || 90), last_done: p.last_done || '' })} className="text-xs text-gold">edit</button>
+              <button onClick={() => setF({ asset: p.asset, interval_days: String(p.interval_days || 90), last_done: p.last_done || '', run_hours_limit: p.run_hours_limit ? String(p.run_hours_limit) : '' })} className="text-xs text-gold">edit</button>
             </Row>
           ))}
           {!ppm.data?.schedules?.length && <Empty>No PPM schedules yet.</Empty>}
