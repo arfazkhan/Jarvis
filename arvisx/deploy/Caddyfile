@@ -17,6 +17,21 @@
 	}
 }
 
+# Operator admin panel — its own subdomain, serves admin.html (separate from the
+# building console). Defaults to an internal .localhost name when ADMIN_DOMAIN is unset
+# (local dev) so the block never breaks the config.
+{$ADMIN_DOMAIN:admin.localhost} {
+	encode gzip
+	handle /api/* {
+		reverse_proxy api:8090
+	}
+	handle {
+		root * /srv
+		try_files {path} /admin.html
+		file_server
+	}
+}
+
 # Local/staging without a real domain + cert: set DOMAIN=:80 in .env to serve
 # plain HTTP on port 80 (note: clipboard "Field link" + camera need HTTPS, so use
 # a real domain for the actual pilot).

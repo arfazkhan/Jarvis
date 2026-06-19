@@ -156,6 +156,10 @@ export const api = {
   slaConfig: (building) => api.get('/sla/config', { building }),
   setSlaConfig: (body) => api.post('/sla/config', body),
 
+  // admin panel (operator) — bot pairing + building analytics
+  adminBridge: () => api.get('/admin/bridge/state'),
+  adminAnalytics: (building, days) => api.get('/admin/analytics', { building, days }),
+
   // sweeps
   runEscalations: (building) => api.post('/escalations/run', undefined, { building }),
   runReminders: (building) => api.post('/forms/reminders/run', undefined, { building }),
