@@ -200,8 +200,11 @@ def create_app():
             from arvisx.scheduler import Heartbeat, community_tick
             interval = float(os.environ.get("ARVISX_HEARTBEAT_INTERVAL", "300"))
 
+            # Deterministic on the cadence — the heartbeat exists to advance the checklist
+            # sweeps (reminders/lapse/escalation), not to burn LLM tokens auto-investigating
+            # every tick. Ask/RCA/handover still use the LLM on demand.
             async def _tick(n):
-                state._last_tick = await community_tick(state, llm=_llm_for_reasoning())
+                state._last_tick = await community_tick(state, llm=None)
 
             state._hb = Heartbeat(_tick, interval_s=interval)
             state._hb_task = asyncio.create_task(state._hb.run())
