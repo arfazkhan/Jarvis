@@ -325,6 +325,8 @@ def _crisp(text: str) -> str:
     m = list(_re.finditer(r"ANSWER:\s*", text, flags=_re.I))
     if m:
         text = text[m[-1].end():]
+    # drop chat-template special tokens (e.g. <|im_end|>, <|eot_id|>)
+    text = _re.sub(r"<\|[^|]*\|>", "", text)
     return text.strip()
 
 
