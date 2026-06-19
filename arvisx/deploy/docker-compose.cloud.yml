@@ -1,0 +1,56 @@
+# AllGud — One Anthem CLOUD stack (registry-pull, no source on the server).
+# Images are built+pushed from your machine (build-and-push.sh) to GHCR; the
+# Droplet only pulls. See CLOUD_DEPLOY_DIGITALOCEAN.md.
+#
+#   docker login ghcr.io
+#   docker compose -f docker-compose.cloud.yml pull
+#   docker compose -f docker-compose.cloud.yml up -d
+name: allgud-oneanthem
+
+services:
+  api:
+    image: ${REGISTRY}/allgud-api:${TAG:-latest}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ARVISX_SOURCE: sim
+      ARVISX_DB: /data/arvisx.db
+      ARVISX_PUBLIC_URL: https://${DOMAIN}
+    volumes:
+      - api-data:/data
+    expose:
+      - "8090"
+
+  web:
+    image: ${REGISTRY}/allgud-web:${TAG:-latest}
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy-data:/data       # TLS certs persist
+      - caddy-config:/config
+    depends_on:
+      - api
+
+  bot:
+    image: ${REGISTRY}/allgud-bot:${TAG:-latest}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ARVIS_API_URL: http://api:8090
+      ARVIS_API_KEY: ${ARVISX_API_KEY}
+    volumes:
+      - bot-session:/app/session   # WhatsApp pairing — scan QR once, persists
+      - bot-data:/app/data
+    depends_on:
+      - api
+
+volumes:
+  api-data:
+  caddy-data:
+  caddy-config:
+  bot-session:
+  bot-data:
