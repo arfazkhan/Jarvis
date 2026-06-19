@@ -21,39 +21,38 @@ const STEPS = [
 
 export default function Setup() {
   const { building, current } = useBuilding()
-  const [step, setStep] = useState('roster')
+  const [step, setStep] = useState('checklists')
 
   return (
     <div>
       <PageHeader subtitle={`Onboarding — ${current?.name || building}`} />
-      <div className="px-10 pt-6 grid grid-cols-[220px_1fr] gap-8 pb-12">
-        {/* step nav */}
-        <div className="flex flex-col gap-1">
-          {STEPS.map((s, i) => {
+      {/* horizontal tabs */}
+      <div className="px-10 border-b border-border-soft">
+        <div className="flex gap-1 overflow-x-auto">
+          {STEPS.map((s) => {
             const Icon = s.icon
             const active = step === s.key
             return (
               <button
                 key={s.key}
                 onClick={() => setStep(s.key)}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-left ${
-                  active ? 'bg-surface-2 text-gold-soft border border-gold/30' : 'text-text-dim hover:bg-surface'
+                className={`flex items-center gap-2 px-4 py-3 text-sm whitespace-nowrap border-b-2 -mb-px ${
+                  active ? 'border-gold text-text' : 'border-transparent text-text-faint hover:text-text'
                 }`}
               >
-                <span className="w-5 text-xs text-text-faint">{i + 1}</span>
                 <Icon className="w-4 h-4" /> {s.label}
               </button>
             )
           })}
         </div>
+      </div>
 
-        <div>
-          {step === 'checklists' && <ChecklistStep building={building} />}
-          {step === 'roster' && <RosterStep building={building} />}
-          {step === 'vendors' && <VendorStep building={building} />}
-          {step === 'ppm' && <PpmStep building={building} />}
-          {step === 'managers' && <ManagerStep />}
-        </div>
+      <div className="px-10 pt-6 pb-12">
+        {step === 'checklists' && <ChecklistStep building={building} />}
+        {step === 'roster' && <RosterStep building={building} />}
+        {step === 'vendors' && <VendorStep building={building} />}
+        {step === 'ppm' && <PpmStep building={building} />}
+        {step === 'managers' && <ManagerStep />}
       </div>
     </div>
   )

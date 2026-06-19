@@ -151,7 +151,7 @@ export default function Operations() {
 
           <div className="flex flex-col gap-4 mb-8">
             {rows
-              .filter((r) => r.total && r.pct < 100)
+              .filter((r) => r.runId && r.pct < 100)
               .slice(0, 1)
               .map((r, i) => (
                 <AttentionItem
@@ -161,6 +161,7 @@ export default function Operations() {
                   title={`${r.name} incomplete`}
                   detail={`${r.total - r.done} items remaining`}
                   sub={r.assignee}
+                  onClick={() => navigate(`/operations/round/${r.runId}`)}
                 />
               ))}
             {openIssues.slice(0, 1).map((iss) => (
@@ -171,6 +172,7 @@ export default function Operations() {
                 title={`${iss.asset} issue open`}
                 detail="SLA breached"
                 sub={iss.assignee || iss.vendor || 'Unassigned'}
+                onClick={() => navigate('/issues')}
               />
             ))}
             <AttentionItem
@@ -179,6 +181,7 @@ export default function Operations() {
               title="Sign-offs pending"
               detail="Supervisor approval"
               sub={rows.filter((r) => r.total && r.pct < 100).map((r) => r.shortName).join(', ') || '—'}
+              onClick={() => setDrawer('signoff')}
             />
           </div>
 
@@ -376,11 +379,11 @@ function buildRows(today, ppm) {
   return rows
 }
 
-function AttentionItem({ tone, icon: Icon, title, detail, sub }) {
+function AttentionItem({ tone, icon: Icon, title, detail, sub, onClick }) {
   const toneText = { amber: 'text-amber', red: 'text-red', blue: 'text-blue' }[tone]
   const toneBg = { amber: 'bg-amber-bg', red: 'bg-red-bg', blue: 'bg-blue-bg' }[tone]
   return (
-    <div className="flex items-start gap-3">
+    <button onClick={onClick} disabled={!onClick} className="flex items-start gap-3 text-left w-full disabled:cursor-default enabled:hover:opacity-80">
       <div className={`w-9 h-9 rounded-full flex items-center justify-center ${toneBg} ${toneText}`}>
         <Icon className="w-4 h-4" />
       </div>
@@ -389,7 +392,7 @@ function AttentionItem({ tone, icon: Icon, title, detail, sub }) {
         <div className={`text-xs ${toneText}`}>{detail}</div>
         <div className="text-xs text-text-faint">{sub}</div>
       </div>
-    </div>
+    </button>
   )
 }
 

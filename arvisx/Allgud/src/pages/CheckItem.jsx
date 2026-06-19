@@ -56,6 +56,8 @@ export default function CheckItem() {
   const [showNote, setShowNote] = useState(false)
   const [roundCtxOpen, setRoundCtxOpen] = useState(true)
   const [scanState, setScanState] = useState(null) // {available, extracted, suggestion_id} | 'loading'
+  const [showHelp, setShowHelp] = useState(false)
+  const [flagged, setFlagged] = useState(false)
   const fileRef = useRef(null)
   const scanRef = useRef(null)
 
@@ -64,6 +66,7 @@ export default function CheckItem() {
     setNote(existing?.note || '')
     setScanState(null)
     setShowNote(false)
+    setFlagged(false)
   }, [idx, existing?.value, existing?.note])
 
   if (runView.loading) return <div className="px-10 py-16 text-text-faint text-sm">Loading…</div>
@@ -103,6 +106,12 @@ export default function CheckItem() {
 
   async function submitReading() {
     await save('ok', value)
+    goNext()
+  }
+
+  async function flagForReview() {
+    await save('issue', value || 'FLAGGED', 'Flagged for review')
+    setFlagged(true)
   }
 
   async function saveNote() {
@@ -206,14 +215,28 @@ export default function CheckItem() {
               {runView.data?.template?.name} · Assigned to {runView.data?.run?.technician}
             </div>
           </div>
-          <button className="text-sm text-text-dim flex items-center gap-2">
+          <button onClick={() => setShowHelp((h) => !h)} className="text-sm text-text-dim flex items-center gap-2 hover:text-text">
             <HelpCircle className="w-4 h-4" /> Help
           </button>
         </div>
 
+        {showHelp && (
+          <div className="mx-10 mt-3 border border-border rounded-xl bg-surface p-4 text-sm text-text-dim">
+            <div className="font-medium text-text mb-1">How to fill a check</div>
+            <ul className="list-disc pl-5 space-y-1 text-xs">
+              <li><b>Reading</b>: type the number → <b>Save Reading</b> (advances to the next check).</li>
+              <li><b>Observation</b>: tap Normal / Attention / Issue.</li>
+              <li><b>Add evidence</b>: photo or a note (optional).</li>
+              <li><b>Flag for Review</b>: marks this check for a supervisor to double-check.</li>
+              <li>Use <b>Previous / Next</b> to move; <b>Exit Round</b> to go back.</li>
+            </ul>
+          </div>
+        )}
+
         <div className="flex justify-end px-10 pt-2">
-          <button className="text-xs border border-amber/30 text-amber rounded-lg px-3 py-1.5 flex items-center gap-1">
-            <Flag className="w-3.5 h-3.5" /> Flag for Review
+          <button onClick={flagForReview}
+            className={`text-xs rounded-lg px-3 py-1.5 flex items-center gap-1 border ${flagged ? 'bg-amber-bg border-amber text-amber' : 'border-amber/30 text-amber hover:bg-amber-bg'}`}>
+            <Flag className="w-3.5 h-3.5" /> {flagged ? 'Flagged' : 'Flag for Review'}
           </button>
         </div>
 
@@ -482,7 +505,7 @@ export default function CheckItem() {
                   <div className="text-xs text-text-dim mb-2">
                     Current reading is {band.direction} the historical band.
                   </div>
-                  <button className="text-xs text-blue">View Details</button>
+                  <button onClick={() => navigate(`/assets`)} className="text-xs text-blue">View Details</button>
                 </div>
               </>
             )}

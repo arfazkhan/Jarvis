@@ -12,6 +12,12 @@
 	# /field/run/42?t=... resolve to index.html and the router takes over.
 	handle {
 		root * /srv
+		# Hashed assets are immutable; everything else (the HTML shell + SPA routes)
+		# must revalidate so a new deploy is picked up without a hard refresh.
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		@doc not path /assets/*
+		header @doc Cache-Control "no-cache"
 		try_files {path} /index.html
 		file_server
 	}
@@ -27,6 +33,10 @@
 	}
 	handle {
 		root * /srv
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		@doc not path /assets/*
+		header @doc Cache-Control "no-cache"
 		try_files {path} /admin.html
 		file_server
 	}
