@@ -785,6 +785,11 @@ def create_app():
         them on the next tick. They stay 'open' until the bot ACKS the WhatsApp send
         (POST /whatsapp/resident-requests/ack) — a crash mid-push re-delivers next poll:
         at-least-once, never silently lost (worst case the team sees a duplicate)."""
+        # Checklist-only deployments (no live sensors) must NOT broadcast the simulator's
+        # telemetry alerts (pool/fire/energy/ghost). Only checklist flows push there —
+        # assignment DMs, reminders, issue alerts, digest, handover (separate endpoints).
+        if os.environ.get("ARVISX_SOURCE", "sim").lower() != "mqtt":
+            return {"count": 0, "alerts": []}
         from arvisx.messaging import pending_alerts
         bl = state.baselines if state.store is not None else None
         alerts, sent = pending_alerts(state.report_now(), state._sent_alerts, state.current_assets(), bl)
@@ -889,7 +894,10 @@ def create_app():
     @app.get("/api/v1/whatsapp/checklist-prompts")
     async def wa_checklist_prompts():
         """Physical-check prompts still pending today — the bot sends these to the
-        technician ('pump room visual check? reply OK / photo')."""
+        technician ('pump room visual check? reply OK / photo'). Legacy residential
+        (sensor) feature; off for checklist-only deployments (templates drive the field app)."""
+        if os.environ.get("ARVISX_SOURCE", "sim").lower() != "mqtt":
+            return {"prompts": []}
         from arvisx.checklist import pending_prompts
         return {"prompts": pending_prompts(state.db)}
 
