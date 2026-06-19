@@ -10,6 +10,7 @@ import Issues from './pages/Issues'
 import Assets from './pages/Assets'
 import People from './pages/People'
 import Intelligence from './pages/Intelligence'
+import Setup from './pages/Setup'
 import FieldHome from './pages/FieldHome'
 import FieldRound from './pages/FieldRound'
 import Onboard from './components/Onboard'
@@ -86,6 +87,7 @@ function Shell() {
           <Route path="/assets" element={<Assets />} />
           <Route path="/people" element={<People />} />
           <Route path="/intelligence" element={<Intelligence />} />
+          <Route path="/setup" element={<Setup />} />
         </Route>
       </Routes>
     </BrowserRouter>

@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { Target, ClipboardList, TriangleAlert, Box, Users, Sparkles, LogOut, Smartphone } from 'lucide-react'
+import { Target, ClipboardList, TriangleAlert, Box, Users, Sparkles, LogOut, Smartphone, Settings } from 'lucide-react'
 import { AllGudLogo } from './Logo'
 import { useAuth } from '../lib/AuthContext'
 
@@ -24,6 +24,7 @@ function link({ isActive }) {
 export default function Sidebar() {
   const { username, role, logout } = useAuth()
   const initials = (username || 'AG').slice(0, 2).toUpperCase()
+  const canSetup = role === 'owner' || role === 'fm' || role === 'system' || role === 'open'
 
   return (
     <aside className="w-[260px] shrink-0 border-r border-border bg-surface flex flex-col h-full px-5 py-6">
@@ -42,6 +43,12 @@ export default function Sidebar() {
             <Icon className="w-[18px] h-[18px]" /> {label}
           </NavLink>
         ))}
+
+        {canSetup && (
+          <NavLink to="/setup" className={link}>
+            <Settings className="w-[18px] h-[18px]" /> Setup
+          </NavLink>
+        )}
 
         <NavLink to="/field" className={link}>
           <Smartphone className="w-[18px] h-[18px]" /> Field app
