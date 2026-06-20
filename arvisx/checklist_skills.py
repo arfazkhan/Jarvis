@@ -305,9 +305,13 @@ _QA_SYSTEM = (
     "ONLY the tools (health_overview, open_issues, asset_history, reading_anomalies, compliance, "
     "list_assets). Cite the asset and the figure from the tools. If the data isn't there, say so — "
     "never invent a number or a status.\n"
-    "OUTPUT FORMAT (important): after any thinking, write your final reply as the LAST line, "
+    "ALWAYS call at least one tool to pull real data BEFORE answering — never answer from "
+    "memory or guess.\n"
+    "OUTPUT FORMAT (important): after the tools return, write your final reply as the LAST line, "
     "prefixed EXACTLY with 'ANSWER: '. It must be 1–2 short sentences in plain language for a "
-    "building manager — do NOT narrate your steps, your reasoning, or mention tools."
+    "building manager — do NOT narrate your steps, your reasoning, or mention tools. "
+    "Example: 'ANSWER: Two issues are open — chlorination (high) and vacuuming. Fire Pump 1's "
+    "test is overdue.'"
 )
 
 
@@ -330,13 +334,30 @@ def _crisp(text: str) -> str:
     return text.strip()
 
 
+_REASONING_MARKERS = (
+    "the user is asking", "the user asked", "the user wants", "let me ", "i should ",
+    "i need to ", "i'll call", "i will call", "maybe i ", "wait,", "first, maybe",
+    "the tools available", "let me start by", "i can summarize", "but the user",
+)
+
+
+def _looks_like_reasoning(text: str) -> bool:
+    """Heuristic: a reasoning model that leaked its chain-of-thought instead of answering."""
+    t = text.lower()
+    return sum(m in t for m in _REASONING_MARKERS) >= 1
+
+
 async def run_building_qa(llm, db, building: str, question: str, today: str) -> Dict[str, Any]:
     if llm is not None:
         try:
             ctx = build_ctx(db, building, today)
             out = await run_agent(llm, _QA_SYSTEM, question, ctx)
             text = _crisp(out.get("text") or "")
-            if text and verify_grounded(text, out.get("evidence"))["grounded"]:
+            ev = out.get("evidence")
+            # Accept the LLM answer ONLY if it actually pulled data (used tools), is concise,
+            # isn't leaked reasoning, and every number is grounded. Else → deterministic.
+            if (text and ev and len(text) <= 800 and not _looks_like_reasoning(text)
+                    and verify_grounded(text, ev)["grounded"]):
                 return {"text": text, "source": "agent"}
         except Exception:
             pass
