@@ -1147,8 +1147,8 @@ def create_app():
         run = state.db.get_checklist_run(rid)
         if not run:
             raise HTTPException(404, f"unknown run {rid}")
-        if run["status"] != "open":
-            raise HTTPException(409, "run already submitted — cannot edit")
+        if run["status"] == "lapsed":
+            raise HTTPException(409, "round has lapsed — cannot edit")
         tmpl = get_template(run["template_id"], run["building_id"])
         p = payload or {}
         item_id = str(p.get("item_id", "")).strip()

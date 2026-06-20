@@ -63,15 +63,17 @@ export default function FieldHome() {
           ))}
 
           {doneRuns.map((r) => (
-            <div key={r.run_id} className="w-full bg-surface border border-border-soft rounded-2xl p-4 mb-3 flex items-center gap-3 opacity-70">
+            <button key={r.run_id} onClick={() => navigate(`/field/run/${r.run_id}`)}
+              className="w-full bg-surface border border-border-soft rounded-2xl p-4 mb-3 flex items-center gap-3 text-left">
               <div className="w-11 h-11 rounded-full bg-green-bg flex items-center justify-center text-green">
                 <CheckCircle2 size={20} />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="text-base font-medium text-text truncate">{r.name}</div>
-                <div className="text-xs text-text-faint">Submitted</div>
+                <div className="text-xs text-text-faint">Submitted · tap to review or fix</div>
               </div>
-            </div>
+              <ChevronRight size={20} className="text-text-faint" />
+            </button>
           ))}
         </div>
 

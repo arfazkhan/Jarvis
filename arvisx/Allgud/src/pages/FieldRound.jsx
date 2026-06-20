@@ -130,12 +130,10 @@ export default function FieldRound() {
     </FieldShell>
   )
 
-  // A round opened via an old link may already be closed (submitted) or have lapsed
-  // (missed its window). Entries are rejected server-side once a run isn't 'open', so
-  // show a clear read-only state instead of letting taps fail.
+  // A lapsed round (missed its window) is terminal — read-only. A SUBMITTED round can
+  // still be reopened to correct an entry (edits allowed until it lapses), so it's editable.
   const runStatus = run.run?.status
-  if (runStatus && runStatus !== 'open') {
-    const lapsedRun = runStatus === 'lapsed'
+  if (runStatus === 'lapsed') {
     return (
       <FieldShell>
         <div className="px-4 pt-4 pb-3 border-b border-border flex items-center justify-between">
@@ -143,13 +141,9 @@ export default function FieldRound() {
           <button onClick={() => navigate('/field')} className="text-text-faint p-1"><X size={20} /></button>
         </div>
         <div className="flex-1 flex flex-col items-center justify-center gap-4 px-6 text-center">
-          {lapsedRun ? <CalendarX size={56} className="text-amber" /> : <CheckCircle2 size={56} className="text-green" />}
-          <div className="font-serif text-2xl text-text">{lapsedRun ? 'Round missed' : 'Already submitted'}</div>
-          <div className="text-sm text-text-faint">
-            {lapsedRun
-              ? 'This round lapsed before it was submitted and can no longer be filled.'
-              : 'This round has been submitted. Nothing left to do here.'}
-          </div>
+          <CalendarX size={56} className="text-amber" />
+          <div className="font-serif text-2xl text-text">Round missed</div>
+          <div className="text-sm text-text-faint">This round lapsed before it was submitted and can no longer be filled.</div>
           <button onClick={() => navigate('/field')} className="mt-2 text-sm text-gold">Back to my rounds</button>
         </div>
       </FieldShell>
