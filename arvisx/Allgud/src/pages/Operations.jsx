@@ -22,6 +22,7 @@ import { CreateIssueDrawer } from './Issues'
 import { useAsync } from '../lib/useAsync'
 import { api } from '../api/client'
 import { useBuilding } from '../lib/BuildingContext'
+import { useAuth } from '../lib/AuthContext'
 
 // PPM schedule statuses (date/condition based)
 const PPM_STYLE = {
@@ -58,6 +59,8 @@ export default function Operations() {
   const today = useAsync(() => api.today(building), [building, refreshKey])
   const ppm = useAsync(() => api.ppmSchedule(building), [building, refreshKey])
   const issues = useAsync(() => api.issues(building, 'open'), [building, refreshKey])
+  const techs = useAsync(() => api.technicians(building), [building, refreshKey])
+  const techList = techs.data?.technicians || []
 
   const rows = useMemo(() => buildRows(today.data, ppm.data), [today.data, ppm.data])
   const openIssues = issues.data?.issues || []
@@ -117,13 +120,17 @@ export default function Operations() {
                     </div>
                   </td>
                   <td className="py-4">
-                    <div className="flex items-center gap-2">
-                      <Avatar name={r.assignee} />
-                      <div>
-                        <div className="text-sm text-text">{r.assignee || '—'}</div>
-                        <div className="text-xs text-text-faint">{r.role}</div>
+                    {r.runId ? (
+                      <AssigneeCell runId={r.runId} current={r.assignee} techs={techList} onChanged={refresh} />
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <Avatar name={r.assignee} />
+                        <div>
+                          <div className="text-sm text-text">{r.assignee || '—'}</div>
+                          <div className="text-xs text-text-faint">{r.role}</div>
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </td>
                   <td className="py-4">
                     <Pill tone={r.statusTone}>{r.status}</Pill>
@@ -345,21 +352,33 @@ function StartInspectionDrawer({ open, onClose, building, onStarted }) {
 }
 
 function SignoffDrawer({ open, onClose, building, onDone }) {
+  const { username } = useAuth()
   const today = useAsync(() => (open ? api.today(building) : Promise.resolve(null)), [building, open])
   const [busy, setBusy] = useState('')
+  const [role, setRole] = useState('supervisor')
   const runs = (today.data?.runs || []).filter((r) => r.status === 'submitted')
   async function sign(rid) {
     setBusy(rid)
-    try { await api.signoff(rid, { role: 'supervisor', by: 'Athul G' }); onDone() }
+    try { await api.signoff(rid, { role, by: username || 'manager' }); onDone() }
     catch (e) { alert(e.message) } finally { setBusy('') }
   }
   return (
     <Drawer open={open} onClose={onClose} width={420}>
       <div className="p-6">
-        <div className="flex items-center justify-between mb-6">
-          <div className="font-serif text-xl text-text">Request Sign-off</div>
+        <div className="flex items-center justify-between mb-4">
+          <div className="font-serif text-xl text-text">Sign off rounds</div>
           <button onClick={onClose} className="text-text-faint"><X className="w-5 h-5" /></button>
         </div>
+        <label className="flex items-center gap-2 text-xs text-text-faint mb-4">
+          Signing as
+          <select value={role} onChange={(e) => setRole(e.target.value)}
+            className="bg-surface border border-border rounded-lg px-2 py-1.5 text-sm text-text outline-none focus:border-gold/50">
+            <option value="supervisor">supervisor</option>
+            <option value="technician">technician</option>
+            <option value="manager">manager</option>
+          </select>
+          <span className="text-text">{username || 'manager'}</span>
+        </label>
         {today.loading ? <Spinner /> : runs.length === 0 ? <Empty>No submitted rounds awaiting sign-off.</Empty> : (
           <div className="flex flex-col gap-2">
             {runs.map((r) => (
@@ -453,6 +472,28 @@ function buildRows(today, ppm) {
     })
   }
   return rows
+}
+
+function AssigneeCell({ runId, current, techs, onChanged }) {
+  const [busy, setBusy] = useState(false)
+  async function change(name) {
+    setBusy(true)
+    try { await api.assign(runId, { assignee: name }); onChanged() }
+    catch (e) { alert(e.message) } finally { setBusy(false) }
+  }
+  return (
+    <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+      <Avatar name={current} />
+      <select
+        value={current || ''} disabled={busy} onChange={(e) => change(e.target.value)}
+        className="bg-surface border border-border rounded-lg px-2 py-1.5 text-sm text-text outline-none focus:border-gold/50 disabled:opacity-50"
+        title="Reassign this round"
+      >
+        <option value="">Unassigned</option>
+        {techs.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
+      </select>
+    </div>
+  )
 }
 
 function AttentionItem({ tone, icon: Icon, title, detail, sub, onClick }) {
