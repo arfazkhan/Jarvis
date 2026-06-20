@@ -248,6 +248,28 @@ def building_evaluation(db, building: str, now=None, days: int = 7) -> Dict[str,
     }
 
 
+def building_trend(db, building: str, days: int = 30, now=None) -> List[Dict[str, Any]]:
+    """Per-day series (oldest→newest) for trend charts: completion %, rounds, issues opened.
+    Lets the UI show that a low day sits inside an otherwise-healthy week/month."""
+    from datetime import datetime as _dt, timedelta as _td
+    now = now or _dt.now()
+    issues = db.list_issues(building)
+    out: List[Dict[str, Any]] = []
+    for i in range(days - 1, -1, -1):
+        d = (now - _td(days=i)).strftime("%Y-%m-%d")
+        runs = db.checklist_runs_for(building, d)
+        comps = []
+        for r in runs:
+            t = get_template(r["template_id"], building)
+            if t:
+                comps.append(run_summary(t, db.checklist_entries(r["id"]))["completion_pct"])
+        out.append({"date": d,
+                    "completion_pct": round(sum(comps) / len(comps), 1) if comps else 0.0,
+                    "runs": len(runs),
+                    "issues_opened": sum(1 for x in issues if (x.get("created_at") or "")[:10] == d)})
+    return out
+
+
 def aged_open_issues(db, building: str, now: Optional["datetime"] = None,
                      days: float = 2.0) -> List[Dict[str, Any]]:
     """Fix #2: issues open longer than `days` — so a long-unresolved issue can't fade even

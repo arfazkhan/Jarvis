@@ -26,6 +26,7 @@ export default function Overview() {
   const today = useAsync(() => api.today(building), [building])
   const ppm = useAsync(() => api.ppmSchedule(building), [building])
   const activity = useAsync(() => api.activity(building), [building])
+  const trend = useAsync(() => api.trend(building, 30), [building])
 
   const r = readiness.data
   const band = r?.band || 'Attention Required'
@@ -82,7 +83,11 @@ export default function Overview() {
         </div>
       </div>
 
-      <div className="px-10">
+      <div className="px-10 pb-8 border-b border-border-soft">
+        <TrendStrip data={trend.data?.trend} />
+      </div>
+
+      <div className="px-10 pt-8">
         <div className="text-sm text-text-dim mb-4">Why this score?</div>
         <div className="grid grid-cols-3 gap-6 pb-10 border-b border-border-soft">
           {whyCards.map((c, i) => (
@@ -196,6 +201,32 @@ function fmtTime(ts) {
   const d = new Date(ts)
   if (isNaN(d)) return ''
   return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+}
+
+function TrendStrip({ data }) {
+  if (!data || !data.length) return <div className="text-sm text-text-faint">Loading trend…</div>
+  const vals = data.map((d) => d.completion_pct)
+  const avg = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length)
+  const today = data[data.length - 1]
+  const bar = (p) => (p >= 80 ? 'bg-green' : p >= 50 ? 'bg-amber' : p > 0 ? 'bg-red' : 'bg-surface-2')
+  const txt = (p) => (p >= 80 ? 'text-green' : p >= 50 ? 'text-amber' : 'text-red')
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-sm text-text-dim">30-day completion trend</div>
+        <div className="text-xs text-text-faint">
+          today <span className={txt(today.completion_pct)}>{today.completion_pct}%</span> · avg <span className="text-text">{avg}%</span>
+        </div>
+      </div>
+      <div className="flex items-end gap-[3px] h-16">
+        {data.map((d, i) => (
+          <div key={i} className={`flex-1 rounded-t ${bar(d.completion_pct)}`} style={{ height: `${Math.max(3, d.completion_pct)}%` }}
+            title={`${d.date}: ${d.completion_pct}% · ${d.runs} round(s) · ${d.issues_opened} issue(s)`} />
+        ))}
+      </div>
+      <div className="text-xs text-text-faint mt-2">A single low day is fine if the trend holds — judge the month, not one bar.</div>
+    </div>
+  )
 }
 
 function buildWhyCards(health, today, ppm) {

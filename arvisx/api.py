@@ -1303,7 +1303,9 @@ def create_app():
         if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
             raise HTTPException(403, "admin only")
         from arvisx import checklist_intel as ci
-        return ci.building_evaluation(state.db, building, days=int(days))
+        ev = ci.building_evaluation(state.db, building, days=int(days))
+        ev["trend"] = ci.building_trend(state.db, building, days=int(days))
+        return ev
 
     @app.post("/api/v1/forms/run/{rid}/assign")
     async def forms_assign_run(rid: int, payload: Dict[str, Any] = Body(...)):
@@ -1569,6 +1571,32 @@ def create_app():
 
         events.sort(key=lambda e: e["ts"], reverse=True)
         return {"building": building, "date": date, "events": events[:limit]}
+
+    @app.get("/api/v1/forms/trend")
+    async def forms_trend(building: str = "one-anthem", days: int = 30):
+        """Per-day completion/issue trend — so the console can show today in context
+        (a low day inside a healthy week/month)."""
+        from arvisx import checklist_intel as ci
+        return {"building": building, "trend": ci.building_trend(state.db, building, days=int(days))}
+
+    @app.get("/api/v1/whatsapp/period-digest")
+    async def wa_period_digest(building: str = "one-anthem", period: str = "week"):
+        """Weekly/monthly summary text for the bot to push (or the owner to pull)."""
+        from arvisx import checklist_intel as ci
+        days = 30 if period == "month" else 7
+        ev = ci.building_evaluation(state.db, building, days=days)
+        r, iss, p = ev["rounds"], ev["issues"], ev["ppm"]
+        label = "Monthly" if period == "month" else "Weekly"
+        text = (f"📊 *{label} summary* — last {days} days\n"
+                f"Rounds: {r['submitted']}/{r['total']} submitted ({r['submit_rate_pct']}%), "
+                f"{r['lapsed']} lapsed · avg {r['avg_completion_pct']}% complete\n"
+                f"Issues: {iss['raised']} raised, {iss['resolved']} resolved, {iss['open']} open"
+                + (f", {iss['sla_breached']} SLA-breached" if iss.get('sla_breached') else "") + "\n"
+                f"PPM: {p['overdue']} overdue, {p['due_soon']} due soon")
+        techs = ev.get("technicians") or []
+        if techs:
+            text += "\nTechs: " + ", ".join(f"{t['name']} {t['completion_pct']}%" for t in techs[:3])
+        return {"period": period, "days": days, "text": text}
 
     # ── Phase-S substrate: asset registry, asset history, PPM scheduling ──
     def _latest_run_hours(building: str, asset: str):

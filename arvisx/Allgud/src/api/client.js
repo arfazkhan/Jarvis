@@ -98,6 +98,7 @@ export const api = {
   today: (building, date) => api.get('/forms/today', { building, date }),
   digest: (building, date) => api.get('/forms/digest', { building, date }),
   activity: (building, date) => api.get('/forms/activity', { building, date }),
+  trend: (building, days) => api.get('/forms/trend', { building, days }),
   templates: (building) => api.get('/forms/templates', { building }),
   template: (id, building) => api.get(`/forms/template/${id}`, { building }),
   saveTemplate: (body) => api.post('/forms/templates', body),

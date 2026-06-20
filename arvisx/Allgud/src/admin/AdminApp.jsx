@@ -142,6 +142,8 @@ function Analytics() {
         <Stat icon={CalendarCheck} label="PPM overdue" value={ppm.overdue} sub={`${ppm.due_soon} due soon · ${ppm.scheduled} scheduled`} tone={ppm.overdue > 0 ? 'red' : 'green'} />
       </div>
 
+      <TrendCard trend={data.trend} avg={rounds.avg_completion_pct} />
+
       <Card className="p-5 mb-6">
         <div className="text-xs uppercase tracking-wide text-text-faint mb-3">Issue SLA</div>
         <div className="grid grid-cols-4 gap-4">
@@ -174,6 +176,36 @@ function Analytics() {
   )
 }
 function tone(pct) { return pct >= 80 ? 'green' : pct >= 50 ? 'amber' : 'red' }
+
+function TrendCard({ trend, avg }) {
+  const data = trend || []
+  if (!data.length) return null
+  const today = data[data.length - 1]
+  const barTone = { green: 'bg-green', amber: 'bg-amber', red: 'bg-red' }
+  return (
+    <Card className="p-5 mb-6">
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-xs uppercase tracking-wide text-text-faint">Completion trend (daily)</div>
+        <div className="text-xs text-text-faint">
+          today <span className={tone(today.completion_pct) === 'red' ? 'text-red' : tone(today.completion_pct) === 'amber' ? 'text-amber' : 'text-green'}>{today.completion_pct}%</span>
+          {' · '}avg <span className="text-text">{avg}%</span>
+        </div>
+      </div>
+      <div className="flex items-end gap-[3px] h-28">
+        {data.map((d, i) => (
+          <div key={i} className="flex-1 flex flex-col justify-end group relative" title={`${d.date}: ${d.completion_pct}% · ${d.runs} round(s) · ${d.issues_opened} issue(s)`}>
+            <div className={`${barTone[tone(d.completion_pct)] || 'bg-surface-2'} rounded-t`} style={{ height: `${Math.max(2, d.completion_pct)}%` }} />
+          </div>
+        ))}
+      </div>
+      <div className="flex justify-between text-[10px] text-text-faint mt-1">
+        <span>{data[0]?.date?.slice(5)}</span>
+        <span>{today.date?.slice(5)}</span>
+      </div>
+      <div className="text-xs text-text-faint mt-2">A low day inside a healthy average is normal — watch the trend, not one bar.</div>
+    </Card>
+  )
+}
 function Mini({ label, value, tone }) {
   const tt = { green: 'text-green', amber: 'text-amber', red: 'text-red' }[tone] || 'text-text'
   return (
