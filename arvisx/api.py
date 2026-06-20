@@ -1189,6 +1189,16 @@ def create_app():
         tmpl = get_template(run["template_id"], run["building_id"])
         if tmpl and tmpl.cadence != "daily" and run.get("asset"):
             state.db.mark_ppm_done(run["building_id"], run["asset"], _today_str())
+        # Sign-off request: DM the owner a link to review + sign off the submitted round.
+        owner = os.environ.get("OWNER_NUMBER", "").strip()
+        if _PUBLIC_URL and owner:
+            who = run.get("technician") or run.get("assignee") or "—"
+            name = tmpl.name if tmpl else run["template_id"]
+            state.db.enqueue_notification(
+                run["building_id"],
+                f"📝 *{name}* ({run['shift_date']}) submitted by {who} — review & sign off:\n"
+                f"{_PUBLIC_URL}/operations/round/{rid}",
+                to_number=owner, kind="signoff_request")
         return _run_view(rid)
 
     @app.post("/api/v1/forms/run/{rid}/signoff")

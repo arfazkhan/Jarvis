@@ -1,161 +1,105 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Check, TriangleAlert, Camera, ChevronLeft, ChevronRight, X, CheckCircle2, Loader2, CloudOff, CalendarX } from 'lucide-react'
+import {
+  Check, TriangleAlert, Camera, ChevronLeft, ChevronRight, X, CheckCircle2, Loader2,
+  CloudOff, CalendarX, Circle, Droplets, Flame, Box, Zap, Wind,
+} from 'lucide-react'
 import { api } from '../api/client'
 import { useBuilding } from '../lib/BuildingContext'
 import { enqueue, flush, subscribe, isNetworkError } from '../lib/fieldQueue'
 
-// Field round-runner: the technician's ENTIRE world. Phone-first, one check at a time,
-// big touch targets, auto-advance, minimal chrome. Opened straight from the WhatsApp link
-// (/field/run/:rid). Must feel faster than paper.
+// Field round-runner, area-first: open a round → grid of AREAS (sections) → tap one →
+// fill ALL its checks at once → Save → the area shows done (green) / issue (amber) →
+// move to the next. Phone-first, offline-tolerant. Opened from the WhatsApp link.
 
-function flatten(t) {
-  const out = []
-  ;(t?.sections || []).forEach((s) => (s.items || []).forEach((it) => out.push({ ...it, section: s.name })))
-  return out
+const SECTION_ICONS = [Droplets, Flame, Box, Zap, Wind]
+function secIcon(i) { return SECTION_ICONS[i % SECTION_ICONS.length] }
+
+function sectionStatus(sec, entries) {
+  const items = sec.items || []
+  const ans = items.filter((it) => { const e = entries[it.item_id]; return e && (e.value || e.status) })
+  const issue = items.some((it) => entries[it.item_id]?.is_issue || entries[it.item_id]?.status === 'issue')
+  const done = items.length > 0 && ans.length === items.length
+  return { done: ans.length, total: items.length, tone: issue ? 'issue' : done ? 'done' : 'todo' }
 }
 
 export default function FieldRound() {
   const { rid } = useParams()
   const navigate = useNavigate()
   const { building } = useBuilding()
-
   const [run, setRun] = useState(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState(null)
-  const [idx, setIdx] = useState(0)
-  const [saving, setSaving] = useState(false)
+  const [view, setView] = useState('grid')   // 'grid' | section index (number)
   const [done, setDone] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [queued, setQueued] = useState(0)
-  const fileRef = useRef(null)
 
-  // surface how many taps are waiting on a reconnect
   useEffect(() => subscribe(setQueued), [])
 
-  const items = useMemo(() => flatten(run?.template), [run])
-  const entries = run?.entries || {}
-  const item = items[idx]
-  const total = items.length
-  const doneCount = items.filter((it) => entries[it.item_id]?.value || entries[it.item_id]?.status).length
-
-  function load(startAtFirstUnfilled) {
+  function load() {
     setLoading(true)
     api.getRun(rid)
-      .then((r) => {
-        setRun(r)
-        if (startAtFirstUnfilled) {
-          const its = flatten(r.template)
-          const e = r.entries || {}
-          const first = its.findIndex((it) => !(e[it.item_id]?.value || e[it.item_id]?.status))
-          setIdx(first === -1 ? 0 : first)
-        }
-        setErr(null)
-        setLoading(false)
-      })
+      .then((r) => { setRun(r); setErr(null); setLoading(false) })
       .catch((e) => { setErr(e); setLoading(false) })
   }
+  useEffect(() => { load() }, [rid])
 
-  useEffect(() => { load(true) }, [rid])
+  const sections = run?.template?.sections || []
+  const entries = run?.entries || {}
+  const total = sections.reduce((n, s) => n + (s.items?.length || 0), 0)
+  const doneCount = sections.reduce((n, s) => n + sectionStatus(s, entries).done, 0)
 
-  async function record({ status = '', value = '', note = '' }) {
-    setSaving(true)
-    const body = { item_id: item.item_id, value: String(value), status, note }
-    // Optimistic local update first — progress + resume stay correct whether or
-    // not the network is up. The tech never waits on a round-trip.
-    setRun((r) => ({ ...r, entries: { ...(r.entries || {}), [item.item_id]: { value: String(value), status, note } } }))
-    try {
-      await api.entry(rid, body)
-      setErr(null)
-    } catch (e) {
-      if (isNetworkError(e)) {
-        enqueue(rid, body)   // offline — stash and replay on reconnect
-        setErr(null)
-      } else {
-        setErr(e)            // a real rejection (auth/validation) — show it
-      }
-    }
-    setSaving(false)
-  }
-
-  function next() {
-    if (idx + 1 < total) setIdx(idx + 1)
-  }
-  function prev() {
-    if (idx > 0) setIdx(idx - 1)
-  }
-
-  async function pickTick(isIssue) {
-    await record({ status: isIssue ? 'issue' : 'ok', value: isIssue ? 'ISSUE' : 'OK' })
-    if (!isIssue) setTimeout(next, 200)   // auto-advance on OK; pause on Issue
-  }
-  async function pickState(opt) {
-    const isIssue = (item.alert_states || []).includes(opt)
-    await record({ status: isIssue ? 'issue' : 'ok', value: opt })
-    if (!isIssue) setTimeout(next, 200)
-  }
-
-  async function uploadPhoto(file) {
-    if (!file) return
-    setSaving(true)
-    try {
-      await api.entryPhoto(rid, { item_id: item.item_id, filename: file.name || 'photo.jpg', building }, file, file.type || 'image/jpeg')
-    } catch (e) { setErr(e) }
-    setSaving(false)
+  // optimistic + offline-tolerant single-entry save
+  async function saveEntry(item_id, body) {
+    setRun((r) => ({ ...r, entries: { ...(r.entries || {}), [item_id]: { ...body, is_issue: body.status === 'issue' } } }))
+    try { await api.entry(rid, { item_id, ...body }); setErr(null) }
+    catch (e) { if (isNetworkError(e)) { enqueue(rid, { item_id, ...body }); setErr(null) } else { setErr(e) } }
   }
 
   async function submitRound() {
     setSaving(true)
     try {
-      const drained = await flush()      // land any offline entries before closing the round
-      if (!drained) {
-        setErr(new Error('Some entries are still waiting to sync — reconnect, then submit.'))
-        setSaving(false)
-        return
-      }
-      await api.submit(rid)
-      setDone(true)
+      const drained = await flush()
+      if (!drained) { setErr(new Error('Some entries are still syncing — reconnect, then submit.')); setSaving(false); return }
+      await api.submit(rid); setDone(true)
     } catch (e) { setErr(e) }
     setSaving(false)
   }
 
-  if (loading) return <FieldShell><div className="flex-1 flex items-center justify-center text-text-faint"><Loader2 className="animate-spin" /></div></FieldShell>
-  if (err) return <FieldShell><div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center"><div className="text-red text-sm">{err.message}</div><button onClick={() => load(true)} className="text-sm text-gold">Retry</button></div></FieldShell>
+  if (loading) return <FieldShell><Center><Loader2 className="animate-spin text-text-faint" /></Center></FieldShell>
+  if (err && !run) return <FieldShell><Center><div className="text-center px-6"><div className="text-red text-sm mb-2">{err.message}</div><button onClick={load} className="text-sm text-gold">Retry</button></div></Center></FieldShell>
   if (done) return (
-    <FieldShell>
-      <div className="flex-1 flex flex-col items-center justify-center gap-4 px-6 text-center">
-        <CheckCircle2 size={56} className="text-green" />
-        <div className="font-serif text-2xl text-text">Round submitted</div>
-        <div className="text-sm text-text-faint">{run.run.template_id} · {run.run.shift_date}</div>
-      </div>
-    </FieldShell>
+    <FieldShell><Center><div className="text-center px-6 flex flex-col items-center gap-4">
+      <CheckCircle2 size={56} className="text-green" />
+      <div className="font-serif text-2xl text-text">Round submitted</div>
+      <button onClick={() => navigate('/field')} className="text-sm text-gold">Back to my rounds</button>
+    </div></Center></FieldShell>
+  )
+  if (run?.run?.status === 'lapsed') return (
+    <FieldShell><Center><div className="text-center px-6 flex flex-col items-center gap-4">
+      <CalendarX size={56} className="text-amber" />
+      <div className="font-serif text-2xl text-text">Round missed</div>
+      <div className="text-sm text-text-faint">This round lapsed and can no longer be filled.</div>
+      <button onClick={() => navigate('/field')} className="text-sm text-gold">Back to my rounds</button>
+    </div></Center></FieldShell>
   )
 
-  // A lapsed round (missed its window) is terminal — read-only. A SUBMITTED round can
-  // still be reopened to correct an entry (edits allowed until it lapses), so it's editable.
-  const runStatus = run.run?.status
-  if (runStatus === 'lapsed') {
+  // ── AREA detail ──
+  if (typeof view === 'number') {
+    const sec = sections[view]
     return (
       <FieldShell>
-        <div className="px-4 pt-4 pb-3 border-b border-border flex items-center justify-between">
-          <div className="text-sm font-medium text-text truncate">{run.template?.name}</div>
-          <button onClick={() => navigate('/field')} className="text-text-faint p-1"><X size={20} /></button>
-        </div>
-        <div className="flex-1 flex flex-col items-center justify-center gap-4 px-6 text-center">
-          <CalendarX size={56} className="text-amber" />
-          <div className="font-serif text-2xl text-text">Round missed</div>
-          <div className="text-sm text-text-faint">This round lapsed before it was submitted and can no longer be filled.</div>
-          <button onClick={() => navigate('/field')} className="mt-2 text-sm text-gold">Back to my rounds</button>
-        </div>
+        <TopBar title={sec.name} onBack={() => setView('grid')} queued={queued} />
+        <AreaForm key={sec.name} section={sec} entries={entries} building={building} rid={rid}
+          onSave={saveEntry} onDone={() => setView('grid')} setRun={setRun} />
       </FieldShell>
     )
   }
 
-  const e = entries[item.item_id] || {}
-  const hasPhoto = !!e.photo
-
+  // ── AREA grid ──
   return (
     <FieldShell>
-      {/* top bar */}
       <div className="px-4 pt-4 pb-3 border-b border-border">
         <div className="flex items-center justify-between mb-2">
           <div className="text-sm font-medium text-text truncate">{run.template?.name}</div>
@@ -164,111 +108,170 @@ export default function FieldRound() {
         <div className="h-2 w-full rounded-full bg-surface-2 overflow-hidden">
           <div className="h-full rounded-full bg-gold" style={{ width: `${total ? (doneCount / total) * 100 : 0}%` }} />
         </div>
-        <div className="mt-1.5 flex justify-between text-xs text-text-faint">
-          <span>{item.section}</span>
-          <span>{doneCount} / {total} done</span>
-        </div>
-        {queued > 0 && (
-          <div className="mt-2 flex items-center gap-1.5 text-xs text-amber">
-            <CloudOff size={13} /> {queued} saved on this phone — will sync when back online
-          </div>
-        )}
+        <div className="mt-1.5 text-xs text-text-faint">{doneCount} / {total} checks done · pick an area</div>
+        {queued > 0 && <div className="mt-2 flex items-center gap-1.5 text-xs text-amber"><CloudOff size={13} /> {queued} saved offline — will sync</div>}
       </div>
 
-      {/* the one check */}
-      <div className="flex-1 overflow-y-auto px-5 py-6">
-        <div className="text-xs text-text-faint mb-1">Check {idx + 1} of {total}</div>
-        <div className="font-serif text-2xl text-text mb-6">{item.label}</div>
-
-        {item.kind === 'reading' && (
-          <ReadingInput key={item.item_id} unit={item.unit} value={e.value || ''} onSave={(v) => record({ status: 'ok', value: v })} saving={saving} />
-        )}
-
-        {item.kind === 'state' && (
-          <div className="flex flex-col gap-3">
-            {(item.options || []).map((opt) => {
-              const isIssue = (item.alert_states || []).includes(opt)
-              const sel = e.value === opt
-              return (
-                <button key={opt} onClick={() => pickState(opt)}
-                  className={`w-full py-4 rounded-xl border text-lg font-medium ${sel ? (isIssue ? 'bg-red-bg border-red text-red' : 'bg-green-bg border-green text-green') : 'bg-surface border-border text-text'}`}>
-                  {opt}
-                </button>
-              )
-            })}
-          </div>
-        )}
-
-        {item.kind === 'tick' && (
-          <div className="grid grid-cols-2 gap-3">
-            <button onClick={() => pickTick(false)}
-              className={`py-6 rounded-xl border flex flex-col items-center gap-2 ${e.status === 'ok' ? 'bg-green-bg border-green text-green' : 'bg-surface border-border text-text'}`}>
-              <Check size={28} /> <span className="text-base font-medium">OK</span>
+      <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3">
+        {sections.map((s, i) => {
+          const st = sectionStatus(s, entries)
+          const Icon = secIcon(i)
+          return (
+            <button key={i} onClick={() => setView(i)}
+              className="w-full bg-surface border border-border rounded-2xl p-4 flex items-center gap-3 text-left">
+              <div className="w-11 h-11 rounded-full bg-surface-2 flex items-center justify-center text-gold"><Icon size={20} /></div>
+              <div className="flex-1 min-w-0">
+                <div className="text-base font-medium text-text truncate">{s.name}</div>
+                <div className="text-xs text-text-faint">{st.done} / {st.total} done</div>
+              </div>
+              <StatusBadge tone={st.tone} />
+              <ChevronRight size={18} className="text-text-faint" />
             </button>
-            <button onClick={() => pickTick(true)}
-              className={`py-6 rounded-xl border flex flex-col items-center gap-2 ${e.status === 'issue' ? 'bg-red-bg border-red text-red' : 'bg-surface border-border text-text'}`}>
-              <TriangleAlert size={28} /> <span className="text-base font-medium">Issue</span>
-            </button>
-          </div>
-        )}
-
-        {item.kind === 'note' && (
-          <textarea defaultValue={e.value || ''} onBlur={(ev) => record({ status: 'ok', value: ev.target.value })}
-            rows={4} placeholder="Type your note…"
-            className="w-full bg-surface border border-border rounded-xl p-3 text-base text-text outline-none focus:border-gold/50" />
-        )}
-
-        {/* photo evidence — camera on mobile */}
-        <div className="mt-5">
-          <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden"
-            onChange={(ev) => uploadPhoto(ev.target.files?.[0])} />
-          <button onClick={() => fileRef.current?.click()}
-            className="w-full flex items-center justify-center gap-2 py-3 rounded-xl border border-border text-text-dim text-sm">
-            <Camera size={18} /> {hasPhoto ? 'Photo added — retake' : 'Add photo'}
-          </button>
-        </div>
+          )
+        })}
       </div>
 
-      {/* bottom nav */}
-      <div className="px-4 py-3 border-t border-border flex items-center gap-3">
-        <button onClick={prev} disabled={idx === 0}
-          className="flex items-center gap-1 px-4 py-3 rounded-xl border border-border text-text disabled:opacity-40">
-          <ChevronLeft size={18} /> Back
+      <div className="px-4 py-3 border-t border-border">
+        <button onClick={submitRound} disabled={saving}
+          className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-primary text-white font-medium disabled:opacity-50">
+          {saving ? <Loader2 size={18} className="animate-spin" /> : <Check size={18} />} Submit round
         </button>
-        {idx + 1 < total ? (
-          <button onClick={next} className="flex-1 flex items-center justify-center gap-1 px-4 py-3 rounded-xl bg-surface-2 text-text font-medium">
-            Next <ChevronRight size={18} />
-          </button>
-        ) : (
-          <button onClick={submitRound} disabled={saving}
-            className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-primary text-white font-medium disabled:opacity-50">
-            {saving ? <Loader2 size={18} className="animate-spin" /> : <Check size={18} />} Submit round
-          </button>
-        )}
+        {doneCount < total && <div className="text-center text-xs text-text-faint mt-2">{total - doneCount} check(s) still pending</div>}
+        {err && <div className="text-center text-xs text-red mt-2">{err.message}</div>}
       </div>
     </FieldShell>
   )
 }
 
-function ReadingInput({ unit, value, onSave, saving }) {
-  const [v, setV] = useState(value)
-  useEffect(() => setV(value), [value])
+function StatusBadge({ tone }) {
+  if (tone === 'done') return <span className="flex items-center gap-1 text-xs text-green"><CheckCircle2 size={16} /></span>
+  if (tone === 'issue') return <span className="flex items-center gap-1 text-xs text-amber"><TriangleAlert size={16} /></span>
+  return <Circle size={16} className="text-text-faint" />
+}
+
+// ── Area form: ALL checks in the area at once ──
+function AreaForm({ section, entries, building, rid, onSave, onDone, setRun }) {
+  const items = section.items || []
+  const [draft, setDraft] = useState(() => {
+    const d = {}
+    for (const it of items) { const e = entries[it.item_id] || {}; d[it.item_id] = { value: e.value || '', status: e.status || '', note: e.note || '' } }
+    return d
+  })
+  const [savingAll, setSavingAll] = useState(false)
+  const set = (id, patch) => setDraft((p) => ({ ...p, [id]: { ...p[id], ...patch } }))
+
+  async function saveAll() {
+    setSavingAll(true)
+    for (const it of items) {
+      const d = draft[it.item_id]
+      if (d && (d.value || d.status)) await onSave(it.item_id, d)
+    }
+    setSavingAll(false)
+    onDone()
+  }
+
   return (
-    <div>
-      <div className="flex items-center gap-3">
-        <input
-          type="number" inputMode="decimal" value={v} onChange={(e) => setV(e.target.value)}
-          placeholder="0"
-          className="flex-1 bg-surface border border-border rounded-xl px-4 py-5 text-4xl font-serif text-text outline-none focus:border-gold/50"
-        />
-        {unit && <div className="text-xl text-text-faint w-16 text-center">{unit}</div>}
+    <>
+      <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-4">
+        {items.map((it) => (
+          <ItemCard key={it.item_id} item={it} draft={draft[it.item_id]} set={(patch) => set(it.item_id, patch)}
+            rid={rid} building={building} setRun={setRun} hasPhoto={!!entries[it.item_id]?.photo} />
+        ))}
       </div>
-      <button onClick={() => onSave(v)} disabled={saving || v === ''}
-        className="mt-4 w-full py-3 rounded-xl bg-surface-2 text-text font-medium disabled:opacity-50">
-        Save reading
-      </button>
+      <div className="px-4 py-3 border-t border-border">
+        <button onClick={saveAll} disabled={savingAll}
+          className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-primary text-white font-medium disabled:opacity-50">
+          {savingAll ? <Loader2 size={18} className="animate-spin" /> : <Check size={18} />} Save area
+        </button>
+      </div>
+    </>
+  )
+}
+
+function ItemCard({ item, draft, set, rid, building, setRun, hasPhoto }) {
+  const fileRef = useRef(null)
+  const [photo, setPhoto] = useState(hasPhoto)
+  async function uploadPhoto(file) {
+    if (!file) return
+    try {
+      await api.entryPhoto(rid, { item_id: item.item_id, filename: file.name || 'photo.jpg', building }, file, file.type || 'image/jpeg')
+      setPhoto(true)
+    } catch (e) { /* best-effort */ }
+  }
+  return (
+    <div className="bg-surface border border-border rounded-2xl p-4">
+      <div className="text-sm font-medium text-text mb-3">{item.label}{item.unit ? ` (${item.unit})` : ''}</div>
+
+      {item.kind === 'tick' && (
+        <div className="grid grid-cols-2 gap-2">
+          <button onClick={() => set({ status: 'ok', value: 'OK' })}
+            className={`py-3 rounded-xl border flex items-center justify-center gap-1.5 ${draft.status === 'ok' ? 'bg-green-bg border-green text-green' : 'bg-bg border-border text-text'}`}>
+            <Check size={18} /> OK
+          </button>
+          <button onClick={() => set({ status: 'issue', value: 'ISSUE' })}
+            className={`py-3 rounded-xl border flex items-center justify-center gap-1.5 ${draft.status === 'issue' ? 'bg-red-bg border-red text-red' : 'bg-bg border-border text-text'}`}>
+            <TriangleAlert size={18} /> Issue
+          </button>
+        </div>
+      )}
+
+      {item.kind === 'reading' && (
+        <div className="flex items-center gap-2">
+          <input type="number" inputMode="decimal" value={draft.value} onChange={(e) => set({ value: e.target.value, status: 'ok' })}
+            placeholder="0" className="flex-1 bg-bg border border-border rounded-xl px-4 py-3 text-2xl font-serif text-text outline-none focus:border-gold/50" />
+          {item.unit && <div className="text-base text-text-faint w-14 text-center">{item.unit}</div>}
+        </div>
+      )}
+
+      {item.kind === 'state' && (
+        <div className="flex flex-col gap-2">
+          {(item.options || []).map((opt) => {
+            const isIssue = (item.alert_states || []).includes(opt)
+            const sel = draft.value === opt
+            return (
+              <button key={opt} onClick={() => set({ value: opt, status: isIssue ? 'issue' : 'ok' })}
+                className={`py-3 rounded-xl border text-base ${sel ? (isIssue ? 'bg-red-bg border-red text-red' : 'bg-green-bg border-green text-green') : 'bg-bg border-border text-text'}`}>
+                {opt}
+              </button>
+            )
+          })}
+        </div>
+      )}
+
+      {item.kind === 'note' && (
+        <textarea value={draft.value} onChange={(e) => set({ value: e.target.value, status: 'ok' })} rows={3}
+          placeholder="Type…" className="w-full bg-bg border border-border rounded-xl p-3 text-base text-text outline-none focus:border-gold/50" />
+      )}
+
+      <div className="mt-3 flex items-center gap-3">
+        <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden"
+          onChange={(e) => uploadPhoto(e.target.files?.[0])} />
+        <button onClick={() => fileRef.current?.click()} className="flex items-center gap-1.5 text-xs text-text-dim">
+          <Camera size={15} /> {photo ? 'Photo added — retake' : 'Add photo'}
+        </button>
+        {item.kind !== 'note' && (
+          <input value={draft.note} onChange={(e) => set({ note: e.target.value })} placeholder="note (optional)"
+            className="flex-1 bg-bg border border-border rounded-lg px-2 py-1.5 text-xs text-text outline-none focus:border-gold/40" />
+        )}
+      </div>
     </div>
   )
+}
+
+function TopBar({ title, onBack, queued }) {
+  return (
+    <div className="px-4 pt-4 pb-3 border-b border-border">
+      <div className="flex items-center gap-2">
+        <button onClick={onBack} className="text-text-faint p-1"><ChevronLeft size={20} /></button>
+        <div className="text-base font-medium text-text truncate flex-1">{title}</div>
+      </div>
+      {queued > 0 && <div className="mt-2 flex items-center gap-1.5 text-xs text-amber"><CloudOff size={13} /> {queued} saved offline — will sync</div>}
+    </div>
+  )
+}
+
+function Center({ children }) {
+  return <div className="flex-1 flex items-center justify-center">{children}</div>
 }
 
 function FieldShell({ children }) {

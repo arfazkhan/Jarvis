@@ -135,14 +135,10 @@ def ensure_daily_runs(db, building: str, today: str, now=None, min_hour: int = 6
     for tmpl in templates_for(building):
         if tmpl.cadence != "daily" or tmpl.template_id in have:
             continue
-        assignee = db.last_assignee_for(building, tmpl.template_id)
-        if assignee:                                   # only carry forward a still-active tech
-            t = db.get_technician(building, assignee)
-            if not t or not t.get("active"):
-                assignee = ""
-        rid = db.create_checklist_run(building, tmpl.template_id, today,
-                                      technician=assignee, assignee=assignee)
-        created.append({"run_id": rid, "template_id": tmpl.template_id, "assignee": assignee})
+        # Open UNASSIGNED — the manager assigns each day (no auto carry-forward of the
+        # previous person). The round still appears so the day's checklist is visible.
+        rid = db.create_checklist_run(building, tmpl.template_id, today)
+        created.append({"run_id": rid, "template_id": tmpl.template_id, "assignee": ""})
     return created
 
 
