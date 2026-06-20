@@ -22,16 +22,21 @@ import {
   FileText,
   ChevronRight,
 } from 'lucide-react'
+import { useState } from 'react'
 import { Card, Pill } from '../components/ui'
 import { useAsync } from '../lib/useAsync'
 import { api } from '../api/client'
 import { useBuilding } from '../lib/BuildingContext'
+import { useAuth } from '../lib/AuthContext'
 
 export default function RoundDetail() {
   const { rid } = useParams()
   const navigate = useNavigate()
   const { current, building } = useBuilding()
-  const runView = useAsync(() => api.getRun(rid), [rid])
+  const { username } = useAuth()
+  const [refreshKey, setRefreshKey] = useState(0)
+  const [signing, setSigning] = useState('')
+  const runView = useAsync(() => api.getRun(rid), [rid, refreshKey])
   const review = useAsync(() => api.review(rid), [rid])
   const watchlist = useAsync(() => api.watchlist(building), [building])
   const ppm = useAsync(() => api.ppmSchedule(building), [building])
@@ -199,6 +204,21 @@ export default function RoundDetail() {
                   </span>
                 ))}
               </div>
+              {run.status === 'submitted' && (
+                <div className="flex flex-col gap-1.5 mt-3">
+                  {(template?.signoff_roles || []).filter((role) => !signoffs.find((s) => s.role === role)).map((role) => (
+                    <button key={role} disabled={signing === role}
+                      onClick={async () => {
+                        setSigning(role)
+                        try { await api.signoff(rid, { role, by: username || 'manager' }); setRefreshKey((k) => k + 1) }
+                        catch (e) { alert(e.message) } finally { setSigning('') }
+                      }}
+                      className="text-xs border border-green/40 text-green rounded-lg py-2 disabled:opacity-50 capitalize">
+                      Sign off as {role}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </Card>
         </div>
