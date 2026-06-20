@@ -103,6 +103,7 @@ export const api = {
   saveTemplate: (body) => api.post('/forms/templates', body),
   deleteTemplate: (id, building) => api.del(`/forms/template/${id}`, { building }),
   startRun: (body) => api.post('/forms/run', body),
+  openToday: (building) => api.post('/forms/open-today', undefined, { building }),
   getRun: (rid) => api.get(`/forms/run/${rid}`),
   entry: (rid, body) => api.post(`/forms/run/${rid}/entry`, body),
   assign: (rid, body) => api.post(`/forms/run/${rid}/assign`, body),

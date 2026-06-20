@@ -590,6 +590,16 @@ class ArvisxDb:
                 (building_id, template_id, shift_date, asset)).fetchone()
             return int(r["id"]) if r else None
 
+    def last_assignee_for(self, building_id: str, template_id: str) -> str:
+        """The technician most recently assigned this template — to carry forward when
+        auto-opening today's recurring round."""
+        with self._lock, self._conn() as c:
+            r = c.execute(
+                "SELECT assignee FROM checklist_runs WHERE building_id=? AND template_id=? "
+                "AND assignee IS NOT NULL AND assignee!='' ORDER BY id DESC LIMIT 1",
+                (building_id, template_id)).fetchone()
+            return r["assignee"] if r else ""
+
     def get_checklist_run(self, run_id: int) -> Optional[Dict[str, Any]]:
         with self._lock, self._conn() as c:
             r = c.execute("SELECT * FROM checklist_runs WHERE id=?", (run_id,)).fetchone()

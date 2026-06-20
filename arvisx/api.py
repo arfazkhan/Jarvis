@@ -206,6 +206,17 @@ def create_app():
             # sweeps (reminders/lapse/escalation), not to burn LLM tokens auto-investigating
             # every tick. Ask/RCA/handover still use the LLM on demand.
             async def _tick(n):
+                # Auto-open today's recurring rounds (carry-forward tech) each morning,
+                # then DM the assignee — so the daily checklists always appear without a
+                # manual assign. Gated to >= 6am local by ensure_daily_runs.
+                try:
+                    from arvisx import checklist_intel as ci
+                    for b in (state.db.checklist_buildings() or ["one-anthem"]):
+                        for c in ci.ensure_daily_runs(state.db, b, _today_str()):
+                            if c["assignee"]:
+                                _notify_assignment(c["run_id"])
+                except Exception as e:
+                    logger.warning(f"[heartbeat] auto-open daily runs failed: {e}")
                 state._last_tick = await community_tick(state, llm=None)
 
             state._hb = Heartbeat(_tick, interval_s=interval)
@@ -1114,6 +1125,17 @@ def create_app():
             state.db.assign_checklist_run(rid, assignee)
             _notify_assignment(rid)
         return _run_view(rid)
+
+    @app.post("/api/v1/forms/open-today")
+    async def forms_open_today(building: str = "one-anthem"):
+        """Open today's recurring (daily) rounds now — carry-forward the usual technician +
+        DM them. One click instead of assigning each shift by hand. Idempotent."""
+        from arvisx import checklist_intel as ci
+        created = ci.ensure_daily_runs(state.db, building, _today_str(), min_hour=0)
+        for c in created:
+            if c["assignee"]:
+                _notify_assignment(c["run_id"])
+        return {"building": building, "opened": created}
 
     @app.get("/api/v1/forms/run/{rid}")
     async def forms_get_run(rid: int):

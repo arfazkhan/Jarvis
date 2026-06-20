@@ -121,6 +121,27 @@ def parse_shift_window(timing: str, shift_date: str):
         return None
 
 
+def ensure_daily_runs(db, building: str, today: str, now=None, min_hour: int = 6) -> List[Dict[str, Any]]:
+    """Auto-open today's recurring (cadence='daily') rounds so the day's checklists always
+    appear — carrying forward each template's usual technician. Idempotent (skips templates
+    that already have a run today). Gated to >= min_hour local time so it opens in the
+    morning, not at midnight (min_hour=0 = open immediately, for the manual button)."""
+    from datetime import datetime as _dt
+    now = now or _dt.now()
+    if now.hour < min_hour:
+        return []
+    have = {r["template_id"] for r in db.checklist_runs_for(building, today)}
+    created: List[Dict[str, Any]] = []
+    for tmpl in templates_for(building):
+        if tmpl.cadence != "daily" or tmpl.template_id in have:
+            continue
+        assignee = db.last_assignee_for(building, tmpl.template_id)
+        rid = db.create_checklist_run(building, tmpl.template_id, today,
+                                      technician=assignee, assignee=assignee)
+        created.append({"run_id": rid, "template_id": tmpl.template_id, "assignee": assignee})
+    return created
+
+
 def lapse_stale_rounds(db, building: str, now=None) -> List[Dict[str, Any]]:
     """Give incomplete rounds a TERMINAL. A run lapses once its shift window has ENDED
     (shift-end-aware; overnight shifts end next morning). Templates without a clock window

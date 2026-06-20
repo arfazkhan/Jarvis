@@ -76,7 +76,16 @@ export default function Operations() {
 
       <div className="grid grid-cols-[1fr_340px]">
         <div className="px-10 pt-6">
-          <div className="text-2xl font-serif text-text mb-5">{rows.length} Active Operations</div>
+          <div className="flex items-center justify-between mb-5">
+            <div className="text-2xl font-serif text-text">{rows.length} Active Operations</div>
+            <button
+              onClick={async () => { try { await api.openToday(building); refresh() } catch (e) { alert(e.message) } }}
+              className="flex items-center gap-2 text-sm border border-border rounded-lg px-3 py-2 text-text-dim hover:border-gold/40"
+              title="Open today's recurring shifts (carries forward the usual technician)"
+            >
+              <CalendarDays className="w-4 h-4" /> Open today's rounds
+            </button>
+          </div>
 
           <table className="w-full text-left">
             <thead>
