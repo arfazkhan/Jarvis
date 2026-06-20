@@ -525,9 +525,9 @@ function ContextRow({ icon: Icon, label, value }) {
   )
 }
 
-function ActionButton({ icon: Icon, title, sub }) {
+function ActionButton({ icon: Icon, title, sub, onClick }) {
   return (
-    <button className="flex items-center gap-3 bg-surface border border-border rounded-xl px-4 py-3 hover:border-gold/40 transition-colors text-left">
+    <button onClick={onClick} className="flex items-center gap-3 bg-surface border border-border rounded-xl px-4 py-3 hover:border-gold/40 transition-colors text-left">
       <Icon className="w-5 h-5 text-gold" />
       <div>
         <div className="text-sm text-text">{title}</div>
