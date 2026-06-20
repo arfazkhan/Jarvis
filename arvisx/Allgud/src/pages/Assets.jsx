@@ -38,7 +38,13 @@ export default function Assets() {
     <div>
       <PageHeader subtitle="Asset health, history & preventive maintenance" />
 
-      <div className="px-10 pt-6 text-2xl font-serif text-text mb-5">{assets.length} Assets</div>
+      <div className="px-10 pt-6">
+        <div className="text-2xl font-serif text-text">{assets.length} Assets</div>
+        <div className="text-sm text-text-faint mb-5">
+          Assets are defined by tagging checklist items with an asset (Setup → Checklists)
+          and by PPM schedules (Setup → PPM). This page shows their health, history & maintenance.
+        </div>
+      </div>
 
       <div className="px-10 pb-10">
         {health.loading ? (

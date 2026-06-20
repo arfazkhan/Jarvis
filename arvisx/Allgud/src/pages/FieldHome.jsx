@@ -3,15 +3,21 @@ import { ClipboardList, ChevronRight, CheckCircle2, Loader2, Monitor, CalendarX 
 import { useAsync } from '../lib/useAsync'
 import { api } from '../api/client'
 import { useBuilding } from '../lib/BuildingContext'
+import { useAuth } from '../lib/AuthContext'
 
 // Technician home: the rounds to do today. Tap one to enter the runner. (The WhatsApp link
 // usually jumps straight to /field/run/:rid, skipping this.)
 export default function FieldHome() {
   const navigate = useNavigate()
   const { building, current } = useBuilding()
+  const { username, role } = useAuth()
   const today = useAsync(() => api.today(building), [building])
 
-  const runs = today.data?.runs || []
+  // A technician sees only THEIR assigned rounds; a manager/owner previewing sees all.
+  const all = today.data?.runs || []
+  const runs = role === 'technician'
+    ? all.filter((r) => r.assignee === username || r.technician === username)
+    : all
   const open = runs.filter((r) => r.status === 'open')
   const doneRuns = runs.filter((r) => r.status === 'submitted')
   const lapsed = runs.filter((r) => r.status === 'lapsed')   // missed — can't be filled anymore
