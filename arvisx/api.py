@@ -779,7 +779,24 @@ def create_app():
                 openwos = [w for w in state.wo_store.all() if w.status.value in ("open", "acknowledged", "in_progress")]
                 ids = ", ".join(w.wo_id for w in openwos[:6])
                 res["text"] = f"✅ {len(openwos)} open work order(s): {ids or '(none)'}"
-        return {"intent": res["intent"], "text": res["text"]}
+        else:
+            # General question → grounded LLM Q&A over the CHECKLIST data (rounds, issues,
+            # PPM, assets), crisp + tool-grounded. Falls back to deterministic if no LLM.
+            building = str(p.get("building", "one-anthem")).strip() or "one-anthem"
+            try:
+                from arvisx.checklist_skills import run_building_qa
+                from arvisx.llm_client import make_llm
+                try:
+                    llm = make_llm()
+                except Exception:
+                    llm = None
+                qa = await run_building_qa(llm, state.db, building, q, _today_str())
+                if qa.get("text"):
+                    res["text"] = qa["text"]
+                    res["source"] = qa.get("source", "")
+            except Exception:
+                pass
+        return {"intent": res.get("intent", "qa"), "text": res["text"], "source": res.get("source", "")}
 
     @app.get("/api/v1/whatsapp/alerts")
     async def wa_alerts():
