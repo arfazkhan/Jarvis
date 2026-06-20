@@ -1296,6 +1296,9 @@ def create_app():
             raise HTTPException(404, f"unknown run {rid}")
         assignee = str((payload or {}).get("assignee", "")).strip()
         state.db.assign_checklist_run(rid, assignee)
+        state.db.set_run_reminded(rid, 0)        # new owner → fresh reminder ladder
+        if assignee:
+            _notify_assignment(rid)              # DM the (new) assignee their round link
         return _run_view(rid)
 
     @app.get("/api/v1/forms/assigned")
