@@ -216,11 +216,9 @@ function ItemCard({ item, draft, set, rid, building, setRun, hasPhoto }) {
       )}
 
       {item.kind === 'reading' && (
-        <div className="flex items-center gap-2">
-          <input type="number" inputMode="decimal" value={draft.value} onChange={(e) => set({ value: e.target.value, status: 'ok' })}
-            placeholder="0" className="flex-1 bg-bg border border-border rounded-xl px-4 py-3 text-2xl font-serif text-text outline-none focus:border-gold/50" />
-          {item.unit && <div className="text-base text-text-faint w-14 text-center">{item.unit}</div>}
-        </div>
+        <input type="number" inputMode="decimal" value={draft.value} onChange={(e) => set({ value: e.target.value, status: 'ok' })}
+          placeholder="0"
+          className="w-full bg-bg border border-border rounded-xl px-4 py-3 text-2xl font-serif text-text outline-none focus:border-gold/50 [appearance:none] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none" />
       )}
 
       {item.kind === 'state' && (
