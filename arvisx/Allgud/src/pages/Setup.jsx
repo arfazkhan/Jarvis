@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Users, Wrench, CalendarCheck, ShieldCheck, Plus, Power, KeyRound, Check, ChevronRight, ClipboardList, Trash2, Copy } from 'lucide-react'
+import { Users, Wrench, CalendarCheck, ShieldCheck, Plus, Power, KeyRound, Check, ChevronRight, ClipboardList, Trash2, Copy, Box } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
 import { Pill, Spinner, Empty } from '../components/ui'
 import { Input, Select } from './Issues'
@@ -13,6 +13,7 @@ import ChecklistBuilder from './ChecklistBuilder'
 // already exist; this just chains them into one flow.
 const STEPS = [
   { key: 'checklists', label: 'Checklists', icon: ClipboardList },
+  { key: 'assets', label: 'Assets', icon: Box },
   { key: 'roster', label: 'Roster & PINs', icon: Users },
   { key: 'vendors', label: 'Vendors', icon: Wrench },
   { key: 'ppm', label: 'PPM schedules', icon: CalendarCheck },
@@ -49,6 +50,7 @@ export default function Setup() {
 
       <div className="px-10 pt-6 pb-12">
         {step === 'checklists' && <ChecklistStep building={building} />}
+        {step === 'assets' && <AssetStep building={building} />}
         {step === 'roster' && <RosterStep building={building} />}
         {step === 'vendors' && <VendorStep building={building} />}
         {step === 'ppm' && <PpmStep building={building} />}
@@ -133,6 +135,51 @@ function ChecklistStep({ building }) {
             </Row>
           ))}
           {!tpls.data?.templates?.length && <Empty>No checklists yet — create one.</Empty>}
+        </div>
+      )}
+    </Section>
+  )
+}
+
+// ── Assets ───────────────────────────────────────────────────────────────────
+function AssetStep({ building }) {
+  const [key, setKey] = useState(0)
+  const reg = useAsync(() => api.assetsRegistry(building), [building, key])
+  const [f, setF] = useState({ name: '', kind: 'DG', location: '' })
+  const [busy, setBusy] = useState(false)
+  const refresh = () => setKey((k) => k + 1)
+
+  async function add() {
+    if (!f.name.trim()) return
+    setBusy(true)
+    try { await api.addAsset({ building, ...f }); setF({ name: '', kind: 'DG', location: '' }); refresh() }
+    catch (e) { err(e) } finally { setBusy(false) }
+  }
+
+  return (
+    <Section title="Assets" hint="The building's equipment. Used as the asset picker for PPM and the checklist builder. Assets tagged in checklists also appear here.">
+      <AddBar onAdd={add} busy={busy} label="Add asset">
+        <Field label="Name"><Input value={f.name} onChange={(v) => setF({ ...f, name: v })} /></Field>
+        <Field label="Type">
+          <Select value={f.kind} options={['DG', 'Pump', 'Tank', 'Electrical', 'Fire', 'Lift', 'STP', 'WTP', 'HVAC', 'Other']} onChange={(v) => setF({ ...f, kind: v })} />
+        </Field>
+        <Field label="Location"><Input value={f.location} onChange={(v) => setF({ ...f, location: v })} /></Field>
+      </AddBar>
+      {reg.loading ? <Spinner /> : (
+        <div className="flex flex-col gap-2">
+          {(reg.data?.assets || []).map((a) => (
+            <Row key={a.id ?? a.name}>
+              <Box className="w-4 h-4 text-text-dim" />
+              <div className="flex-1">
+                <div className="text-sm text-text">{a.name}</div>
+                <div className="text-xs text-text-faint">{[a.kind, a.location].filter(Boolean).join(' · ') || '—'}</div>
+              </div>
+              {a.in_checklists && <Pill tone="blue">in checklists</Pill>}
+              {a.id ? <Pill tone="green">registered</Pill> : <Pill tone="neutral">from checklist</Pill>}
+              {a.id && <Deact onClick={async () => { await api.deactivateAsset(a.id); refresh() }} />}
+            </Row>
+          ))}
+          {!reg.data?.assets?.length && <Empty>No assets yet — add the building's equipment.</Empty>}
         </div>
       )}
     </Section>

@@ -118,6 +118,9 @@ export const api = {
   ppmSchedule: (building) => api.get('/ppm/schedule', { building }),
   assets: (building) => api.get('/assets', { building }),
   assetHistory: (asset, building) => api.get(`/assets/${asset}/history`, { building }),
+  assetsRegistry: (building) => api.get('/assets/registry', { building }),
+  addAsset: (body) => api.post('/assets', body),
+  deactivateAsset: (id) => api.post(`/assets/${id}/deactivate`),
 
   ask: (q, building) => api.get('/agents/ask', { q, building }),
   handover: (building) => api.get('/agents/handover', { building }),

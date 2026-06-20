@@ -157,7 +157,38 @@ class ArvisxDb:
                               ("escalated_level", "INTEGER DEFAULT 0")):
                 if col not in icols:
                     c.execute(f"ALTER TABLE checklist_issues ADD COLUMN {col} {decl}")
+            # Asset registry (explicit, manageable) — distinct from assets derived from
+            # checklist item tags. Used as the asset picker for PPM + the builder.
+            c.execute("""CREATE TABLE IF NOT EXISTS building_assets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, name TEXT,
+                kind TEXT, location TEXT, active INTEGER DEFAULT 1, created_at TEXT)""")
+            c.execute("CREATE INDEX IF NOT EXISTS ix_bassets ON building_assets(building_id, active)")
         self._siglog_last: Dict[tuple, datetime] = {}   # (asset, signal) → last logged ts
+
+    # ── Asset registry ───────────────────────────────────────────────────
+    def add_asset(self, building_id: str, name: str, kind: str = "", location: str = "") -> int:
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT id FROM building_assets WHERE building_id=? AND name=?",
+                          (building_id, name)).fetchone()
+            if r:
+                c.execute("UPDATE building_assets SET active=1, kind=?, location=? WHERE id=?",
+                          (kind, location, r["id"]))
+                return int(r["id"])
+            cur = c.execute("INSERT INTO building_assets (building_id, name, kind, location, active, created_at)"
+                            " VALUES (?,?,?,?,1,?)",
+                            (building_id, name, kind, location, datetime.now().isoformat(timespec="seconds")))
+            return int(cur.lastrowid)
+
+    def list_assets_registry(self, building_id: str, active_only: bool = True) -> List[Dict[str, Any]]:
+        q = "SELECT * FROM building_assets WHERE building_id=?"
+        if active_only:
+            q += " AND active=1"
+        with self._lock, self._conn() as c:
+            return [dict(r) for r in c.execute(q + " ORDER BY name", (building_id,)).fetchall()]
+
+    def set_asset_active(self, asset_id: int, active: bool) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE building_assets SET active=? WHERE id=?", (1 if active else 0, asset_id))
 
     # ── Building commissioning config ────────────────────────────────────
     def save_building(self, building_id: str, name: str, state: str, data: Dict[str, Any]):

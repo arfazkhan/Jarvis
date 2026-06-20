@@ -1142,13 +1142,19 @@ def create_app():
         return _run_view(rid)
 
     @app.post("/api/v1/forms/run/{rid}/entry")
-    async def forms_save_entry(rid: int, payload: Dict[str, Any] = Body(...)):
+    async def forms_save_entry(rid: int, payload: Dict[str, Any] = Body(...),
+                               authorization: str = Header(default=""), x_api_key: str = Header(default="")):
         from arvisx.checklist_forms import get_template, entry_is_issue
         run = state.db.get_checklist_run(rid)
         if not run:
             raise HTTPException(404, f"unknown run {rid}")
         if run["status"] == "lapsed":
             raise HTTPException(409, "round has lapsed — cannot edit")
+        # Lock a round to its assignee: a technician can only fill their OWN round
+        # (an old/reassigned deep-link can't write). Managers/owner/system can edit any.
+        sub, role = _auth_mod.identify(authorization, x_api_key, _api_key)
+        if role == "technician" and run.get("assignee") and sub != run["assignee"]:
+            raise HTTPException(403, "this round is assigned to another technician")
         tmpl = get_template(run["template_id"], run["building_id"])
         p = payload or {}
         item_id = str(p.get("item_id", "")).strip()
@@ -1579,8 +1585,40 @@ def create_app():
 
     @app.get("/api/v1/assets")
     async def assets_registry(building: str = "one-anthem"):
+        """Asset names for pickers (PPM / builder): the explicit registry (active) merged
+        with assets derived from checklist item tags. Unique, sorted."""
         from arvisx.checklist_forms import assets_in
-        return {"building": building, "assets": assets_in(building)}
+        names = {a["name"] for a in state.db.list_assets_registry(building)} | set(assets_in(building))
+        return {"building": building, "assets": sorted(names)}
+
+    @app.get("/api/v1/assets/registry")
+    async def assets_registry_list(building: str = "one-anthem"):
+        """The explicit asset registry (full records) for the Manage Assets screen, with a
+        flag for which names also appear in checklists (derived)."""
+        from arvisx.checklist_forms import assets_in
+        derived = set(assets_in(building))
+        reg = state.db.list_assets_registry(building)
+        regnames = {a["name"] for a in reg}
+        out = [{**a, "in_checklists": a["name"] in derived} for a in reg]
+        # derived-only assets (tagged in checklists but not registered) shown read-only
+        for n in sorted(derived - regnames):
+            out.append({"id": None, "name": n, "kind": "", "location": "", "active": 1, "in_checklists": True})
+        return {"building": building, "assets": out}
+
+    @app.post("/api/v1/assets")
+    async def asset_add(payload: Dict[str, Any] = Body(...)):
+        p = payload or {}
+        name = str(p.get("name", "")).strip()
+        if not name:
+            raise HTTPException(400, "provide 'name'")
+        building = str(p.get("building", "one-anthem")).strip() or "one-anthem"
+        aid = state.db.add_asset(building, name, str(p.get("kind", "")).strip(), str(p.get("location", "")).strip())
+        return {"id": aid, "name": name}
+
+    @app.post("/api/v1/assets/{asset_id}/deactivate")
+    async def asset_deactivate(asset_id: int):
+        state.db.set_asset_active(asset_id, False)
+        return {"id": asset_id, "active": False}
 
     @app.get("/api/v1/assets/{asset}/history")
     async def asset_history(asset: str, building: str = "one-anthem", limit: int = 100):

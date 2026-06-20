@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { api } from '../api/client'
 import { useBuilding } from '../lib/BuildingContext'
+import { useAuth } from '../lib/AuthContext'
 import { enqueue, flush, subscribe, isNetworkError } from '../lib/fieldQueue'
 
 // Field round-runner, area-first: open a round → grid of AREAS (sections) → tap one →
@@ -27,6 +28,7 @@ export default function FieldRound() {
   const { rid } = useParams()
   const navigate = useNavigate()
   const { building } = useBuilding()
+  const { username, role } = useAuth()
   const [run, setRun] = useState(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState(null)
@@ -73,6 +75,16 @@ export default function FieldRound() {
     <FieldShell><Center><div className="text-center px-6 flex flex-col items-center gap-4">
       <CheckCircle2 size={56} className="text-green" />
       <div className="font-serif text-2xl text-text">Round submitted</div>
+      <button onClick={() => navigate('/field')} className="text-sm text-gold">Back to my rounds</button>
+    </div></Center></FieldShell>
+  )
+  // Locked: a technician opening a round assigned to someone else (e.g. an old link
+  // after reassignment). Managers/owner preview are exempt.
+  if (run && role === 'technician' && run.run?.assignee && run.run.assignee !== username) return (
+    <FieldShell><Center><div className="text-center px-6 flex flex-col items-center gap-4">
+      <X size={56} className="text-red" />
+      <div className="font-serif text-2xl text-text">Not your round</div>
+      <div className="text-sm text-text-faint">This round is now assigned to {run.run.assignee}.</div>
       <button onClick={() => navigate('/field')} className="text-sm text-gold">Back to my rounds</button>
     </div></Center></FieldShell>
   )
