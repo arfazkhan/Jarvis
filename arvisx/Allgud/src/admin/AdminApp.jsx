@@ -133,6 +133,8 @@ function Analytics() {
           {[7, 14, 30].map((d) => <option key={d} value={d}>last {d} days</option>)}
         </select>
         <button onClick={load} className="flex items-center gap-1 text-sm text-gold"><RefreshCw className="w-4 h-4" /> Refresh</button>
+        <div className="flex-1" />
+        <SendSummary building={building} />
       </div>
 
       <div className="grid grid-cols-4 gap-4 mb-6">
@@ -176,6 +178,27 @@ function Analytics() {
   )
 }
 function tone(pct) { return pct >= 80 ? 'green' : pct >= 50 ? 'amber' : 'red' }
+
+function SendSummary({ building }) {
+  const [busy, setBusy] = useState('')
+  const [msg, setMsg] = useState('')
+  async function send(period) {
+    setBusy(period); setMsg('')
+    try {
+      const r = await api.sendSummary(building, period)
+      setMsg(r.sent_to_owner ? `${period === 'month' ? 'Monthly' : 'Weekly'} summary sent to owner` : 'No owner number set')
+    } catch (e) { setMsg(e.message) } finally { setBusy('') }
+  }
+  return (
+    <div className="flex items-center gap-2">
+      {msg && <span className="text-xs text-green">{msg}</span>}
+      <button disabled={busy === 'week'} onClick={() => send('week')}
+        className="text-xs border border-border rounded-lg px-3 py-1.5 text-text-dim hover:border-gold/40 disabled:opacity-50">Send weekly</button>
+      <button disabled={busy === 'month'} onClick={() => send('month')}
+        className="text-xs border border-border rounded-lg px-3 py-1.5 text-text-dim hover:border-gold/40 disabled:opacity-50">Send monthly</button>
+    </div>
+  )
+}
 
 function TrendCard({ trend, avg }) {
   const data = trend || []

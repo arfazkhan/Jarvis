@@ -248,6 +248,24 @@ def building_evaluation(db, building: str, now=None, days: int = 7) -> Dict[str,
     }
 
 
+def period_summary_text(db, building: str, period: str = "week") -> str:
+    """WhatsApp-ready weekly/monthly summary (rounds, issues, PPM, top techs)."""
+    days = 30 if period == "month" else 7
+    ev = building_evaluation(db, building, days=days)
+    r, iss, p = ev["rounds"], ev["issues"], ev["ppm"]
+    label = "Monthly" if period == "month" else "Weekly"
+    text = (f"📊 *{label} summary* — last {days} days\n"
+            f"Rounds: {r['submitted']}/{r['total']} submitted ({r['submit_rate_pct']}%), "
+            f"{r['lapsed']} lapsed · avg {r['avg_completion_pct']}% complete\n"
+            f"Issues: {iss['raised']} raised, {iss['resolved']} resolved, {iss['open']} open"
+            + (f", {iss['sla_breached']} SLA-breached" if iss.get("sla_breached") else "") + "\n"
+            f"PPM: {p['overdue']} overdue, {p['due_soon']} due soon")
+    techs = ev.get("technicians") or []
+    if techs:
+        text += "\nTechs: " + ", ".join(f"{t['name']} {t['completion_pct']}%" for t in techs[:3])
+    return text
+
+
 def building_trend(db, building: str, days: int = 30, now=None) -> List[Dict[str, Any]]:
     """Per-day series (oldest→newest) for trend charts: completion %, rounds, issues opened.
     Lets the UI show that a low day sits inside an otherwise-healthy week/month."""

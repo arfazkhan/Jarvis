@@ -496,6 +496,14 @@ class ArvisxDb:
                              " WHERE status='pending' ORDER BY id").fetchall()
             return [dict(r) for r in rows]
 
+    def notifications_since(self, building_id: str, kind: str, since_iso: str) -> int:
+        """How many notifications of this kind were created at/after since_iso — for
+        dedup of periodic sends (weekly/monthly summary fires once)."""
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT COUNT(*) AS n FROM notifications WHERE building_id=? AND kind=? "
+                          "AND created_at >= ?", (building_id, kind, since_iso)).fetchone()
+            return int(r["n"]) if r else 0
+
     def mark_notifications_sent(self, ids: List[int]) -> None:
         if not ids:
             return

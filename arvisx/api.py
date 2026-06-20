@@ -211,12 +211,25 @@ def create_app():
                 # manual assign. Gated to >= 6am local by ensure_daily_runs.
                 try:
                     from arvisx import checklist_intel as ci
+                    from datetime import datetime as _dt
+                    nowt = _dt.now()
+                    owner = os.environ.get("OWNER_NUMBER", "").strip()
                     for b in (state.db.checklist_buildings() or ["one-anthem"]):
                         for c in ci.ensure_daily_runs(state.db, b, _today_str()):
                             if c["assignee"]:
                                 _notify_assignment(c["run_id"])
+                        # weekly (Mon ≥8am, once/wk) + monthly (1st ≥8am, once/mo) summary to owner
+                        if owner and nowt.hour >= 8:
+                            if nowt.weekday() == 0 and state.db.notifications_since(
+                                    b, "weekly_summary", nowt.strftime("%Y-%m-%dT00:00:00")) == 0:
+                                state.db.enqueue_notification(b, ci.period_summary_text(state.db, b, "week"),
+                                                              to_number=owner, kind="weekly_summary")
+                            if nowt.day == 1 and state.db.notifications_since(
+                                    b, "monthly_summary", nowt.strftime("%Y-%m-01T00:00:00")) == 0:
+                                state.db.enqueue_notification(b, ci.period_summary_text(state.db, b, "month"),
+                                                              to_number=owner, kind="monthly_summary")
                 except Exception as e:
-                    logger.warning(f"[heartbeat] auto-open daily runs failed: {e}")
+                    logger.warning(f"[heartbeat] auto-open/summary failed: {e}")
                 state._last_tick = await community_tick(state, llm=None)
 
             state._hb = Heartbeat(_tick, interval_s=interval)
@@ -1583,20 +1596,23 @@ def create_app():
     async def wa_period_digest(building: str = "one-anthem", period: str = "week"):
         """Weekly/monthly summary text for the bot to push (or the owner to pull)."""
         from arvisx import checklist_intel as ci
-        days = 30 if period == "month" else 7
-        ev = ci.building_evaluation(state.db, building, days=days)
-        r, iss, p = ev["rounds"], ev["issues"], ev["ppm"]
-        label = "Monthly" if period == "month" else "Weekly"
-        text = (f"📊 *{label} summary* — last {days} days\n"
-                f"Rounds: {r['submitted']}/{r['total']} submitted ({r['submit_rate_pct']}%), "
-                f"{r['lapsed']} lapsed · avg {r['avg_completion_pct']}% complete\n"
-                f"Issues: {iss['raised']} raised, {iss['resolved']} resolved, {iss['open']} open"
-                + (f", {iss['sla_breached']} SLA-breached" if iss.get('sla_breached') else "") + "\n"
-                f"PPM: {p['overdue']} overdue, {p['due_soon']} due soon")
-        techs = ev.get("technicians") or []
-        if techs:
-            text += "\nTechs: " + ", ".join(f"{t['name']} {t['completion_pct']}%" for t in techs[:3])
-        return {"period": period, "days": days, "text": text}
+        return {"period": period, "text": ci.period_summary_text(state.db, building, period)}
+
+    @app.post("/api/v1/admin/send-summary")
+    async def admin_send_summary(building: str = "one-anthem", period: str = "week",
+                                 authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        """Operator: push the weekly/monthly summary to the owner now, on demand."""
+        if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
+            raise HTTPException(403, "admin only")
+        from arvisx import checklist_intel as ci
+        text = ci.period_summary_text(state.db, building, period)
+        owner = os.environ.get("OWNER_NUMBER", "").strip()
+        sent = False
+        if owner:
+            state.db.enqueue_notification(building, text, to_number=owner,
+                                          kind=f"{'monthly' if period == 'month' else 'weekly'}_summary")
+            sent = True
+        return {"period": period, "text": text, "sent_to_owner": sent}
 
     # ── Phase-S substrate: asset registry, asset history, PPM scheduling ──
     def _latest_run_hours(building: str, asset: str):
