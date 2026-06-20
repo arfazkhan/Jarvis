@@ -74,6 +74,8 @@ class _State:
         # WhatsApp bridge pairing state, pushed by the bot for the ADMIN panel (status:
         # unknown|waiting_scan|connected|disconnected). Transient.
         self._bridge: Dict[str, Any] = {"status": "unknown", "qr": "", "ts": ""}
+        # Per-sender rate limit for the LLM WhatsApp Q&A (anti-abuse / cost-burn).
+        self._ask_rate: Dict[str, List[float]] = {}
         try:
             self.baselines.load_from(self.db)
             self.wo_store.load_from(self.db)
@@ -758,6 +760,20 @@ def create_app():
         by = str(p.get("by", "")).strip()        # sender number (resident requests)
         if not q:
             raise HTTPException(400, "provide 'question'")
+        # ── Guardrails: length cap + per-sender rate limit (anti-abuse / LLM cost-burn) ──
+        if len(q) > 400:
+            return {"intent": "guard", "text": "Please keep it short — ask about the building "
+                    "(rounds, issues, PPM, assets)."}
+        if by:
+            import time as _time
+            now_t, window, cap = _time.time(), 3600.0, int(os.environ.get("ARVISX_ASK_CAP_HOURLY", "30"))
+            hist = [t for t in state._ask_rate.get(by, []) if now_t - t < window]
+            if len(hist) >= cap:
+                state._ask_rate[by] = hist
+                return {"intent": "guard", "text": "You've sent a lot of questions this hour — "
+                        "please try again later."}
+            hist.append(now_t)
+            state._ask_rate[by] = hist
         # Building phase (learning vs operational) drives the situation-aware answers.
         try:
             blds = state.commissioner.list()
