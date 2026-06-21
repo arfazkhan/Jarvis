@@ -311,6 +311,27 @@ def aged_open_issues(db, building: str, now: Optional["datetime"] = None,
     return out
 
 
+def _reminder_deeplink(rid: int, building: str, assignee: str) -> str:
+    """Tappable deep-link straight into the field round runner, carrying a pre-minted
+    technician token (?t=) so the tap auto-authenticates — same primitive as the
+    assignment DM. Empty when no public URL is configured (dev)."""
+    import os
+    pub = os.environ.get("ARVISX_PUBLIC_URL", "").rstrip("/")
+    if not pub:
+        return ""
+    tok = ""
+    try:
+        from arvisx import auth as _auth
+        if assignee:
+            tok = _auth.make_token(assignee, "technician")
+    except Exception:
+        tok = ""
+    url = f"{pub}/field/run/{rid}?building={building}"
+    if tok:
+        url += f"&t={tok}"
+    return f"\nOpen: {url}"
+
+
 def round_reminders(db, building: str, now: Optional["datetime"] = None,
                     remind_after_h: float = 6.0, escalate_after_h: float = 10.0,
                     nudge_frac: float = 0.6, escalate_before_min: int = 30) -> List[Dict[str, Any]]:
@@ -361,23 +382,35 @@ def round_reminders(db, building: str, now: Optional["datetime"] = None,
                     continue
                 do_nudge, do_escalate = age_h >= remind_after_h, age_h >= escalate_after_h
 
+            tech = db.get_technician(building, assignee) or {}
+            phone = tech.get("phone", "") or ""
+            link = _reminder_deeplink(run["id"], building, assignee)
+
             if do_escalate and prev < 2:
-                who = assignee or "unassigned"
+                # 1) last-call to the TECHNICIAN (with their deep-link) — if reachable.
+                if phone:
+                    db.enqueue_notification(
+                        building, f"⏰ {tmpl.name} is closing soon — still {pct:.0f}% "
+                                  f"({pending} item(s) left). Please finish now.{link}",
+                        to_number=phone, kind="round_reminder")
+                # 2) escalate to the MANAGER (ops broadcast).
                 db.enqueue_notification(
-                    building, f"⚠️ {tmpl.name} ({run['shift_date']}) only {pct:.0f}% done by {who} — "
+                    building, f"⚠️ {tmpl.name} ({run['shift_date']}) only {pct:.0f}% done by {assignee} — "
                               f"{pending} item(s) pending, shift closing.", to_number="", kind="round_escalation")
                 db.set_run_reminded(run["id"], 2)
-                fired.append({"run_id": run["id"], "level": 2, "assignee": assignee})
+                fired.append({"run_id": run["id"], "level": 2, "assignee": assignee, "phone": bool(phone)})
             elif do_nudge and prev < 1:
-                to_number = ""
-                if assignee:
-                    tech = db.get_technician(building, assignee)
-                    to_number = (tech or {}).get("phone", "") or ""
-                db.enqueue_notification(
-                    building, f"📋 {tmpl.name} is {pct:.0f}% done — {pending} item(s) still pending. "
-                              "Please complete before shift close.", to_number=to_number, kind="round_reminder")
-                db.set_run_reminded(run["id"], 1)
-                fired.append({"run_id": run["id"], "level": 1, "assignee": assignee})
+                # Nudge the technician directly, WITH the deep-link. No roster phone → can't
+                # reach them; skip rather than misroute the tech's link to the manager.
+                if phone:
+                    db.enqueue_notification(
+                        building, f"📋 {tmpl.name} is {pct:.0f}% done — {pending} item(s) still pending. "
+                                  f"Please complete before shift close.{link}",
+                        to_number=phone, kind="round_reminder")
+                    db.set_run_reminded(run["id"], 1)
+                    fired.append({"run_id": run["id"], "level": 1, "assignee": assignee, "phone": True})
+                else:
+                    fired.append({"run_id": run["id"], "level": 1, "assignee": assignee, "phone": False, "skipped": "no_phone"})
     return fired
 
 
