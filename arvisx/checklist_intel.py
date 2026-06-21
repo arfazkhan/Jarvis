@@ -338,8 +338,10 @@ def round_reminders(db, building: str, now: Optional["datetime"] = None,
             summ = run_summary(tmpl, db.checklist_entries(run["id"]))
             if summ["completion_pct"] >= 100:
                 continue
-            prev = int(run.get("reminded_level") or 0)
             assignee = run.get("assignee") or ""
+            if not assignee:
+                continue                         # nobody to chase — don't nag an unassigned round
+            prev = int(run.get("reminded_level") or 0)
             pending = summ["total"] - summ["done"]
             pct = summ["completion_pct"]
 

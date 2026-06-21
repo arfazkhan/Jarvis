@@ -771,7 +771,19 @@ def create_app():
     _ACTION_ROLES = {"owner", "fm", "facility_manager"}
 
     @app.get("/api/v1/whatsapp/digest")
-    async def wa_digest():
+    async def wa_digest(building: str = "one-anthem"):
+        # Checklist deployment (no live sensors): the daily digest is the CHECKLIST summary,
+        # not the residential simulator brief (pool/fire/energy readiness).
+        if os.environ.get("ARVISX_SOURCE", "sim").lower() != "mqtt":
+            from arvisx.checklist_forms import manager_digest
+            from arvisx import checklist_intel as ci
+            runs = (await forms_today(building, _today_str()))["runs"]
+            text = manager_digest(runs, _today_str())
+            aged = ci.aged_open_issues(state.db, building)
+            if aged:
+                text += "\n\n⏳ Aged open issues (>2d):\n" + "\n".join(
+                    f"• {a['title']} — {a['age_days']:.0f}d" for a in aged[:6])
+            return {"text": text}
         from arvisx.messaging import daily_digest
         return {"text": daily_digest(state.report_now())}
 
