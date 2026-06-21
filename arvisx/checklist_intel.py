@@ -172,7 +172,8 @@ def lapse_stale_rounds(db, building: str, now=None) -> List[Dict[str, Any]]:
             who = run.get("assignee") or run.get("technician") or "unassigned"
             db.enqueue_notification(
                 building, f"⚠️ {name} ({run['shift_date']}) closed INCOMPLETE at {pct:.0f}% "
-                          f"— assigned: {who}. Carry over / follow up.", to_number="", kind="round_lapsed")
+                          f"(assigned: {who}). Logged as a gap — today's round repeats these checks; "
+                          f"any open issues stay tracked.", to_number="", kind="round_lapsed")
             fired.append({"run_id": run["id"], "shift_date": run["shift_date"], "completion_pct": pct})
     return fired
 
