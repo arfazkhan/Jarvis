@@ -45,7 +45,7 @@ function qs(params = {}) {
   return s ? `?${s}` : ''
 }
 
-async function request(path, { method = 'GET', body, params, headers, raw } = {}) {
+async function request(path, { method = 'GET', body, params, headers, raw, blob } = {}) {
   const building = params?.building ?? currentBuilding
   const url = `${BASE}${path}${qs({ ...params, building })}`
   const h = { ...(headers || {}) }
@@ -68,6 +68,7 @@ async function request(path, { method = 'GET', body, params, headers, raw } = {}
     throw new Error(`${res.status}: ${detail}`)
   }
   if (res.status === 204) return null
+  if (blob) return res.blob()
   return res.json()
 }
 
@@ -123,6 +124,18 @@ export const api = {
   addAsset: (body) => api.post('/assets', body),
   deactivateAsset: (id) => api.post(`/assets/${id}/deactivate`),
 
+  // B1: equipment manual attach / view
+  uploadAssetManual: (id, blob, contentType, filename) =>
+    request(`/assets/${id}/manual`, {
+      method: 'POST', params: { filename }, raw: true, body: blob,
+      headers: { 'Content-Type': contentType || 'application/octet-stream' },
+    }),
+  clearAssetManual: (id) => api.post(`/assets/${id}/manual/clear`),
+  openAssetManual: async (name) => {
+    const b = await request(`/assets/manual/${name}`, { blob: true })
+    window.open(URL.createObjectURL(b), '_blank')
+  },
+
   ask: (q, building) => api.get('/agents/ask', { q, building }),
   handover: (building) => api.get('/agents/handover', { building }),
 
@@ -154,6 +167,12 @@ export const api = {
   residents: (building, all) => api.get('/residents', { building, all }),
   addResident: (body) => api.post('/residents', body),
   deactivateResident: (id) => api.post(`/residents/${id}/deactivate`),
+
+  // scheduled checklists (B2 — date+time triggers)
+  schedules: (building, all) => api.get('/schedules', { building, all }),
+  addSchedule: (body) => api.post('/schedules', body),
+  deactivateSchedule: (id) => api.post(`/schedules/${id}/deactivate`),
+  runScheduleNow: (id) => api.post(`/schedules/${id}/run-now`),
 
   // vendors
   vendorsList: (building, all) => api.get('/vendors', { building, all }),

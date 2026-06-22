@@ -142,6 +142,51 @@ def ensure_daily_runs(db, building: str, today: str, now=None, min_hour: int = 6
     return created
 
 
+def _schedule_due(sch: Dict[str, Any], now) -> bool:
+    """Has this schedule's date+time arrived for now's date? (the once-per-day dedup via
+    last_fired is checked by the caller). once → exact date; daily → every day; weekly →
+    matching weekday; monthly → matching day-of-month — each at/after run_time."""
+    today = now.strftime("%Y-%m-%d")
+    try:
+        hh, mm = [int(x) for x in (sch.get("run_time") or "00:00").split(":")[:2]]
+    except Exception:
+        hh, mm = 0, 0
+    if (now.hour, now.minute) < (hh, mm):           # time not reached yet today
+        return False
+    mode = (sch.get("mode") or "once").lower()
+    if mode == "once":
+        return sch.get("run_date") == today
+    recur = (sch.get("recur") or "daily").lower()
+    if recur == "daily":
+        return True
+    if recur == "weekly":
+        return sch.get("dow") is not None and now.weekday() == int(sch["dow"])
+    if recur == "monthly":
+        return sch.get("dom") is not None and now.day == int(sch["dom"])
+    return False
+
+
+def due_scheduled_checklists(db, building: str, now=None) -> List[Dict[str, Any]]:
+    """B2 trigger engine: open a run for every scheduled checklist whose date+time has
+    arrived (deduped once/day via last_fired). Pre-assigns when the schedule names a
+    technician; one-off schedules deactivate after firing. The caller DMs the assignee."""
+    from datetime import datetime as _dt
+    now = now or _dt.now()
+    today = now.strftime("%Y-%m-%d")
+    fired: List[Dict[str, Any]] = []
+    for sch in db.list_schedules(building, active_only=True):
+        if sch.get("last_fired") == today or not _schedule_due(sch, now):
+            continue
+        assignee = sch.get("assignee") or ""
+        rid = db.create_checklist_run(building, sch["template_id"], today, assignee=assignee)
+        db.set_schedule_fired(sch["id"], today)
+        if (sch.get("mode") or "once").lower() == "once":
+            db.set_schedule_active(sch["id"], False)
+        fired.append({"run_id": rid, "schedule_id": sch["id"],
+                      "template_id": sch["template_id"], "assignee": assignee})
+    return fired
+
+
 def lapse_stale_rounds(db, building: str, now=None) -> List[Dict[str, Any]]:
     """Give incomplete rounds a TERMINAL. A run lapses once its shift window has ENDED
     (shift-end-aware; overnight shifts end next morning). Templates without a clock window

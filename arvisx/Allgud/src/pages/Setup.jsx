@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Users, Wrench, CalendarCheck, ShieldCheck, Plus, Power, KeyRound, Check, ChevronRight, ClipboardList, Trash2, Copy, Box, Home } from 'lucide-react'
+import { useState, useRef } from 'react'
+import { Users, Wrench, CalendarCheck, ShieldCheck, Plus, Power, KeyRound, Check, ChevronRight, ClipboardList, Trash2, Copy, Box, Home, FileText, FileUp } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
 import { Pill, Spinner, Empty } from '../components/ui'
 import { Input, Select } from './Issues'
@@ -143,6 +143,35 @@ function ChecklistStep({ building }) {
   )
 }
 
+// A manual/datasheet attached to an asset (B1) — upload, view, or replace.
+function ManualCell({ asset, onChange }) {
+  const fileRef = useRef(null)
+  const [busy, setBusy] = useState(false)
+  async function upload(file) {
+    if (!file) return
+    setBusy(true)
+    try { await api.uploadAssetManual(asset.id, file, file.type, file.name); onChange() }
+    catch (e) { err(e) } finally { setBusy(false) }
+  }
+  return (
+    <div className="flex items-center gap-1">
+      <input ref={fileRef} type="file" accept=".pdf,.doc,.docx,.txt,image/*" className="hidden"
+        onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
+      {asset.manual_path ? (
+        <button onClick={() => api.openAssetManual(asset.manual_path)}
+          className="text-xs text-gold hover:underline flex items-center gap-1" title={asset.manual_name}>
+          <FileText className="w-3.5 h-3.5" /> manual
+        </button>
+      ) : (
+        <button onClick={() => fileRef.current?.click()} disabled={busy}
+          className="text-xs text-text-faint hover:text-text flex items-center gap-1">
+          <FileUp className="w-3.5 h-3.5" /> {busy ? '…' : 'manual'}
+        </button>
+      )}
+    </div>
+  )
+}
+
 // ── Assets ───────────────────────────────────────────────────────────────────
 function AssetStep({ building }) {
   const [key, setKey] = useState(0)
@@ -176,6 +205,7 @@ function AssetStep({ building }) {
                 <div className="text-sm text-text">{a.name}</div>
                 <div className="text-xs text-text-faint">{[a.kind, a.location].filter(Boolean).join(' · ') || '—'}</div>
               </div>
+              {a.id && <ManualCell asset={a} onChange={refresh} />}
               {a.in_checklists && <Pill tone="blue">in checklists</Pill>}
               {a.id ? <Pill tone="green">registered</Pill> : <Pill tone="neutral">from checklist</Pill>}
               {a.id && <Deact onClick={async () => { await api.deactivateAsset(a.id); refresh() }} />}

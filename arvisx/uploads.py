@@ -59,3 +59,43 @@ def photo_path(name: str) -> Optional[Path]:
 
 def media_type_of(name: str) -> str:
     return _ALLOWED.get(Path(name).suffix.lstrip(".").lower(), "application/octet-stream")
+
+
+# ── Documents (B1): equipment manuals / datasheets ──────────────────────────
+_DOC_ALLOWED = {
+    "pdf": "application/pdf", "txt": "text/plain",
+    "doc": "application/msword",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp",
+}
+MAX_DOC_BYTES = 25 * 1024 * 1024     # 25 MB cap per document
+
+
+def save_document(data: bytes, filename: str = "", content_type: str = "") -> Tuple[str, str]:
+    """Validate + persist a manual/datasheet. Returns (stored_name, media_type).
+    Raises ValueError on reject."""
+    if not data:
+        raise ValueError("empty file")
+    if len(data) > MAX_DOC_BYTES:
+        raise ValueError("file too large (max 25MB)")
+    ext = (Path(filename or "").suffix.lstrip(".") or "").lower()
+    if ext not in _DOC_ALLOWED:
+        for e, mt in _DOC_ALLOWED.items():           # fall back to declared content-type
+            if mt == (content_type or "").lower():
+                ext = e
+                break
+    if ext not in _DOC_ALLOWED:
+        raise ValueError("only pdf/doc/docx/txt/image files allowed")
+    name = f"{uuid.uuid4().hex}.{ext}"
+    (upload_dir() / name).write_bytes(data)
+    return name, _DOC_ALLOWED[ext]
+
+
+def file_path(name: str) -> Optional[Path]:
+    """Traversal-safe path for ANY stored upload (photo or document)."""
+    return photo_path(name)
+
+
+def media_type_any(name: str) -> str:
+    ext = Path(name).suffix.lstrip(".").lower()
+    return _DOC_ALLOWED.get(ext, _ALLOWED.get(ext, "application/octet-stream"))

@@ -218,6 +218,10 @@ def create_app():
                         for c in ci.ensure_daily_runs(state.db, b, _today_str()):
                             if c["assignee"]:
                                 _notify_assignment(c["run_id"])
+                        # B2: fire any scheduled checklists now due; DM a pre-assigned tech.
+                        for s in ci.due_scheduled_checklists(state.db, b, nowt):
+                            if s["assignee"]:
+                                _notify_assignment(s["run_id"])
                         # weekly (Mon ≥8am, once/wk) + monthly (1st ≥8am, once/mo) summary to owner
                         if owner and nowt.hour >= 8:
                             if nowt.weekday() == 0 and state.db.notifications_since(
@@ -1950,6 +1954,92 @@ def create_app():
     async def asset_deactivate(asset_id: int):
         state.db.set_asset_active(asset_id, False)
         return {"id": asset_id, "active": False}
+
+    # ── B1: equipment user-manual / datasheet ────────────────────────────
+    @app.post("/api/v1/assets/{asset_id}/manual")
+    async def asset_manual_upload(asset_id: int, request: Request, filename: str = ""):
+        """Attach a manual/datasheet to an asset. Raw file bytes in the body
+        (pdf/doc/docx/txt/image). Feeds the C1 skillbook extraction later."""
+        from arvisx.uploads import save_document
+        if not state.db.get_asset(asset_id):
+            raise HTTPException(404, f"unknown asset {asset_id}")
+        try:
+            name, _mt = save_document(await request.body(), filename=filename,
+                                      content_type=request.headers.get("content-type", ""))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        state.db.set_asset_manual(asset_id, name, filename or name)
+        return {"saved": True, "asset_id": asset_id, "manual_path": name, "manual_name": filename or name}
+
+    @app.post("/api/v1/assets/{asset_id}/manual/clear")
+    async def asset_manual_clear(asset_id: int):
+        if not state.db.get_asset(asset_id):
+            raise HTTPException(404, f"unknown asset {asset_id}")
+        state.db.set_asset_manual(asset_id, "", "")
+        return {"cleared": True, "asset_id": asset_id}
+
+    @app.get("/api/v1/assets/manual/{name}")
+    async def asset_manual_get(name: str):
+        from fastapi.responses import Response
+        from arvisx.uploads import file_path, media_type_any
+        p = file_path(name)
+        if p is None:
+            raise HTTPException(404, "manual not found")
+        return Response(content=p.read_bytes(), media_type=media_type_any(name))
+
+    # ── B2: scheduled checklists (date+time triggers) ────────────────────
+    @app.get("/api/v1/schedules")
+    async def schedules_list(building: str = "one-anthem", all: bool = False):
+        from arvisx.checklist_forms import get_template
+        out = []
+        for s in state.db.list_schedules(building, active_only=not all):
+            t = get_template(s["template_id"], building)
+            out.append({**s, "template_name": t.name if t else s["template_id"]})
+        return {"building": building, "schedules": out}
+
+    @app.post("/api/v1/schedules")
+    async def schedule_add(payload: Dict[str, Any] = Body(...)):
+        p = payload or {}
+        building = str(p.get("building", "one-anthem")).strip() or "one-anthem"
+        template_id = str(p.get("template_id", "")).strip()
+        if not template_id:
+            raise HTTPException(400, "provide 'template_id'")
+        mode = str(p.get("mode", "once")).strip().lower()
+        recur = str(p.get("recur", "")).strip().lower()
+        if mode == "once" and not str(p.get("date", "")).strip():
+            raise HTTPException(400, "a one-off schedule needs a 'date'")
+        if mode == "recurring" and recur not in ("daily", "weekly", "monthly"):
+            raise HTTPException(400, "recurring needs recur=daily|weekly|monthly")
+        dow = p.get("dow"); dom = p.get("dom")
+        sid = state.db.add_schedule(
+            building, template_id, label=str(p.get("label", "")).strip(), mode=mode,
+            run_date=str(p.get("date", "")).strip(), run_time=str(p.get("time", "09:00")).strip(),
+            recur=recur, dow=(int(dow) if dow is not None and str(dow) != "" else None),
+            dom=(int(dom) if dom is not None and str(dom) != "" else None),
+            assignee=str(p.get("assignee", "")).strip())
+        return {"id": sid, "template_id": template_id}
+
+    @app.post("/api/v1/schedules/{schedule_id}/deactivate")
+    async def schedule_deactivate(schedule_id: int):
+        state.db.set_schedule_active(schedule_id, False)
+        return {"id": schedule_id, "active": False}
+
+    @app.post("/api/v1/schedules/{schedule_id}/run-now")
+    async def schedule_run_now(schedule_id: int):
+        """Fire a schedule immediately (manager triggers it now) — opens the run, assigns,
+        DMs the tech, and marks it fired for today so the heartbeat won't duplicate it."""
+        sch = state.db.get_schedule(schedule_id)
+        if not sch:
+            raise HTTPException(404, f"unknown schedule {schedule_id}")
+        assignee = sch.get("assignee") or ""
+        rid = state.db.create_checklist_run(sch["building_id"], sch["template_id"], _today_str(),
+                                            assignee=assignee)
+        state.db.set_schedule_fired(schedule_id, _today_str())
+        if (sch.get("mode") or "once").lower() == "once":
+            state.db.set_schedule_active(schedule_id, False)
+        if assignee:
+            _notify_assignment(rid)
+        return {"run_id": rid, "schedule_id": schedule_id}
 
     @app.get("/api/v1/assets/{asset}/history")
     async def asset_history(asset: str, building: str = "one-anthem", limit: int = 100):

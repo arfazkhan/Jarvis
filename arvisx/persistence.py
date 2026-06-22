@@ -114,6 +114,15 @@ class ArvisxDb:
             CREATE TABLE IF NOT EXISTS checklist_templates (
                 building_id TEXT, template_id TEXT, data TEXT, updated_at TEXT,
                 PRIMARY KEY (building_id, template_id));
+            -- Scheduled checklists (B2): fire a template at a date+time, once or recurring
+            -- (daily/weekly/monthly). The heartbeat opens a run (+assigns/DMs) when due;
+            -- last_fired (YYYY-MM-DD) dedups so each occurrence fires once.
+            CREATE TABLE IF NOT EXISTS scheduled_checklists (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, template_id TEXT,
+                label TEXT, mode TEXT, run_date TEXT, run_time TEXT, recur TEXT,
+                dow INTEGER, dom INTEGER, assignee TEXT, active INTEGER DEFAULT 1,
+                last_fired TEXT, created_at TEXT);
+            CREATE INDEX IF NOT EXISTS ix_sched ON scheduled_checklists(building_id, active);
             -- Vendor registry (AMC / service vendors an issue can be owned by).
             CREATE TABLE IF NOT EXISTS vendors (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, name TEXT,
@@ -169,6 +178,12 @@ class ArvisxDb:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, name TEXT,
                 kind TEXT, location TEXT, active INTEGER DEFAULT 1, created_at TEXT)""")
             c.execute("CREATE INDEX IF NOT EXISTS ix_bassets ON building_assets(building_id, active)")
+            # B1: a manual/datasheet doc attached to an asset (migration for existing DBs)
+            for col in ("manual_path TEXT", "manual_name TEXT"):
+                try:
+                    c.execute(f"ALTER TABLE building_assets ADD COLUMN {col}")
+                except Exception:
+                    pass
         self._siglog_last: Dict[tuple, datetime] = {}   # (asset, signal) → last logged ts
 
     # ── Asset registry ───────────────────────────────────────────────────
@@ -195,6 +210,53 @@ class ArvisxDb:
     def set_asset_active(self, asset_id: int, active: bool) -> None:
         with self._lock, self._conn() as c:
             c.execute("UPDATE building_assets SET active=? WHERE id=?", (1 if active else 0, asset_id))
+
+    def get_asset(self, asset_id: int) -> Optional[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT * FROM building_assets WHERE id=?", (asset_id,)).fetchone()
+            return dict(r) if r else None
+
+    def set_asset_manual(self, asset_id: int, manual_path: str, manual_name: str) -> None:
+        """Attach (or clear, with '') a manual/datasheet document to an asset (B1)."""
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE building_assets SET manual_path=?, manual_name=? WHERE id=?",
+                      (manual_path, manual_name, asset_id))
+
+    # ── Scheduled checklists (B2) ─────────────────────────────────────────
+    def add_schedule(self, building_id: str, template_id: str, *, label: str = "",
+                     mode: str = "once", run_date: str = "", run_time: str = "09:00",
+                     recur: str = "", dow: Optional[int] = None, dom: Optional[int] = None,
+                     assignee: str = "") -> int:
+        with self._lock, self._conn() as c:
+            cur = c.execute(
+                "INSERT INTO scheduled_checklists (building_id, template_id, label, mode, run_date,"
+                " run_time, recur, dow, dom, assignee, active, last_fired, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,1,'',?)",
+                (building_id, template_id, label, mode, run_date, run_time, recur, dow, dom,
+                 assignee, datetime.now().isoformat(timespec="seconds")))
+            return int(cur.lastrowid)
+
+    def list_schedules(self, building_id: str, active_only: bool = True) -> List[Dict[str, Any]]:
+        q = "SELECT * FROM scheduled_checklists WHERE building_id=?"
+        if active_only:
+            q += " AND active=1"
+        with self._lock, self._conn() as c:
+            return [dict(r) for r in c.execute(q + " ORDER BY id DESC", (building_id,)).fetchall()]
+
+    def get_schedule(self, schedule_id: int) -> Optional[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT * FROM scheduled_checklists WHERE id=?", (schedule_id,)).fetchone()
+            return dict(r) if r else None
+
+    def set_schedule_active(self, schedule_id: int, active: bool) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE scheduled_checklists SET active=? WHERE id=?",
+                      (1 if active else 0, schedule_id))
+
+    def set_schedule_fired(self, schedule_id: int, fired_date: str) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE scheduled_checklists SET last_fired=? WHERE id=?",
+                      (fired_date, schedule_id))
 
     # ── Building commissioning config ────────────────────────────────────
     def save_building(self, building_id: str, name: str, state: str, data: Dict[str, Any]):
