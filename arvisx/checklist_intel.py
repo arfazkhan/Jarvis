@@ -377,6 +377,43 @@ def _reminder_deeplink(rid: int, building: str, assignee: str) -> str:
     return f"\nOpen: {url}"
 
 
+def recurring_issues(db, building: str, days: int = 90, min_count: int = 2,
+                     now: Optional["datetime"] = None) -> List[Dict[str, Any]]:
+    """C2 building memory: which problems KEEP COMING BACK over the window. Groups issues by
+    asset (or a number-normalized title when no asset), counts recurrences, tracks how many
+    are still open + when last seen. Grounded — only what's in the issue log; the agent uses
+    this to answer 'has this happened before / is this chronic'."""
+    from datetime import datetime as _dt, timedelta as _td
+    import re as _re
+    now = now or _dt.now()
+    cutoff = now - _td(days=days)
+    groups: Dict[str, Dict[str, Any]] = {}
+    for i in db.list_issues(building):
+        ts = i.get("created_at") or ""
+        try:
+            if _dt.fromisoformat(ts[:19]) < cutoff:
+                continue
+        except Exception:
+            continue
+        title = i.get("title", "")
+        base = _re.sub(r"\s+", " ", _re.sub(r"\d+(\.\d+)?", "#", title)).strip().lower()
+        key = (i.get("asset") or "").strip() or base
+        g = groups.setdefault(key, {"key": key, "asset": i.get("asset") or "", "count": 0,
+                                    "open": 0, "last_seen": "", "titles": set()})
+        g["count"] += 1
+        if i.get("status") != "resolved":
+            g["open"] += 1
+        if ts > g["last_seen"]:
+            g["last_seen"] = ts
+        g["titles"].add(title)
+    out = [{"key": g["key"], "asset": g["asset"], "count": g["count"], "open": g["open"],
+            "last_seen": g["last_seen"][:10],
+            "example": sorted(g["titles"])[0] if g["titles"] else g["key"]}
+           for g in groups.values() if g["count"] >= min_count]
+    out.sort(key=lambda x: (x["count"], x["open"]), reverse=True)
+    return out
+
+
 def round_reminders(db, building: str, now: Optional["datetime"] = None,
                     remind_after_h: float = 6.0, escalate_after_h: float = 10.0,
                     nudge_frac: float = 0.6, escalate_before_min: int = 30) -> List[Dict[str, Any]]:

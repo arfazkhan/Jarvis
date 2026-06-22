@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import { Users, Wrench, CalendarCheck, ShieldCheck, Plus, Power, KeyRound, Check, ChevronRight, ClipboardList, Trash2, Copy, Box, Home, FileText, FileUp } from 'lucide-react'
+import { Users, Wrench, CalendarCheck, ShieldCheck, Plus, Power, KeyRound, Check, ChevronRight, ClipboardList, Trash2, Copy, Box, Home, FileText, FileUp, Sparkles } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
 import { Pill, Spinner, Empty } from '../components/ui'
 import { Input, Select } from './Issues'
@@ -158,10 +158,16 @@ function ManualCell({ asset, onChange }) {
       <input ref={fileRef} type="file" accept=".pdf,.doc,.docx,.txt,image/*" className="hidden"
         onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
       {asset.manual_path ? (
-        <button onClick={() => api.openAssetManual(asset.manual_path)}
-          className="text-xs text-gold hover:underline flex items-center gap-1" title={asset.manual_name}>
-          <FileText className="w-3.5 h-3.5" /> manual
-        </button>
+        <>
+          <button onClick={() => api.openAssetManual(asset.manual_path)}
+            className="text-xs text-gold hover:underline flex items-center gap-1" title={asset.manual_name}>
+            <FileText className="w-3.5 h-3.5" /> manual
+          </button>
+          <button onClick={distil} disabled={busy}
+            className="text-xs text-purple hover:underline flex items-center gap-1" title="Distil manual → specs, PPM intervals, troubleshooting">
+            <Sparkles className="w-3.5 h-3.5" /> {busy ? '…' : 'skills'}
+          </button>
+        </>
       ) : (
         <button onClick={() => fileRef.current?.click()} disabled={busy}
           className="text-xs text-text-faint hover:text-text flex items-center gap-1">
@@ -170,6 +176,16 @@ function ManualCell({ asset, onChange }) {
       )}
     </div>
   )
+
+  async function distil() {
+    setBusy(true)
+    try {
+      const r = await api.extractAssetSkills(asset.id)
+      const k = r.knowledge || {}
+      if (r.extracted) alert(`Manual distilled for ${asset.name}:\n• ${(k.specs||[]).length} specs\n• ${(k.ppm||[]).length} PPM intervals\n• ${(k.troubleshooting||[]).length} troubleshooting steps`)
+      else alert(r.note || 'Could not distil this manual.')
+    } catch (e) { err(e) } finally { setBusy(false) }
+  }
 }
 
 // ── Assets ───────────────────────────────────────────────────────────────────

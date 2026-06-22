@@ -1981,6 +1981,13 @@ def create_app():
         except ValueError as e:
             raise HTTPException(400, str(e))
         state.db.set_asset_manual(asset_id, name, filename or name)
+        # C1: distil the manual into structured skills in the background (no LLM token-burst on
+        # the upload request; the manager can also trigger it explicitly via /extract-skills).
+        try:
+            import asyncio as _aio
+            _aio.create_task(_extract_asset_skills(asset_id))
+        except Exception:
+            pass
         return {"saved": True, "asset_id": asset_id, "manual_path": name, "manual_name": filename or name}
 
     @app.post("/api/v1/assets/{asset_id}/manual/clear")
@@ -1998,6 +2005,52 @@ def create_app():
         if p is None:
             raise HTTPException(404, "manual not found")
         return Response(content=p.read_bytes(), media_type=media_type_any(name))
+
+    # ── C1: manual → structured skills (specs / PPM intervals / troubleshooting) ──
+    async def _extract_asset_skills(asset_id: int) -> Dict[str, Any]:
+        from arvisx.uploads import file_path
+        from arvisx import manual_skills as ms
+        a = state.db.get_asset(asset_id)
+        if not a or not a.get("manual_path"):
+            return {}
+        p = file_path(a["manual_path"])
+        text = ms.extract_text(p) if p else ""
+        try:
+            from arvisx.llm_client import make_llm
+            llm = make_llm()
+        except Exception:
+            llm = None
+        knowledge = await ms.extract_skills(llm, a["name"], a.get("kind", ""), text)
+        if knowledge:
+            state.db.save_asset_knowledge(asset_id, a["building_id"], a["name"],
+                                          a.get("manual_name", ""), knowledge)
+        return knowledge
+
+    @app.post("/api/v1/assets/{asset_id}/extract-skills")
+    async def asset_extract_skills(asset_id: int):
+        """Distil the asset's attached manual into structured skills now (specs / PPM /
+        troubleshooting). Needs a manual attached + an LLM key; degrades to 'stored only'."""
+        a = state.db.get_asset(asset_id)
+        if not a:
+            raise HTTPException(404, f"unknown asset {asset_id}")
+        if not a.get("manual_path"):
+            raise HTTPException(400, "attach a manual first")
+        k = await _extract_asset_skills(asset_id)
+        stored = state.db.get_asset_knowledge(asset_id) or {"specs": [], "ppm": [], "troubleshooting": []}
+        return {"extracted": bool(k), "knowledge": stored,
+                "note": None if k else "no text extracted (scanned/unsupported file) or LLM unavailable"}
+
+    @app.get("/api/v1/assets/{asset_id}/knowledge")
+    async def asset_knowledge_get(asset_id: int):
+        return state.db.get_asset_knowledge(asset_id) or {
+            "asset_id": asset_id, "specs": [], "ppm": [], "troubleshooting": []}
+
+    # ── C2: building memory — recurring issues over a window ──────────────
+    @app.get("/api/v1/building/memory")
+    async def building_memory(building: str = "one-anthem", days: int = 90):
+        from arvisx import checklist_intel as ci
+        return {"building": building, "days": days,
+                "recurring": ci.recurring_issues(state.db, building, days=days)}
 
     # ── B2: scheduled checklists (date+time triggers) ────────────────────
     @app.get("/api/v1/schedules")

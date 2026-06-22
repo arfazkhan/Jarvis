@@ -77,6 +77,27 @@ def _compliance(ctx, **a):
     return intel.compliance(d, b, t)
 
 
+@_tool("recurring_issues", "Building memory: problems that have RECURRED over the last ~90 days "
+                           "— which assets/issues keep coming back, how many times, how many still "
+                           "open. Use for 'has this happened before', 'recurring', 'chronic', 'history'.", _NONE)
+def _recurring_issues(ctx, **a):
+    d, b, _t = _db(ctx)
+    return {"recurring": intel.recurring_issues(d, b)}
+
+
+@_tool("asset_manual", "Manual-derived knowledge for ONE asset: specs, PPM intervals, and "
+                       "troubleshooting steps distilled from its uploaded manual (C1). Use this "
+                       "for 'what does the manual say', specs, service intervals, or how-to-fix.", _AID)
+def _asset_manual(ctx, **a):
+    d, b, _t = _db(ctx)
+    k = d.get_asset_knowledge_by_name(b, a["asset"])
+    if not k:
+        return {"asset": a["asset"], "manual": "no manual knowledge on file for this asset"}
+    return {"asset": a["asset"], "manual_name": k.get("manual_name", ""),
+            "specs": k.get("specs", []), "ppm": k.get("ppm", []),
+            "troubleshooting": k.get("troubleshooting", [])}
+
+
 def build_ctx(db, building: str = "one-anthem", today: str = "") -> Dict[str, Any]:
     from datetime import datetime
     return {"db": db, "building": building, "today": today or datetime.now().strftime("%Y-%m-%d")}

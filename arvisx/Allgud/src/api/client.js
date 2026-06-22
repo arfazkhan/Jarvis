@@ -135,6 +135,9 @@ export const api = {
     const b = await request(`/assets/manual/${name}`, { blob: true })
     window.open(URL.createObjectURL(b), '_blank')
   },
+  // C1: distil manual → skills + read stored knowledge
+  extractAssetSkills: (id) => api.post(`/assets/${id}/extract-skills`),
+  assetKnowledge: (id) => api.get(`/assets/${id}/knowledge`),
 
   ask: (q, building) => api.get('/agents/ask', { q, building }),
   handover: (building) => api.get('/agents/handover', { building }),

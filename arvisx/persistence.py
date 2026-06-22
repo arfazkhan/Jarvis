@@ -184,6 +184,10 @@ class ArvisxDb:
                     c.execute(f"ALTER TABLE building_assets ADD COLUMN {col}")
                 except Exception:
                     pass
+            # C1: structured knowledge distilled from an asset's manual (specs/PPM/troubleshoot)
+            c.execute("""CREATE TABLE IF NOT EXISTS asset_knowledge (
+                asset_id INTEGER PRIMARY KEY, building_id TEXT, asset_name TEXT,
+                manual_name TEXT, specs TEXT, ppm TEXT, troubleshooting TEXT, extracted_at TEXT)""")
         self._siglog_last: Dict[tuple, datetime] = {}   # (asset, signal) → last logged ts
 
     # ── Asset registry ───────────────────────────────────────────────────
@@ -221,6 +225,38 @@ class ArvisxDb:
         with self._lock, self._conn() as c:
             c.execute("UPDATE building_assets SET manual_path=?, manual_name=? WHERE id=?",
                       (manual_path, manual_name, asset_id))
+
+    # ── Asset knowledge distilled from manuals (C1) ───────────────────────
+    def save_asset_knowledge(self, asset_id: int, building_id: str, asset_name: str,
+                             manual_name: str, knowledge: Dict[str, Any]) -> None:
+        with self._lock, self._conn() as c:
+            c.execute(
+                "INSERT OR REPLACE INTO asset_knowledge (asset_id, building_id, asset_name,"
+                " manual_name, specs, ppm, troubleshooting, extracted_at) VALUES (?,?,?,?,?,?,?,?)",
+                (asset_id, building_id, asset_name, manual_name,
+                 json.dumps(knowledge.get("specs") or []),
+                 json.dumps(knowledge.get("ppm") or []),
+                 json.dumps(knowledge.get("troubleshooting") or []),
+                 datetime.now().isoformat(timespec="seconds")))
+
+    def get_asset_knowledge(self, asset_id: int) -> Optional[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT * FROM asset_knowledge WHERE asset_id=?", (asset_id,)).fetchone()
+        if not r:
+            return None
+        d = dict(r)
+        for k in ("specs", "ppm", "troubleshooting"):
+            try:
+                d[k] = json.loads(d[k] or "[]")
+            except Exception:
+                d[k] = []
+        return d
+
+    def get_asset_knowledge_by_name(self, building_id: str, asset_name: str) -> Optional[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT asset_id FROM asset_knowledge WHERE building_id=? AND asset_name=?",
+                          (building_id, asset_name)).fetchone()
+        return self.get_asset_knowledge(int(r["asset_id"])) if r else None
 
     # ── Scheduled checklists (B2) ─────────────────────────────────────────
     def add_schedule(self, building_id: str, template_id: str, *, label: str = "",
