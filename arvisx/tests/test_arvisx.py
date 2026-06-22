@@ -1086,17 +1086,21 @@ def test_alerts_filtered_and_deduped():
 
 
 def test_api_whatsapp_endpoints_and_role_gate():
-    c = _client()
-    assert "Community Readiness" in c.get("/api/v1/whatsapp/digest").json()["text"]
-    a = c.post("/api/v1/whatsapp/ask", json={"question": "any issues?"}).json()
-    assert a["intent"] == "issues"
-    # action gated by role
-    viewer = c.post("/api/v1/whatsapp/ask", json={"question": "create work order", "role": "viewer"}).json()
-    assert "requires a facility-manager" in viewer["text"]
-    fm = c.post("/api/v1/whatsapp/ask", json={"question": "create work order", "role": "fm"}).json()
-    assert "work order" in fm["text"].lower()
-    al = c.get("/api/v1/whatsapp/alerts").json()
-    assert al["count"] >= 1 and c.get("/api/v1/whatsapp/alerts").json()["count"] == 0   # deduped
+    os.environ["ARVISX_BOT_MODE"] = "residential"          # residential-sensor mode (these are sim-bot tests)
+    try:
+        c = _client()
+        assert "Community Readiness" in c.get("/api/v1/whatsapp/digest").json()["text"]
+        a = c.post("/api/v1/whatsapp/ask", json={"question": "any issues?"}).json()
+        assert a["intent"] == "issues"
+        # action gated by role
+        viewer = c.post("/api/v1/whatsapp/ask", json={"question": "create work order", "role": "viewer"}).json()
+        assert "requires a facility-manager" in viewer["text"]
+        fm = c.post("/api/v1/whatsapp/ask", json={"question": "create work order", "role": "fm"}).json()
+        assert "work order" in fm["text"].lower()
+        al = c.get("/api/v1/whatsapp/alerts").json()
+        assert al["count"] >= 1 and c.get("/api/v1/whatsapp/alerts").json()["count"] == 0   # deduped
+    finally:
+        os.environ.pop("ARVISX_BOT_MODE", None)
 
 
 # ── Phase 15: economic layer ─────────────────────────────────────────────
@@ -1141,13 +1145,17 @@ def test_community_cost_and_message():
 
 
 def test_api_costs_and_money_in_messages():
-    c = _client()
-    cost = c.get("/api/v1/costs").json()
-    assert "monthly_waste" in cost and "exposure_high" in cost
-    ans = c.post("/api/v1/whatsapp/ask", json={"question": "what is this costing us?"}).json()
-    assert ans["intent"] == "cost" and ("costing" in ans["text"].lower() or "cost impact" in ans["text"].lower())
-    al = c.get("/api/v1/whatsapp/alerts").json()
-    assert any("💸" in a["text"] for a in al["alerts"])   # money line on alerts
+    os.environ["ARVISX_BOT_MODE"] = "residential"          # residential-sensor mode (cost/alerts are sim-bot)
+    try:
+        c = _client()
+        cost = c.get("/api/v1/costs").json()
+        assert "monthly_waste" in cost and "exposure_high" in cost
+        ans = c.post("/api/v1/whatsapp/ask", json={"question": "what is this costing us?"}).json()
+        assert ans["intent"] == "cost" and ("costing" in ans["text"].lower() or "cost impact" in ans["text"].lower())
+        al = c.get("/api/v1/whatsapp/alerts").json()
+        assert any("💸" in a["text"] for a in al["alerts"])   # money line on alerts
+    finally:
+        os.environ.pop("ARVISX_BOT_MODE", None)
 
 
 # ── standalone runner ────────────────────────────────────────────────────

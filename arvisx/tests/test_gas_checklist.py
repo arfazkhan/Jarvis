@@ -154,43 +154,51 @@ def _client():
 
 
 def test_api_gas_billing_and_checklist_endpoints():
-    c = _client()
-    # seed meter history straight into the live db (same file the app opened)
-    state = c.app.state.community
-    base = datetime(2026, 6, 1, 1, 0)
-    state.db.log_signal("APT-101", "meter_total_m3", 10.0, ts=base, min_interval_s=0)
-    state.db.log_signal("APT-101", "meter_total_m3", 18.0, ts=base + timedelta(days=20), min_interval_s=0)
+    os.environ["ARVISX_BOT_MODE"] = "residential"          # residential-sensor mode (checklist-prompts are sim-bot)
+    try:
+        c = _client()
+        # seed meter history straight into the live db (same file the app opened)
+        state = c.app.state.community
+        base = datetime(2026, 6, 1, 1, 0)
+        state.db.log_signal("APT-101", "meter_total_m3", 10.0, ts=base, min_interval_s=0)
+        state.db.log_signal("APT-101", "meter_total_m3", 18.0, ts=base + timedelta(days=20), min_interval_s=0)
 
-    stmt = c.get("/api/v1/gas/billing?month=2026-06").json()
-    assert stmt["billable_meters"] == 1
-    csv = c.get("/api/v1/gas/billing?month=2026-06&format=csv")
-    assert csv.status_code == 200 and "APT-101" in csv.text
+        stmt = c.get("/api/v1/gas/billing?month=2026-06").json()
+        assert stmt["billable_meters"] == 1
+        csv = c.get("/api/v1/gas/billing?month=2026-06&format=csv")
+        assert csv.status_code == 200 and "APT-101" in csv.text
 
-    today = c.get("/api/v1/checklist/today").json()
-    assert today["summary"]["auto_total"] >= 8
+        today = c.get("/api/v1/checklist/today").json()
+        assert today["summary"]["auto_total"] >= 8
 
-    # pencil-whip detection over the API
-    ts = datetime.now().isoformat(timespec="seconds")
-    state.db.log_signal("UG-TANK-01", "tank_level_pct", 40.0, min_interval_s=0)
-    bad = c.post("/api/v1/checklist/submit-reading",
-                 json={"asset_id": "UG-TANK-01", "signal": "tank_level_pct",
-                       "value": 75.0, "unit": "%", "claimed_ts": ts, "by": "tech1"}).json()
-    assert bad["verdict"] == "mismatch"
+        # pencil-whip detection over the API
+        ts = datetime.now().isoformat(timespec="seconds")
+        state.db.log_signal("UG-TANK-01", "tank_level_pct", 40.0, min_interval_s=0)
+        bad = c.post("/api/v1/checklist/submit-reading",
+                     json={"asset_id": "UG-TANK-01", "signal": "tank_level_pct",
+                           "value": 75.0, "unit": "%", "claimed_ts": ts, "by": "tech1"}).json()
+        assert bad["verdict"] == "mismatch"
 
-    prompts = c.get("/api/v1/whatsapp/checklist-prompts").json()["prompts"]
-    assert prompts
-    rep = c.post("/api/v1/whatsapp/checklist-reply",
-                 json={"text": f"ok {prompts[0]['item_id']}", "by": "tech1"}).json()
-    assert rep["recorded"] is True
-    log = c.get("/api/v1/checklist/today").json()
-    assert log["summary"]["physical_done"] >= 1
-    assert log["summary"]["flagged_readings"] >= 1
+        prompts = c.get("/api/v1/whatsapp/checklist-prompts").json()["prompts"]
+        assert prompts
+        rep = c.post("/api/v1/whatsapp/checklist-reply",
+                     json={"text": f"ok {prompts[0]['item_id']}", "by": "tech1"}).json()
+        assert rep["recorded"] is True
+        log = c.get("/api/v1/checklist/today").json()
+        assert log["summary"]["physical_done"] >= 1
+        assert log["summary"]["flagged_readings"] >= 1
+    finally:
+        os.environ.pop("ARVISX_BOT_MODE", None)
 
 
 def test_api_whatsapp_gas_intent():
-    c = _client()
-    r = c.post("/api/v1/whatsapp/ask", json={"question": "how is the cooking gas?"}).json()
-    assert r["intent"] == "gas" and "Gas" in r["text"]
+    os.environ["ARVISX_BOT_MODE"] = "residential"          # residential-sensor mode (gas answer is sim-bot)
+    try:
+        c = _client()
+        r = c.post("/api/v1/whatsapp/ask", json={"question": "how is the cooking gas?"}).json()
+        assert r["intent"] == "gas" and "Gas" in r["text"]
+    finally:
+        os.environ.pop("ARVISX_BOT_MODE", None)
 
 
 if __name__ == "__main__":

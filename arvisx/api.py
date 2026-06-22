@@ -52,6 +52,17 @@ def _jsonable(obj: Any) -> Any:
     return obj
 
 
+def _checklist_bot_mode() -> bool:
+    """True = CHECKLIST deployment (default): the WhatsApp bot answers from checklist data,
+    suppresses the residential-sensor telemetry alerts/prompts, and sends the checklist digest.
+    False = residential-sensor bot — when ARVISX_SOURCE=mqtt OR ARVISX_BOT_MODE=residential.
+    Note this is the BOT-CONTENT mode, decoupled from the ingest source (mqtt boots the broker;
+    bot mode does not), so residential bot behavior can be exercised on sim data without MQTT."""
+    if os.environ.get("ARVISX_SOURCE", "sim").lower() == "mqtt":
+        return False
+    return os.environ.get("ARVISX_BOT_MODE", "checklist").lower() != "residential"
+
+
 class _State:
     """Community state. Default = in-memory simulator. With ARVISX_SOURCE=mqtt it is
     a live AssetStore fed by the MQTT ingest adapter (broker on ARVISX_MQTT_BROKER)."""
@@ -778,7 +789,7 @@ def create_app():
     async def wa_digest(building: str = "one-anthem"):
         # Checklist deployment (no live sensors): the daily digest is the CHECKLIST summary,
         # not the residential simulator brief (pool/fire/energy readiness).
-        if os.environ.get("ARVISX_SOURCE", "sim").lower() != "mqtt":
+        if _checklist_bot_mode():
             from arvisx.checklist_forms import manager_digest
             from arvisx import checklist_intel as ci
             runs = (await forms_today(building, _today_str()))["runs"]
@@ -856,9 +867,10 @@ def create_app():
                 openwos = [w for w in state.wo_store.all() if w.status.value in ("open", "acknowledged", "in_progress")]
                 ids = ", ".join(w.wo_id for w in openwos[:6])
                 res["text"] = f"✅ {len(openwos)} open work order(s): {ids or '(none)'}"
-        else:
-            # General question → grounded LLM Q&A over the CHECKLIST data (rounds, issues,
-            # PPM, assets), crisp + tool-grounded. Falls back to deterministic if no LLM.
+        elif _checklist_bot_mode():
+            # CHECKLIST deployment: a general question is answered from the CHECKLIST data
+            # (rounds, issues, PPM, assets), grounded + crisp, deterministic fallback if no
+            # LLM. An mqtt (residential-sensor) deployment keeps the residential answers above.
             try:
                 from arvisx.checklist_skills import run_building_qa
                 from arvisx.llm_client import make_llm
@@ -884,7 +896,7 @@ def create_app():
         # Checklist-only deployments (no live sensors) must NOT broadcast the simulator's
         # telemetry alerts (pool/fire/energy/ghost). Only checklist flows push there —
         # assignment DMs, reminders, issue alerts, digest, handover (separate endpoints).
-        if os.environ.get("ARVISX_SOURCE", "sim").lower() != "mqtt":
+        if _checklist_bot_mode():
             return {"count": 0, "alerts": []}
         from arvisx.messaging import pending_alerts
         bl = state.baselines if state.store is not None else None
@@ -992,7 +1004,7 @@ def create_app():
         """Physical-check prompts still pending today — the bot sends these to the
         technician ('pump room visual check? reply OK / photo'). Legacy residential
         (sensor) feature; off for checklist-only deployments (templates drive the field app)."""
-        if os.environ.get("ARVISX_SOURCE", "sim").lower() != "mqtt":
+        if _checklist_bot_mode():
             return {"prompts": []}
         from arvisx.checklist import pending_prompts
         return {"prompts": pending_prompts(state.db)}
