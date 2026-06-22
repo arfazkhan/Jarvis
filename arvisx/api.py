@@ -792,8 +792,15 @@ def create_app():
         from arvisx.messaging import answer
         p = payload or {}
         q = str(p.get("question", "")).strip()
-        role = str(p.get("role", "viewer")).lower()
-        by = str(p.get("by", "")).strip()        # sender number (resident requests)
+        by = str(p.get("by", "")).strip()        # sender WhatsApp number
+        building = str(p.get("building", "one-anthem")).strip() or "one-anthem"
+        claimed = str(p.get("role", "viewer")).lower()
+        # A0: backend resolves WHO is texting. When the number is KNOWN (roster), that is
+        # authoritative; an UNKNOWN number falls back to the bot-claimed role for Q&A voice
+        # only — it can never trigger manager actions / resident tickets (gated on kind below).
+        sender = _resolve_sender(by, building) if by else {
+            "role": claimed, "kind": "claimed", "name": "", "number": ""}
+        role = sender["role"] if sender.get("kind") in ("manager", "technician", "resident") else claimed
         if not q:
             raise HTTPException(400, "provide 'question'")
         # ── Guardrails: length cap + per-sender rate limit (anti-abuse / LLM cost-burn) ──
@@ -810,6 +817,20 @@ def create_app():
                         "please try again later."}
             hist.append(now_t)
             state._ask_rate[by] = hist
+        # A2: managers can RUN actions from WhatsApp (assign / open / start / close / sign-off).
+        # Deterministic command parser; only a BACKEND-resolved manager number (not a claimed
+        # role) may act. Short-circuits before Q&A.
+        if sender.get("kind") == "manager" and by:
+            try:
+                cmd = _handle_manager_command(q, sender, building)
+            except Exception as e:
+                logger.warning(f"[wa_ask] manager command failed: {e}")
+                cmd = "Couldn't run that — try 'help' for commands."
+            if cmd is not None:
+                return {"intent": "action", "text": cmd, "source": "command"}
+        # A3: a pre-registered (backend-resolved) resident's message → common-area ticket.
+        if sender.get("kind") == "resident":
+            return _handle_resident_message(q, sender, building)
         # Building phase (learning vs operational) drives the situation-aware answers.
         try:
             blds = state.commissioner.list()
@@ -834,7 +855,6 @@ def create_app():
         else:
             # General question → grounded LLM Q&A over the CHECKLIST data (rounds, issues,
             # PPM, assets), crisp + tool-grounded. Falls back to deterministic if no LLM.
-            building = str(p.get("building", "one-anthem")).strip() or "one-anthem"
             try:
                 from arvisx.checklist_skills import run_building_qa
                 from arvisx.llm_client import make_llm
@@ -1033,6 +1053,223 @@ def create_app():
         txt = (f"⚠️ Checklist flagged an issue:\n*{label}*: {value}\n"
                "Open the app to assign + resolve.")
         state.db.enqueue_notification(building, txt, to_number="", kind="issue")   # ops broadcast
+
+    # ── A0: WhatsApp sender identity & role map ──────────────────────────
+    def _norm_phone(num: str) -> str:
+        """Digits only — strips +, spaces, and any '@s.whatsapp.net' suffix."""
+        if not num:
+            return ""
+        return "".join(ch for ch in str(num).split("@")[0] if ch.isdigit())
+
+    def _manager_numbers() -> List[str]:
+        """Manager/owner WhatsApp numbers that receive alerts + may run actions.
+        OWNER_NUMBER + optional ARVISX_MANAGER_NUMBERS (comma-separated)."""
+        raw = [os.environ.get("OWNER_NUMBER", "")] + os.environ.get("ARVISX_MANAGER_NUMBERS", "").split(",")
+        out, seen = [], set()
+        for n in (_norm_phone(x) for x in raw):
+            if n and n not in seen:
+                seen.add(n); out.append(n)
+        return out
+
+    def _resolve_sender(by: str, building: str = "one-anthem") -> Dict[str, Any]:
+        """Resolve an incoming WhatsApp number → AUTHORITATIVE identity+role (backend
+        roster, independent of what the bot claims). Roles: owner (manager — full ops +
+        actions) · technician (field; own round/issue DMs) · resident (common-area tickets
+        only, A3) · viewer (unknown number, read-only Q&A)."""
+        num = _norm_phone(by)
+        if not num:
+            return {"role": "viewer", "kind": "unknown", "name": "", "number": ""}
+        if num in _manager_numbers():
+            return {"role": "owner", "kind": "manager", "name": "Manager", "number": num}
+        for t in state.db.list_technicians(building, active_only=True):
+            if _norm_phone(t.get("phone", "")) == num:
+                return {"role": "technician", "kind": "technician", "name": t["name"],
+                        "number": num, "technician": t}
+        rb = getattr(state.db, "resident_by_phone", None)   # present once A3 lands
+        if rb:
+            res = rb(building, num)
+            if res:
+                return {"role": "resident", "kind": "resident", "name": res.get("name", ""),
+                        "number": num, "unit": res.get("unit", ""), "resident": res}
+        return {"role": "viewer", "kind": "unknown", "name": "", "number": num}
+
+    # ── A1: issue-lifecycle WhatsApp alerts (manager + assigned technician) ─
+    def _notify_issue_event(iss: Dict[str, Any], event: str, by: str = "", note: str = "") -> None:
+        """DM the manager(s) AND the assigned technician on issue open + each status change.
+        Grounded: only real roster phones; console link for the manager."""
+        if not iss:
+            return
+        building = iss.get("building_id", "one-anthem")
+        bits = [b for b in (iss.get("asset") or "", iss.get("severity") or "") if b]
+        meta = (" — " + " · ".join(bits)) if bits else ""
+        assignee = iss.get("assignee") or ""
+        line = f"🔧 Issue #{iss['id']}: {iss.get('title', 'issue')}{meta}\n{event}"
+        if assignee and "assign" not in event.lower():
+            line += f" · assigned: {assignee}"
+        if note:
+            line += f"\nNote: {note}"
+        clink = f"\nOpen: {_PUBLIC_URL}/issues" if _PUBLIC_URL else ""
+        seen = set()
+        for m in _manager_numbers():
+            state.db.enqueue_notification(building, line + clink, to_number=m, kind="issue_lifecycle")
+            seen.add(m)
+        if assignee:
+            tech = state.db.get_technician(building, assignee)
+            ph = _norm_phone((tech or {}).get("phone", ""))
+            if ph and ph not in seen:
+                state.db.enqueue_notification(building, line, to_number=ph, kind="issue_lifecycle")
+
+    # ── A2: manager actions over WhatsApp (deterministic, owner/fm only) ──
+    def _shift_num(tok: str):
+        return {"i": 1, "ii": 2, "iii": 3, "1": 1, "2": 2, "3": 3,
+                "one": 1, "two": 2, "three": 3}.get(tok.strip().lower())
+
+    def _find_today_run(building: str, tok: str):
+        n = _shift_num(tok)
+        if not n:
+            return None
+        for r in state.db.checklist_runs_for(building, _today_str()):
+            if str(r["template_id"]).rstrip().endswith(f"-{n}"):
+                return r
+        return None
+
+    def _run_name(run: Dict[str, Any]) -> str:
+        from arvisx.checklist_forms import get_template
+        t = get_template(run["template_id"], run["building_id"])
+        return t.name if t else run["template_id"]
+
+    def _match_technician(building: str, q: str):
+        q = q.strip().lower()
+        techs = state.db.list_technicians(building, active_only=True)
+        for t in techs:                                   # exact name
+            if t["name"].lower() == q:
+                return t["name"]
+        for t in techs:                                   # prefix / contains
+            if t["name"].lower().startswith(q) or q in t["name"].lower():
+                return t["name"]
+        return None
+
+    def _issue_action(iid: int, status: str, actor: str, building: str) -> str:
+        iss = state.db.get_issue(iid)
+        if not iss or iss.get("building_id") != building:
+            return f"No issue #{iid} found for this building."
+        state.db.update_issue(iid, status=status, by=actor, note="via WhatsApp")
+        fresh = state.db.get_issue(iid)
+        label = {"in_progress": "Work started", "resolved": "Resolved ✅"}.get(status, status)
+        _notify_issue_event(fresh, label, by=actor)
+        return f"✅ Issue #{iid} → {label}."
+
+    def _do_signoff(rid: int, actor: str) -> str:
+        state.db.add_checklist_signoff(rid, "manager", by_user=actor)
+        return f"✅ Signed off {_run_name(state.db.get_checklist_run(rid))} as manager."
+
+    def _handle_manager_command(text: str, sender: Dict[str, Any], building: str):
+        """Map a manager's WhatsApp message → a real action. Returns a reply string when
+        `text` is a recognised command, else None (falls through to Q&A). Destructive
+        actions (close issue, sign-off) require a 'YES' confirm (5-min window)."""
+        import re as _re, time as _t
+        low = text.strip().lower()
+        if not hasattr(state, "_wa_pending"):
+            state._wa_pending = {}
+        num = sender.get("number", "")
+        actor = sender.get("name") or "manager"
+
+        # resolve / cancel a pending destructive action
+        pend = state._wa_pending.get(num)
+        if pend and low in ("yes", "y", "confirm", "ok", "okay"):
+            state._wa_pending.pop(num, None)
+            if _t.time() - pend["ts"] > 300:
+                return "That confirmation expired — please re-send the command."
+            return pend["run"]()
+        if pend and low in ("no", "cancel", "stop"):
+            state._wa_pending.pop(num, None)
+            return "Cancelled."
+
+        m = _re.match(r"assign\s+(?:shift\s+)?(\w+)\s+to\s+(.+)$", low)
+        if m:
+            run = _find_today_run(building, m.group(1))
+            if not run:
+                return f"No shift '{m.group(1)}' found for today."
+            name = _match_technician(building, m.group(2))
+            if not name:
+                return f"No active technician matches '{m.group(2).strip()}'."
+            state.db.assign_checklist_run(run["id"], name)
+            state.db.set_run_reminded(run["id"], 0)
+            _notify_assignment(run["id"])
+            return f"✅ Assigned {_run_name(run)} to {name} — they've been notified."
+
+        if _re.match(r"open\s+(today|rounds|today'?s\s+rounds)", low):
+            from arvisx import checklist_intel as ci
+            opened = ci.ensure_daily_runs(state.db, building, _today_str())
+            return f"✅ Today's rounds are open ({len(opened)} created). Assign in the app or here."
+
+        m = _re.match(r"(?:start|in[-\s]?progress)\s+issue\s+#?(\d+)", low)
+        if m:
+            return _issue_action(int(m.group(1)), "in_progress", actor, building)
+
+        m = _re.match(r"(?:close|resolve)\s+issue\s+#?(\d+)", low)
+        if m:
+            iid = int(m.group(1)); iss = state.db.get_issue(iid)
+            if not iss or iss.get("building_id") != building:
+                return f"No issue #{iid} found for this building."
+            state._wa_pending[num] = {"ts": _t.time(),
+                                      "run": (lambda i=iid, a=actor: _issue_action(i, "resolved", a, building))}
+            return f"⚠️ Reply YES to confirm closing issue #{iid}: {iss.get('title', '')}."
+
+        m = _re.match(r"sign[-\s]?off\s+(?:shift\s+)?(\w+)", low)
+        if m:
+            run = _find_today_run(building, m.group(1))
+            if not run:
+                return f"No shift '{m.group(1)}' found for today."
+            if run["status"] != "submitted":
+                return f"{_run_name(run)} isn't submitted yet — only a submitted round can be signed off."
+            state._wa_pending[num] = {"ts": _t.time(),
+                                      "run": (lambda rid=run["id"], a=actor: _do_signoff(rid, a))}
+            return f"⚠️ Reply YES to confirm signing off {_run_name(run)}."
+
+        if low in ("help", "commands", "?", "menu"):
+            return ("Manager commands:\n• assign shift II to <name>\n• open today\n"
+                    "• start issue <n>\n• close issue <n>\n• sign off shift I")
+        return None
+
+    # ── A3: resident common-area tickets over WhatsApp ───────────────────
+    def _resident_category(text: str) -> str:
+        import re as _re
+        t = text.lower()
+        for label, pat in (("Lift/Elevator", r"lift|elevator"),
+                           ("Water", r"water|tap|plumb|leak|drain"),
+                           ("Electricity", r"power|electric|light|outage"),
+                           ("Cleaning", r"clean|garbage|trash|waste|dirty|smell"),
+                           ("Security", r"security|guard|gate|intrud|theft"),
+                           ("Parking", r"parking|car ?park|vehicle"),
+                           ("Pool", r"pool|swim"),
+                           ("Fire/Safety", r"fire|smoke|alarm")):
+            if _re.search(pat, t):
+                return label
+        return "Common area"
+
+    def _handle_resident_message(text: str, sender: Dict[str, Any], building: str) -> Dict[str, Any]:
+        """A pre-registered resident reports a common-area problem → logged as an issue,
+        manager notified, resident gets a reference. Greetings get instructions. Residents
+        cannot see equipment status (no sensors) — this channel is for raising tickets."""
+        low = text.strip().lower()
+        name = sender.get("name") or "Resident"
+        unit = sender.get("unit") or ""
+        who = name + (f" (Unit {unit})" if unit else "")
+        if low in ("hi", "hello", "hey", "help", "menu", "?", "start", "salam") or len(low) < 4:
+            return {"intent": "resident", "source": "resident", "text":
+                    f"Hi {name}! 👋 Describe any *common-area* problem (e.g. 'Lift not working in "
+                    "B block', 'No water in lobby washroom') and I'll log it for the building team.\n"
+                    "For emergencies, please contact the facility desk directly."}
+        cat = _resident_category(text)
+        title = text.strip()
+        title = (title[:80] + "…") if len(title) > 80 else title
+        iid = state.db.create_issue(building, title, detail=f"Reported by {who} via WhatsApp",
+                                    asset=cat, severity="issue", source="resident", raised_by=who)
+        _notify_issue_event(state.db.get_issue(iid), f"Opened — resident report ({cat})", by=who)
+        return {"intent": "resident", "source": "resident", "text":
+                f"✅ Logged as ticket #{iid} ({cat}) — the building team has been notified. Thank you!\n"
+                "For emergencies, please contact the facility desk directly."}
 
     def _run_view(rid: int) -> Dict[str, Any]:
         from arvisx.checklist_forms import get_template, run_summary
@@ -1289,6 +1526,28 @@ def create_app():
         state.db.set_technician_active(tech_id, False)
         return {"id": tech_id, "active": False}
 
+    # ── Residents roster (A3) ────────────────────────────────────────────
+    @app.get("/api/v1/residents")
+    async def residents_list(building: str = "one-anthem", all: bool = False):
+        return {"building": building,
+                "residents": state.db.list_residents(building, active_only=not all)}
+
+    @app.post("/api/v1/residents")
+    async def resident_add(payload: Dict[str, Any] = Body(...)):
+        p = payload or {}
+        name = str(p.get("name", "")).strip()
+        phone = str(p.get("phone", "")).strip()
+        if not name or not phone:
+            raise HTTPException(400, "provide 'name' and 'phone'")
+        building = str(p.get("building", "one-anthem")).strip() or "one-anthem"
+        rid = state.db.add_resident(building, name, phone, unit=str(p.get("unit", "")).strip())
+        return {"id": rid, "name": name}
+
+    @app.post("/api/v1/residents/{resident_id}/deactivate")
+    async def resident_deactivate(resident_id: int):
+        state.db.set_resident_active(resident_id, False)
+        return {"id": resident_id, "active": False}
+
     @app.get("/api/v1/whatsapp/notifications")
     async def wa_notifications():
         """Pending outbound notifications for the bot to deliver. to_number set = DM that
@@ -1385,7 +1644,9 @@ def create_app():
             severity=str(p.get("severity", "issue")), source="manual",
             raised_by=str(p.get("by", "")), priority=str(p.get("priority", "")),
             vendor=str(p.get("vendor", "")))
-        return _jsonable(state.db.get_issue(iid))
+        iss = state.db.get_issue(iid)
+        _notify_issue_event(iss, "Opened", by=str(p.get("by", "")), note=str(p.get("detail", "")))
+        return _jsonable(iss)
 
     @app.post("/api/v1/issues/{issue_id}/transition")
     async def issue_transition(issue_id: int, payload: Dict[str, Any] = Body(...)):
@@ -1401,6 +1662,8 @@ def create_app():
                 raise HTTPException(400, f"status must be one of {ISSUE_STATUSES}")
             if not valid_issue_transition(iss["status"], status):
                 raise HTTPException(409, f"cannot go {iss['status']} → {status}")
+        old_status = iss["status"]
+        old_assignee = iss.get("assignee") or ""
         state.db.update_issue(issue_id, status=status,
                               assignee=(str(assignee) if assignee is not None else None),
                               by=str(p.get("by", "")), note=str(p.get("note", "")))
@@ -1410,7 +1673,19 @@ def create_app():
                 issue_id,
                 priority=(str(p["priority"]) if p.get("priority") is not None else None),
                 vendor=(str(p["vendor"]) if p.get("vendor") is not None else None))
-        return _jsonable(state.db.get_issue(issue_id))
+        fresh = state.db.get_issue(issue_id)
+        # A1: notify manager + assigned tech on assignment / status change.
+        events = []
+        new_assignee = str(assignee) if assignee is not None else old_assignee
+        if assignee is not None and new_assignee != old_assignee:
+            events.append(f"Assigned to {new_assignee or 'unassigned'}")
+        if status and status != old_status:
+            events.append({"assigned": "Assigned", "in_progress": "Work started",
+                           "resolved": "Resolved ✅", "open": "Reopened"}.get(status, status))
+        if events:
+            _notify_issue_event(fresh, " · ".join(events),
+                                by=str(p.get("by", "")), note=str(p.get("note", "")))
+        return _jsonable(fresh)
 
     @app.post("/api/v1/issues/{issue_id}/visited")
     async def issue_vendor_visited(issue_id: int, payload: Dict[str, Any] = Body(default={})):

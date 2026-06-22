@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Users, Wrench, CalendarCheck, ShieldCheck, Plus, Power, KeyRound, Check, ChevronRight, ClipboardList, Trash2, Copy, Box } from 'lucide-react'
+import { Users, Wrench, CalendarCheck, ShieldCheck, Plus, Power, KeyRound, Check, ChevronRight, ClipboardList, Trash2, Copy, Box, Home } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
 import { Pill, Spinner, Empty } from '../components/ui'
 import { Input, Select } from './Issues'
@@ -15,6 +15,7 @@ const STEPS = [
   { key: 'checklists', label: 'Checklists', icon: ClipboardList },
   { key: 'assets', label: 'Assets', icon: Box },
   { key: 'roster', label: 'Roster & PINs', icon: Users },
+  { key: 'residents', label: 'Residents', icon: Home },
   { key: 'vendors', label: 'Vendors', icon: Wrench },
   { key: 'ppm', label: 'PPM schedules', icon: CalendarCheck },
   { key: 'managers', label: 'Managers', icon: ShieldCheck },
@@ -52,6 +53,7 @@ export default function Setup() {
         {step === 'checklists' && <ChecklistStep building={building} />}
         {step === 'assets' && <AssetStep building={building} />}
         {step === 'roster' && <RosterStep building={building} />}
+        {step === 'residents' && <ResidentStep building={building} />}
         {step === 'vendors' && <VendorStep building={building} />}
         {step === 'ppm' && <PpmStep building={building} />}
         {step === 'managers' && <ManagerStep />}
@@ -236,6 +238,49 @@ function RosterStep({ building }) {
 }
 
 // ── Vendors ─────────────────────────────────────────────────────────────────
+function ResidentStep({ building }) {
+  const [key, setKey] = useState(0)
+  const residents = useAsync(() => api.residents(building), [building, key])
+  const [f, setF] = useState({ name: '', phone: '', unit: '' })
+  const [busy, setBusy] = useState(false)
+  const refresh = () => setKey((k) => k + 1)
+
+  async function add() {
+    if (!f.name.trim() || !f.phone.trim()) return
+    setBusy(true)
+    try {
+      await api.addResident({ building, name: f.name.trim(), phone: f.phone.trim(), unit: f.unit.trim() })
+      setF({ name: '', phone: '', unit: '' })
+      refresh()
+    } catch (e) { err(e) } finally { setBusy(false) }
+  }
+
+  return (
+    <Section title="Residents" hint="Pre-registered residents can flag common-area issues via WhatsApp (e.g. 'Lift not working in B block') — each becomes a ticket the team is notified about. Only numbers listed here can raise tickets.">
+      <AddBar onAdd={add} busy={busy} label="Add resident">
+        <Field label="Name"><Input value={f.name} onChange={(v) => setF({ ...f, name: v })} /></Field>
+        <Field label="WhatsApp (no +)"><Input value={f.phone} onChange={(v) => setF({ ...f, phone: v })} /></Field>
+        <Field label="Unit"><Input value={f.unit} onChange={(v) => setF({ ...f, unit: v })} /></Field>
+      </AddBar>
+      {residents.loading ? <Spinner /> : (
+        <div className="flex flex-col gap-2">
+          {(residents.data?.residents || []).map((r) => (
+            <Row key={r.id}>
+              <div className="flex-1">
+                <div className="text-sm text-text">{r.name}{r.unit ? ` · ${r.unit}` : ''}</div>
+                <div className="text-xs text-text-faint">{r.phone || 'no phone'}</div>
+              </div>
+              <Pill tone={r.active ? 'green' : 'neutral'}>{r.active ? 'active' : 'inactive'}</Pill>
+              {r.active && <Deact onClick={async () => { await api.deactivateResident(r.id); refresh() }} />}
+            </Row>
+          ))}
+          {!residents.data?.residents?.length && <Empty>No residents yet.</Empty>}
+        </div>
+      )}
+    </Section>
+  )
+}
+
 function VendorStep({ building }) {
   const [key, setKey] = useState(0)
   const vendors = useAsync(() => api.vendorsList(building), [building, key])

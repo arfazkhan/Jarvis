@@ -150,6 +150,11 @@ export const api = {
   addTechnician: (body) => api.post('/technicians', body),
   deactivateTechnician: (id) => api.post(`/technicians/${id}/deactivate`),
 
+  // residents (A3 — pre-registered, may raise common-area tickets via WhatsApp)
+  residents: (building, all) => api.get('/residents', { building, all }),
+  addResident: (body) => api.post('/residents', body),
+  deactivateResident: (id) => api.post(`/residents/${id}/deactivate`),
+
   // vendors
   vendorsList: (building, all) => api.get('/vendors', { building, all }),
   addVendor: (body) => api.post('/vendors', body),

@@ -78,6 +78,12 @@ class ArvisxDb:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, ts TEXT,
                 by_user TEXT, text TEXT, status TEXT);
             CREATE INDEX IF NOT EXISTS ix_resident_req ON resident_requests(building_id, status, ts);
+            -- Resident roster (A3): pre-registered residents who may raise common-area
+            -- tickets via WhatsApp. Identity keyed by phone; unit for accountability.
+            CREATE TABLE IF NOT EXISTS residents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, unit TEXT,
+                name TEXT, phone TEXT, active INTEGER, created_at TEXT);
+            CREATE INDEX IF NOT EXISTS ix_residents ON residents(building_id, active);
             -- Phase-0 digitized checklists: a run is one filled sheet (shift+date, or
             -- a PPM asset-block); entries are per-item (server-timestamped); signoffs
             -- are the technician→supervisor→…→president chain.
@@ -479,6 +485,42 @@ class ArvisxDb:
     def set_technician_pin(self, tech_id: int, pin_hash: str) -> None:
         with self._lock, self._conn() as c:
             c.execute("UPDATE technicians SET pin_hash=? WHERE id=?", (pin_hash, tech_id))
+
+    # ── Resident roster (A3) — pre-registered residents who may raise tickets ─
+    def add_resident(self, building_id: str, name: str, phone: str, unit: str = "") -> int:
+        digits = "".join(ch for ch in str(phone).split("@")[0] if ch.isdigit())
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT id FROM residents WHERE building_id=? AND phone=?",
+                          (building_id, digits)).fetchone()
+            if r:
+                c.execute("UPDATE residents SET name=?, unit=?, active=1 WHERE id=?",
+                          (name, unit, r["id"]))
+                return int(r["id"])
+            cur = c.execute("INSERT INTO residents (building_id, unit, name, phone, active, created_at)"
+                            " VALUES (?,?,?,?,1,?)",
+                            (building_id, unit, name, digits, datetime.now().isoformat(timespec="seconds")))
+            return int(cur.lastrowid)
+
+    def list_residents(self, building_id: str, active_only: bool = True) -> List[Dict[str, Any]]:
+        q = "SELECT * FROM residents WHERE building_id=?"
+        if active_only:
+            q += " AND active=1"
+        q += " ORDER BY unit, name"
+        with self._lock, self._conn() as c:
+            return [dict(r) for r in c.execute(q, (building_id,)).fetchall()]
+
+    def resident_by_phone(self, building_id: str, phone: str) -> Optional[Dict[str, Any]]:
+        digits = "".join(ch for ch in str(phone).split("@")[0] if ch.isdigit())
+        if not digits:
+            return None
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT * FROM residents WHERE building_id=? AND phone=? AND active=1",
+                          (building_id, digits)).fetchone()
+            return dict(r) if r else None
+
+    def set_resident_active(self, resident_id: int, active: bool) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE residents SET active=? WHERE id=?", (1 if active else 0, resident_id))
 
     # ── Outbound WhatsApp notification queue (bot polls + delivers + acks) ─
     def enqueue_notification(self, building_id: str, text: str, to_number: str = "",
