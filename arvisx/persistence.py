@@ -104,6 +104,13 @@ class ArvisxDb:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, to_number TEXT,
                 kind TEXT, text TEXT, status TEXT, created_at TEXT);
             CREATE INDEX IF NOT EXISTS ix_notif ON notifications(status, id);
+            -- Usage + cost metrics: WhatsApp messages (in/out) + LLM calls (tokens/cost).
+            -- One row per event; the admin panel aggregates over a window.
+            CREATE TABLE IF NOT EXISTS usage_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, building_id TEXT, kind TEXT,
+                channel TEXT, model TEXT, prompt_tokens INTEGER, completion_tokens INTEGER,
+                n INTEGER, cost REAL);
+            CREATE INDEX IF NOT EXISTS ix_usage ON usage_events(ts, kind);
             -- PPM schedule per asset: date-based (interval_days) and/or condition-based
             -- (run_hours_limit). Phase-S — drives the PPM planner + compliance.
             CREATE TABLE IF NOT EXISTS ppm_schedule (
@@ -650,6 +657,67 @@ class ArvisxDb:
         with self._lock, self._conn() as c:
             c.executemany("UPDATE notifications SET status='sent' WHERE id=?",
                           [(int(i),) for i in ids])
+
+    # ── Usage + cost metrics (WhatsApp + LLM) ─────────────────────────────
+    def log_usage(self, building_id: str, kind: str, *, channel: str = "", model: str = "",
+                  prompt_tokens: int = 0, completion_tokens: int = 0, n: int = 1,
+                  cost: float = 0.0) -> None:
+        with self._lock, self._conn() as c:
+            c.execute(
+                "INSERT INTO usage_events (ts, building_id, kind, channel, model, prompt_tokens,"
+                " completion_tokens, n, cost) VALUES (?,?,?,?,?,?,?,?,?)",
+                (datetime.now().isoformat(timespec="seconds"), building_id, kind, channel, model,
+                 int(prompt_tokens or 0), int(completion_tokens or 0), int(n or 0), float(cost or 0.0)))
+
+    def usage_summary(self, since_iso: str, building_id: Optional[str] = None) -> Dict[str, Any]:
+        q = ("SELECT kind, channel, model, SUM(n) n, SUM(prompt_tokens) pin,"
+             " SUM(completion_tokens) pout, SUM(cost) cost FROM usage_events WHERE ts>=?")
+        args: List[Any] = [since_iso]
+        if building_id:
+            q += " AND building_id=?"; args.append(building_id)
+        q += " GROUP BY kind, channel, model"
+        with self._lock, self._conn() as c:
+            rows = [dict(r) for r in c.execute(q, tuple(args)).fetchall()]
+        wa_in = sum(r["n"] for r in rows if r["kind"] == "whatsapp_in")
+        wa_out = sum(r["n"] for r in rows if r["kind"] == "whatsapp_out")
+        wa_cost = sum(r["cost"] for r in rows if (r["kind"] or "").startswith("whatsapp"))
+        llm = [r for r in rows if r["kind"] == "llm"]
+        calls = sum(r["n"] for r in llm)
+        pin = sum(r["pin"] for r in llm); pout = sum(r["pout"] for r in llm)
+        llm_cost = sum(r["cost"] for r in llm)
+        by_channel: Dict[str, Any] = {}
+        for r in llm:
+            ch = by_channel.setdefault(r["channel"] or "?",
+                                       {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cost": 0.0})
+            ch["calls"] += r["n"]; ch["prompt_tokens"] += r["pin"]
+            ch["completion_tokens"] += r["pout"]; ch["cost"] = round(ch["cost"] + r["cost"], 6)
+        return {
+            "whatsapp": {"in": wa_in, "out": wa_out, "total": wa_in + wa_out, "cost": round(wa_cost, 4)},
+            "llm": {"calls": calls, "prompt_tokens": pin, "completion_tokens": pout,
+                    "total_tokens": pin + pout, "avg_context": (round(pin / calls) if calls else 0),
+                    "cost": round(llm_cost, 4), "model": (llm[0]["model"] if llm else ""),
+                    "by_channel": by_channel},
+            "total_cost": round(wa_cost + llm_cost, 4),
+        }
+
+    def usage_daily(self, since_iso: str, building_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        q = ("SELECT substr(ts,1,10) d, kind, SUM(n) n, SUM(prompt_tokens+completion_tokens) tok,"
+             " SUM(cost) cost FROM usage_events WHERE ts>=?")
+        args: List[Any] = [since_iso]
+        if building_id:
+            q += " AND building_id=?"; args.append(building_id)
+        q += " GROUP BY d, kind ORDER BY d"
+        days: Dict[str, Any] = {}
+        with self._lock, self._conn() as c:
+            for r in c.execute(q, tuple(args)).fetchall():
+                d = days.setdefault(r["d"], {"date": r["d"], "wa_in": 0, "wa_out": 0,
+                                             "llm_calls": 0, "llm_tokens": 0, "cost": 0.0})
+                if r["kind"] == "whatsapp_in": d["wa_in"] += r["n"]
+                elif r["kind"] == "whatsapp_out": d["wa_out"] += r["n"]
+                elif r["kind"] == "llm":
+                    d["llm_calls"] += r["n"]; d["llm_tokens"] += (r["tok"] or 0)
+                d["cost"] += r["cost"]
+        return [{**v, "cost": round(v["cost"], 4)} for v in days.values()]
 
     # ── PPM schedule (Phase S) ───────────────────────────────────────────
     def set_ppm_schedule(self, building_id: str, asset: str, interval_days: int = None,

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   QrCode, BarChart3, LogIn, LogOut, Lock, User, Loader2, CheckCircle2,
   RefreshCw, ClipboardList, TriangleAlert, CalendarCheck, Users,
+  DollarSign, MessageSquare, Cpu, ArrowDownLeft, ArrowUpRight,
 } from 'lucide-react'
 import { AllGudLogo } from '../components/Logo'
 import { Card, Pill, Spinner } from '../components/ui'
@@ -40,11 +41,14 @@ export default function AdminApp() {
 
       <nav className="flex gap-1 px-8 pt-4">
         <Tab active={tab === 'analytics'} onClick={() => setTab('analytics')} icon={BarChart3}>Analytics</Tab>
+        <Tab active={tab === 'usage'} onClick={() => setTab('usage')} icon={DollarSign}>Usage & Cost</Tab>
         <Tab active={tab === 'bot'} onClick={() => setTab('bot')} icon={QrCode}>WhatsApp Bot</Tab>
       </nav>
 
       <main className="px-8 py-6">
-        {tab === 'analytics' ? <Analytics /> : <BotPairing />}
+        {tab === 'analytics' && <Analytics />}
+        {tab === 'usage' && <Usage />}
+        {tab === 'bot' && <BotPairing />}
       </main>
     </div>
   )
@@ -178,6 +182,111 @@ function Analytics() {
   )
 }
 function tone(pct) { return pct >= 80 ? 'green' : pct >= 50 ? 'amber' : 'red' }
+
+// ── Usage & Cost (WhatsApp + LLM) ─────────────────────────────────────────────
+function Usage() {
+  const [building, setBuilding] = useState('one-anthem')
+  const [days, setDays] = useState(30)
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [err, setErr] = useState(null)
+
+  const load = useCallback(() => {
+    setLoading(true)
+    api.adminUsage(building, days)
+      .then((d) => { setData(d); setErr(null) })
+      .catch((e) => setErr(e))
+      .finally(() => setLoading(false))
+  }, [building, days])
+  useEffect(() => load(), [load])
+
+  if (loading) return <Spinner />
+  if (err) return <div className="text-red text-sm">{err.message}</div>
+  if (!data) return null
+  const { summary, daily, currency } = data
+  const wa = summary.whatsapp, llm = summary.llm
+  const money = (n) => `${currency} ${Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })}`
+  const num = (n) => Number(n || 0).toLocaleString()
+
+  return (
+    <div className="max-w-5xl">
+      <div className="flex items-center gap-3 mb-5">
+        <input value={building} onChange={(e) => setBuilding(e.target.value)} className="bg-surface border border-border rounded-lg px-3 py-2 text-sm text-text" />
+        <select value={days} onChange={(e) => setDays(Number(e.target.value))} className="bg-surface border border-border rounded-lg px-3 py-2 text-sm text-text">
+          {[7, 14, 30, 90].map((d) => <option key={d} value={d}>last {d} days</option>)}
+        </select>
+        <button onClick={load} className="flex items-center gap-1 text-sm text-gold"><RefreshCw className="w-4 h-4" /> Refresh</button>
+      </div>
+
+      <div className="grid grid-cols-4 gap-4 mb-6">
+        <Stat icon={MessageSquare} label="WhatsApp messages" value={num(wa.total)} sub={`${num(wa.in)} in · ${num(wa.out)} out`} tone="green" />
+        <Stat icon={Cpu} label="LLM calls" value={num(llm.calls)} sub={`${num(llm.total_tokens)} tokens · avg ctx ${num(llm.avg_context)}`} tone="green" />
+        <Stat icon={DollarSign} label="LLM cost" value={money(llm.cost)} sub={`${num(llm.prompt_tokens)} in / ${num(llm.completion_tokens)} out`} tone="amber" />
+        <Stat icon={DollarSign} label="Total cost" value={money(summary.total_cost)} sub={`WhatsApp ${money(wa.cost)} + LLM ${money(llm.cost)}`} tone="amber" />
+      </div>
+
+      <Card className="p-5 mb-6">
+        <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-text-faint mb-3"><MessageSquare className="w-4 h-4" /> WhatsApp messages (bot)</div>
+        <div className="grid grid-cols-4 gap-4">
+          <Mini label="Received (in)" value={num(wa.in)} />
+          <Mini label="Sent (out)" value={num(wa.out)} />
+          <Mini label="Total" value={num(wa.total)} />
+          <Mini label="Cost" value={money(wa.cost)} />
+        </div>
+      </Card>
+
+      <Card className="p-5 mb-6">
+        <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-text-faint mb-3"><Cpu className="w-4 h-4" /> LLM {llm.model ? `(${llm.model})` : ''}</div>
+        <div className="grid grid-cols-4 gap-4 mb-4">
+          <Mini label="Calls" value={num(llm.calls)} />
+          <Mini label="Context (prompt) tokens" value={num(llm.prompt_tokens)} />
+          <Mini label="Completion tokens" value={num(llm.completion_tokens)} />
+          <Mini label="Avg context / call" value={num(llm.avg_context)} />
+        </div>
+        {Object.keys(llm.by_channel || {}).length > 0 && (
+          <table className="w-full text-sm">
+            <thead><tr className="text-xs text-text-faint text-left"><th className="py-1 font-normal">Channel</th><th className="font-normal">Calls</th><th className="font-normal">Prompt tok</th><th className="font-normal">Completion tok</th><th className="font-normal">Cost</th></tr></thead>
+            <tbody>
+              {Object.entries(llm.by_channel).map(([ch, v]) => (
+                <tr key={ch} className="border-t border-border-soft">
+                  <td className="py-2 text-text">{ch}</td>
+                  <td className="text-text-dim">{num(v.calls)}</td>
+                  <td className="text-text-dim">{num(v.prompt_tokens)}</td>
+                  <td className="text-text-dim">{num(v.completion_tokens)}</td>
+                  <td className="text-text-dim">{money(v.cost)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+
+      <UsageTrend daily={daily} currency={currency} />
+      <div className="text-xs text-text-faint mt-4">WhatsApp cost uses ARVISX_WA_MSG_COST (0 for Baileys — counts still tracked). LLM cost uses ARVISX_LLM_PRICE_IN / _OUT per 1M tokens. Set these in the deploy env to reflect real rates.</div>
+    </div>
+  )
+}
+
+function UsageTrend({ daily, currency }) {
+  const data = daily || []
+  if (!data.length) return <Card className="p-5 mb-6"><div className="text-sm text-text-faint">No usage recorded yet in this window.</div></Card>
+  const max = Math.max(...data.map((d) => (d.wa_in + d.wa_out) || 0), 1)
+  return (
+    <Card className="p-5 mb-6">
+      <div className="text-xs uppercase tracking-wide text-text-faint mb-3">Daily WhatsApp volume</div>
+      <div className="flex items-end gap-[3px] h-24">
+        {data.map((d, i) => (
+          <div key={i} className="flex-1 flex flex-col justify-end" title={`${d.date}: ${d.wa_in} in / ${d.wa_out} out · ${d.llm_calls} LLM calls · ${currency} ${d.cost}`}>
+            <div className="bg-gold/70 rounded-t" style={{ height: `${Math.max(2, (d.wa_in + d.wa_out) / max * 100)}%` }} />
+          </div>
+        ))}
+      </div>
+      <div className="flex justify-between text-[10px] text-text-faint mt-1">
+        <span>{data[0]?.date?.slice(5)}</span><span>{data[data.length - 1]?.date?.slice(5)}</span>
+      </div>
+    </Card>
+  )
+}
 
 function SendSummary({ building }) {
   const [busy, setBusy] = useState('')

@@ -277,6 +277,10 @@ def create_app():
     state = _State()
     app.state.community = state
 
+    # Usage/cost metrics recorder (WhatsApp + LLM) writes to this building's DB.
+    from arvisx import metrics as _metrics
+    _metrics.set_db(state.db)
+
     # Checklist builder: make DB custom templates visible everywhere templates_for is used.
     from arvisx.checklist_forms import set_custom_loader, Template as _Tmpl
     def _load_custom(building: str):
@@ -818,6 +822,10 @@ def create_app():
         role = sender["role"] if sender.get("kind") in ("manager", "technician", "resident") else claimed
         if not q:
             raise HTTPException(400, "provide 'question'")
+        # Usage metrics: one inbound message + one reply (every path below returns a reply).
+        from arvisx import metrics as _metrics
+        _metrics.record_whatsapp("in", kind=sender.get("kind", "claimed"), building=building)
+        _metrics.record_whatsapp("out", kind="reply", building=building)
         # ── Guardrails: length cap + per-sender rate limit (anti-abuse / LLM cost-burn) ──
         if len(q) > 400:
             return {"intent": "guard", "text": "Please keep it short — ask about the building "
@@ -1573,8 +1581,11 @@ def create_app():
 
     @app.post("/api/v1/whatsapp/notifications/ack")
     async def wa_notifications_ack(payload: Dict[str, Any] = Body(...)):
-        ids = (payload or {}).get("ids") or []
-        state.db.mark_notifications_sent([int(i) for i in ids if str(i).isdigit()])
+        ids = [int(i) for i in ((payload or {}).get("ids") or []) if str(i).isdigit()]
+        state.db.mark_notifications_sent(ids)
+        if ids:                                       # proactive outbound messages delivered
+            from arvisx import metrics as _metrics
+            _metrics.record_whatsapp("out", kind="notification", count=len(ids))
         return {"acked": ids}
 
     # ── Admin panel (AllGud operator) — bot pairing + building analytics ────────
@@ -1606,6 +1617,19 @@ def create_app():
         ev = ci.building_evaluation(state.db, building, days=int(days))
         ev["trend"] = ci.building_trend(state.db, building, days=int(days))
         return ev
+
+    @app.get("/api/v1/admin/usage")
+    async def admin_usage(building: str = "one-anthem", days: int = 30, all_buildings: bool = False,
+                          authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        """WhatsApp (sent/received) + LLM (tokens/context/cost) usage for the admin panel."""
+        if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
+            raise HTTPException(403, "admin only")
+        from datetime import datetime as _dt, timedelta as _td
+        since = (_dt.now() - _td(days=int(days))).isoformat(timespec="seconds")
+        b = None if all_buildings else building
+        s = state.db.usage_summary(since, b)
+        return {"building": building, "days": int(days), "currency": os.environ.get("ARVISX_CURRENCY", "USD"),
+                "summary": s, "daily": state.db.usage_daily(since, b)}
 
     @app.post("/api/v1/forms/run/{rid}/assign")
     async def forms_assign_run(rid: int, payload: Dict[str, Any] = Body(...)):

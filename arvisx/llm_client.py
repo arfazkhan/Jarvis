@@ -27,6 +27,21 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("arvisx.llm")
 
+
+def _record_usage(resp: Any, channel: str, model: str) -> None:
+    """Log token usage + cost for one LLM call (best-effort; never breaks the call)."""
+    try:
+        u = getattr(resp, "usage", None)
+        if u is None:
+            return
+        from arvisx import metrics
+        metrics.record_llm(channel, model,
+                           int(getattr(u, "prompt_tokens", 0) or 0),
+                           int(getattr(u, "completion_tokens", 0) or 0))
+    except Exception:
+        pass
+
+
 # provider → (key_env, default_base_url, default_model)
 _PROVIDERS = {
     "k2think": ("K2THINK_API_KEY", "https://api.k2think.ai/v1", "MBZUAI-IFM/K2-Think-v2"),
@@ -128,6 +143,7 @@ class ArvisxLLM:
                 temperature=0, max_tokens=max_tokens)
 
         resp = await asyncio.to_thread(_call)
+        _record_usage(resp, "tool", self.model)
         choice = resp.choices[0]
         m = choice.message
         calls = []
@@ -158,6 +174,7 @@ class ArvisxLLM:
                 model=self.model, messages=msgs, temperature=0)
 
         resp = await asyncio.to_thread(_call)
+        _record_usage(resp, channel, self.model)
         content = (resp.choices[0].message.content or "") if resp.choices else ""
         obj = _extract_json(content)
         if obj is None:
