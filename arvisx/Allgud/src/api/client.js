@@ -192,6 +192,7 @@ export const api = {
 
   // admin panel (operator) — bot pairing + building analytics
   adminBridge: () => api.get('/admin/bridge/state'),
+  resetBot: () => api.post('/admin/bot/reset'),
   adminAnalytics: (building, days) => api.get('/admin/analytics', { building, days }),
   adminUsage: (building, days) => api.get('/admin/usage', { building, days }),
   sendSummary: (building, period) => api.post('/admin/send-summary', undefined, { building, period }),

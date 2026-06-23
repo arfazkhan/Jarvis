@@ -85,6 +85,7 @@ class _State:
         # WhatsApp bridge pairing state, pushed by the bot for the ADMIN panel (status:
         # unknown|waiting_scan|connected|disconnected). Transient.
         self._bridge: Dict[str, Any] = {"status": "unknown", "qr": "", "ts": ""}
+        self._bot_reset_id: int = 0   # admin "Re-pair" one-shot signal (bot polls + acks)
         # Per-sender rate limit for the LLM WhatsApp Q&A (anti-abuse / cost-burn).
         self._ask_rate: Dict[str, List[float]] = {}
         try:
@@ -1606,6 +1607,30 @@ def create_app():
         if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
             raise HTTPException(403, "admin only")
         return state._bridge
+
+    @app.post("/api/v1/admin/bot/reset")
+    async def admin_bot_reset(authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        """Operator clicks 'Re-pair' → signal the bot to clear its (broken) Baileys session
+        and regenerate a QR. One-shot: the bot polls /whatsapp/bot/control, acts, then acks."""
+        if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
+            raise HTTPException(403, "admin only")
+        import time as _t
+        state._bot_reset_id = int(_t.time())
+        state._bridge = {"status": "waiting_scan", "qr": "", "ts": datetime.now().isoformat(timespec="seconds")}
+        return {"requested": True, "reset_id": state._bot_reset_id}
+
+    @app.get("/api/v1/whatsapp/bot/control")
+    async def wa_bot_control():
+        """The bot polls this; a non-zero reset_id it hasn't handled = re-pair requested."""
+        return {"reset_id": state._bot_reset_id}
+
+    @app.post("/api/v1/whatsapp/bot/control/ack")
+    async def wa_bot_control_ack(payload: Dict[str, Any] = Body(...)):
+        """Bot acks the reset it's handling → clear the one-shot flag (if it still matches)."""
+        rid = int((payload or {}).get("reset_id", 0) or 0)
+        if rid and rid == state._bot_reset_id:
+            state._bot_reset_id = 0
+        return {"acked": rid}
 
     @app.get("/api/v1/admin/analytics")
     async def admin_analytics(building: str = "one-anthem", days: int = 7,

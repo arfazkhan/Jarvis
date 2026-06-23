@@ -365,6 +365,7 @@ const B_TONE = { connected: 'green', waiting_scan: 'amber', disconnected: 'red',
 const B_LABEL = { connected: 'Connected', waiting_scan: 'Waiting for scan', disconnected: 'Disconnected', unknown: 'Not reporting yet' }
 function BotPairing() {
   const [s, setS] = useState(null); const [err, setErr] = useState(null)
+  const [resetting, setResetting] = useState(false); const [msg, setMsg] = useState('')
   useEffect(() => {
     let alive = true
     const tick = () => api.adminBridge().then((d) => alive && (setS(d), setErr(null))).catch((e) => alive && setErr(e))
@@ -372,13 +373,27 @@ function BotPairing() {
     return () => { alive = false; clearInterval(id) }
   }, [])
   const status = s?.status || 'unknown'
+  async function repair() {
+    if (!window.confirm('Re-pair the bot? This clears the current WhatsApp link and shows a new QR to scan. Messaging is briefly offline until you scan.')) return
+    setResetting(true); setMsg('')
+    try { await api.resetBot(); setMsg('Reset sent — a new QR will appear below in a few seconds. Scan it from the bot phone.') }
+    catch (e) { setMsg('Failed: ' + e.message) }
+    finally { setResetting(false) }
+  }
   return (
     <div className="max-w-md">
       <Card className="p-6">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-text-faint"><QrCode className="w-4 h-4" /> WhatsApp Bot</div>
-          <Pill tone={B_TONE[status]}>{B_LABEL[status] || status}</Pill>
+          <div className="flex items-center gap-2">
+            <Pill tone={B_TONE[status]}>{B_LABEL[status] || status}</Pill>
+            <button onClick={repair} disabled={resetting}
+              className="flex items-center gap-1 text-xs border border-border rounded-lg px-2 py-1 text-text-dim hover:border-gold/40 disabled:opacity-50">
+              <RefreshCw className={`w-3 h-3 ${resetting ? 'animate-spin' : ''}`} /> Re-pair
+            </button>
+          </div>
         </div>
+        {msg && <div className="text-xs text-amber mb-3">{msg}</div>}
         {err && <div className="text-sm text-red">Couldn't reach the bot bridge.</div>}
         {status === 'connected' && <div className="flex items-center gap-2 text-sm text-green"><CheckCircle2 className="w-4 h-4" /> Bot is linked and delivering messages.</div>}
         {status === 'waiting_scan' && s?.qr && (
