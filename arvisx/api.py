@@ -2076,11 +2076,12 @@ def create_app():
 
     # ── C1: manual → structured skills (specs / PPM intervals / troubleshooting) ──
     async def _extract_asset_skills(asset_id: int) -> Dict[str, Any]:
+        """Returns {knowledge, text_len, llm} so the caller can explain failures accurately."""
         from arvisx.uploads import file_path
         from arvisx import manual_skills as ms
         a = state.db.get_asset(asset_id)
         if not a or not a.get("manual_path"):
-            return {}
+            return {"knowledge": {}, "text_len": 0, "llm": False}
         p = file_path(a["manual_path"])
         text = ms.extract_text(p) if p else ""
         try:
@@ -2092,7 +2093,7 @@ def create_app():
         if knowledge:
             state.db.save_asset_knowledge(asset_id, a["building_id"], a["name"],
                                           a.get("manual_name", ""), knowledge)
-        return knowledge
+        return {"knowledge": knowledge, "text_len": len(text), "llm": llm is not None}
 
     @app.post("/api/v1/assets/{asset_id}/extract-skills")
     async def asset_extract_skills(asset_id: int):
@@ -2103,10 +2104,20 @@ def create_app():
             raise HTTPException(404, f"unknown asset {asset_id}")
         if not a.get("manual_path"):
             raise HTTPException(400, "attach a manual first")
-        k = await _extract_asset_skills(asset_id)
+        r = await _extract_asset_skills(asset_id)
+        k = r["knowledge"]
         stored = state.db.get_asset_knowledge(asset_id) or {"specs": [], "ppm": [], "troubleshooting": []}
-        return {"extracted": bool(k), "knowledge": stored,
-                "note": None if k else "no text extracted (scanned/unsupported file) or LLM unavailable"}
+        if k:
+            note = None
+        elif not r["llm"]:
+            note = "LLM is unavailable right now — try again shortly."
+        elif r["text_len"] < 50:
+            note = "Couldn't read text from this file — it looks scanned/image-only. Upload a digital (text) PDF; OCR for scans is coming."
+        else:
+            note = ("Read the manual but found no equipment specs, PPM intervals, or troubleshooting "
+                    "in it — is this an equipment operation/maintenance manual? (This looks like a "
+                    "policy/quality document.)")
+        return {"extracted": bool(k), "knowledge": stored, "note": note}
 
     @app.get("/api/v1/assets/{asset_id}/knowledge")
     async def asset_knowledge_get(asset_id: int):
