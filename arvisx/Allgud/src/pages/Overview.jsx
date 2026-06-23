@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Info, Sparkles, ArrowRight, BatteryWarning, Flame, Droplets, Waves, Box,
-  ClipboardCheck, PenLine, TriangleAlert, CheckCircle2, Clock,
+  ClipboardCheck, PenLine, TriangleAlert, CheckCircle2, Clock, Brain, RotateCcw,
 } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
 import { Card, IconCircle } from '../components/ui'
@@ -27,6 +27,7 @@ export default function Overview() {
   const ppm = useAsync(() => api.ppmSchedule(building), [building])
   const activity = useAsync(() => api.activity(building), [building])
   const trend = useAsync(() => api.trend(building, 30), [building])
+  const memory = useAsync(() => api.buildingMemory(building, 90), [building])
 
   const r = readiness.data
   const band = r?.band || 'Attention Required'
@@ -138,6 +139,13 @@ export default function Overview() {
         <ActivityFeed data={activity.data} loading={activity.loading} />
       </div>
 
+      <div className="px-10 pt-10">
+        <div className="flex items-center gap-2 text-sm text-text-dim mb-4">
+          <Brain className="w-4 h-4 text-purple" /> Building memory — recurring issues (90 days)
+        </div>
+        <BuildingMemory data={memory.data} loading={memory.loading} />
+      </div>
+
       <div className="px-10 py-10">
         <form onSubmit={submitAsk} className="relative">
           <Sparkles className="w-4 h-4 text-purple absolute left-5 top-1/2 -translate-y-1/2" />
@@ -192,6 +200,28 @@ function ActivityFeed({ data, loading }) {
           </div>
         )
       })}
+    </div>
+  )
+}
+
+function BuildingMemory({ data, loading }) {
+  const items = data?.recurring || []
+  if (loading) return <div className="text-sm text-text-faint">Loading…</div>
+  if (!items.length) return <div className="text-sm text-text-faint">No recurring problems yet — nothing has come back ≥2× in 90 days. The bot learns as issues accrue.</div>
+  return (
+    <div className="grid grid-cols-2 gap-4">
+      {items.slice(0, 6).map((m, i) => (
+        <Card key={i} className="p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm text-text"><RotateCcw className="w-4 h-4 text-purple" /> {m.asset || m.example}</div>
+            <span className="text-xs font-medium text-purple">{m.count}× </span>
+          </div>
+          <div className="text-xs text-text-faint mt-1 truncate" title={m.example}>{m.example}</div>
+          <div className="text-xs text-text-faint mt-1">
+            {m.open > 0 ? <span className="text-amber">{m.open} still open</span> : <span className="text-green">all resolved</span>} · last {m.last_seen}
+          </div>
+        </Card>
+      ))}
     </div>
   )
 }

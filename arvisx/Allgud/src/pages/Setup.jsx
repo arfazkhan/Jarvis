@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import { Users, Wrench, CalendarCheck, ShieldCheck, Plus, Power, KeyRound, Check, ChevronRight, ClipboardList, Trash2, Copy, Box, Home, FileText, FileUp, Sparkles } from 'lucide-react'
+import { Users, Wrench, CalendarCheck, ShieldCheck, Plus, Power, KeyRound, Check, ChevronRight, ClipboardList, Trash2, Copy, Box, Home, FileText, FileUp, Sparkles, BookOpen } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
 import { Pill, Spinner, Empty } from '../components/ui'
 import { Input, Select } from './Issues'
@@ -143,15 +143,28 @@ function ChecklistStep({ building }) {
   )
 }
 
-// A manual/datasheet attached to an asset (B1) — upload, view, or replace.
+// A manual/datasheet attached to an asset (B1) — upload, view, distil, view knowledge (C1).
 function ManualCell({ asset, onChange }) {
   const fileRef = useRef(null)
   const [busy, setBusy] = useState(false)
+  const [know, setKnow] = useState(null)   // null = closed; object = open modal
   async function upload(file) {
     if (!file) return
     setBusy(true)
     try { await api.uploadAssetManual(asset.id, file, file.type, file.name); onChange() }
     catch (e) { err(e) } finally { setBusy(false) }
+  }
+  async function distil() {
+    setBusy(true)
+    try {
+      const r = await api.extractAssetSkills(asset.id)
+      if (r.extracted) setKnow(r.knowledge || (await api.assetKnowledge(asset.id)))
+      else alert(r.note || 'This manual looks scanned (no text layer). Upload a digital/text PDF.')
+    } catch (e) { err(e) } finally { setBusy(false) }
+  }
+  async function openKnowledge() {
+    setBusy(true)
+    try { setKnow(await api.assetKnowledge(asset.id)) } catch (e) { err(e) } finally { setBusy(false) }
   }
   return (
     <div className="flex items-center gap-1">
@@ -167,6 +180,10 @@ function ManualCell({ asset, onChange }) {
             className="text-xs text-purple hover:underline flex items-center gap-1" title="Distil manual → specs, PPM intervals, troubleshooting">
             <Sparkles className="w-3.5 h-3.5" /> {busy ? '…' : 'skills'}
           </button>
+          <button onClick={openKnowledge} disabled={busy}
+            className="text-xs text-text-dim hover:text-text flex items-center gap-1" title="View distilled knowledge">
+            <BookOpen className="w-3.5 h-3.5" /> view
+          </button>
         </>
       ) : (
         <button onClick={() => fileRef.current?.click()} disabled={busy}
@@ -174,18 +191,39 @@ function ManualCell({ asset, onChange }) {
           <FileUp className="w-3.5 h-3.5" /> {busy ? '…' : 'manual'}
         </button>
       )}
+      {know && <KnowledgeModal asset={asset} k={know} onClose={() => setKnow(null)} />}
     </div>
   )
+}
 
-  async function distil() {
-    setBusy(true)
-    try {
-      const r = await api.extractAssetSkills(asset.id)
-      const k = r.knowledge || {}
-      if (r.extracted) alert(`Manual distilled for ${asset.name}:\n• ${(k.specs||[]).length} specs\n• ${(k.ppm||[]).length} PPM intervals\n• ${(k.troubleshooting||[]).length} troubleshooting steps`)
-      else alert(r.note || 'Could not distil this manual.')
-    } catch (e) { err(e) } finally { setBusy(false) }
-  }
+// C1 viewer: the manual-derived specs / PPM intervals / troubleshooting for one asset.
+function KnowledgeModal({ asset, k, onClose }) {
+  const specs = k?.specs || [], ppm = k?.ppm || [], tr = k?.troubleshooting || []
+  const empty = !specs.length && !ppm.length && !tr.length
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-surface border border-border rounded-2xl max-w-lg w-full max-h-[80vh] overflow-auto p-6" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <div className="text-lg font-serif text-text flex items-center gap-2"><BookOpen className="w-5 h-5 text-purple" /> {asset.name} — knowledge</div>
+          <button onClick={onClose} className="text-text-faint hover:text-text text-sm">✕</button>
+        </div>
+        {empty && <div className="text-sm text-text-faint">No distilled knowledge yet. Attach a digital (text) manual and click <span className="text-purple">skills</span>. Scanned/photo PDFs need OCR (coming).</div>}
+        {!!specs.length && (<div className="mb-4">
+          <div className="text-xs uppercase tracking-wide text-text-faint mb-2">Specifications</div>
+          {specs.map((s, i) => <div key={i} className="flex justify-between text-sm py-1 border-b border-border-soft"><span className="text-text-dim">{s.name}</span><span className="text-text">{s.value}</span></div>)}
+        </div>)}
+        {!!ppm.length && (<div className="mb-4">
+          <div className="text-xs uppercase tracking-wide text-text-faint mb-2">PPM intervals</div>
+          {ppm.map((p, i) => <div key={i} className="text-sm py-1 border-b border-border-soft text-text">{p.task} <span className="text-gold-soft">· {p.interval_text || (p.interval_days ? p.interval_days + 'd' : '—')}</span></div>)}
+        </div>)}
+        {!!tr.length && (<div>
+          <div className="text-xs uppercase tracking-wide text-text-faint mb-2">Troubleshooting</div>
+          {tr.map((t, i) => <div key={i} className="text-sm py-1 border-b border-border-soft"><span className="text-amber">{t.symptom}</span> <span className="text-text-faint">→</span> <span className="text-text-dim">{t.action}</span></div>)}
+        </div>)}
+        <div className="text-xs text-text-faint mt-4">Distilled from the uploaded manual. The bot recalls this in Ask Arvis answers + RCA.</div>
+      </div>
+    </div>
+  )
 }
 
 // ── Assets ───────────────────────────────────────────────────────────────────
