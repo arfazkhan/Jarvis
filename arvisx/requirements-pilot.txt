@@ -5,3 +5,4 @@ fastapi>=0.110
 uvicorn[standard]>=0.27
 paho-mqtt>=2.0
 python-dotenv>=1.0
+pypdf>=4.0          # C1: extract text from uploaded equipment manuals (PDF)

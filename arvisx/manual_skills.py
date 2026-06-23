@@ -21,15 +21,27 @@ def extract_text(path: Path) -> str:
     if path is None or not path.is_file():
         return ""
     ext = path.suffix.lower().lstrip(".")
-    try:
-        if ext == "pdf":
-            from pypdf import PdfReader
-            reader = PdfReader(str(path))
-            return "\n".join((pg.extract_text() or "") for pg in reader.pages)
-        if ext in ("txt", "md"):
+    if ext in ("txt", "md"):
+        try:
             return path.read_text(encoding="utf-8", errors="ignore")
-    except Exception:
-        return ""
+        except Exception:
+            return ""
+    if ext == "pdf":
+        try:
+            from pypdf import PdfReader
+        except Exception:
+            return ""          # pypdf not installed → caller treats as no-text
+        try:
+            reader = PdfReader(str(path))
+        except Exception:
+            return ""
+        parts = []
+        for pg in reader.pages:        # per-page: one bad page must not zero the rest
+            try:
+                parts.append(pg.extract_text() or "")
+            except Exception:
+                continue
+        return "\n".join(parts)
     return ""
 
 
