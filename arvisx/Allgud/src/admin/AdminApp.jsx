@@ -394,6 +394,11 @@ function BotPairing() {
           </div>
         </div>
         {msg && <div className="text-xs text-amber mb-3">{msg}</div>}
+        {(status !== 'connected' && status !== 'waiting_scan') && (
+          <div className="mb-3 rounded-lg bg-red/10 border border-red/40 px-3 py-2 text-sm text-red">
+            ⚠️ Bot is NOT delivering messages ({B_LABEL[status] || status}). Click <b>Re-pair</b> and scan the QR.
+          </div>
+        )}
         {err && <div className="text-sm text-red">Couldn't reach the bot bridge.</div>}
         {status === 'connected' && <div className="flex items-center gap-2 text-sm text-green"><CheckCircle2 className="w-4 h-4" /> Bot is linked and delivering messages.</div>}
         {status === 'waiting_scan' && s?.qr && (

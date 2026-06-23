@@ -291,7 +291,7 @@ def create_app():
     # Auth: API key (server) OR user Bearer token (browser). Writes (non-GET) require
     # an owner/fm role; reads need any authenticated identity. Login is exempt.
     from arvisx import auth as _auth_mod
-    _EXEMPT = {"/api/v1/auth/login", "/api/v1/auth/field-login"}
+    _EXEMPT = {"/api/v1/auth/login", "/api/v1/auth/field-login", "/api/v1/healthz/bot"}
 
     @app.middleware("http")
     async def _auth(request: Request, call_next):
@@ -1618,6 +1618,25 @@ def create_app():
         state._bot_reset_id = int(_t.time())
         state._bridge = {"status": "waiting_scan", "qr": "", "ts": datetime.now().isoformat(timespec="seconds")}
         return {"requested": True, "reset_id": state._bot_reset_id}
+
+    @app.get("/api/v1/healthz/bot")
+    async def healthz_bot():
+        """PUBLIC bot-health probe for an external uptime monitor (UptimeRobot etc.).
+        200 only if the bot reported 'connected' recently; 503 if disconnected / waiting to
+        re-pair / stale (no heartbeat). The monitor alerts you out-of-band — the bot itself
+        can't WhatsApp you that the bot is down."""
+        from fastapi.responses import JSONResponse
+        b = state._bridge or {}
+        status = b.get("status", "unknown")
+        age = None
+        try:
+            age = (datetime.now() - datetime.fromisoformat(b.get("ts", ""))).total_seconds()
+        except Exception:
+            pass
+        fresh = age is not None and age < 180        # bot heartbeats every ~60s
+        ok = status == "connected" and fresh
+        body = {"ok": ok, "status": status, "stale": (not fresh), "age_seconds": (round(age) if age is not None else None)}
+        return JSONResponse(body, status_code=200 if ok else 503)
 
     @app.get("/api/v1/whatsapp/bot/control")
     async def wa_bot_control():
