@@ -254,7 +254,8 @@ function ItemCard({ item, draft, set, rid, building, setRun, hasPhoto }) {
       )}
 
       <div className="mt-3 flex items-center gap-3">
-        <input ref={fileRef} type="file" accept="image/*" capture="environment" className="hidden"
+        {/* No capture= attr → mobile offers Camera OR Gallery (tech picks). */}
+        <input ref={fileRef} type="file" accept="image/*" className="hidden"
           onChange={(e) => uploadPhoto(e.target.files?.[0])} />
         <button onClick={() => fileRef.current?.click()} className="flex items-center gap-1.5 text-xs text-text-dim">
           <Camera size={15} /> {photo ? 'Photo added — retake' : 'Add photo'}
