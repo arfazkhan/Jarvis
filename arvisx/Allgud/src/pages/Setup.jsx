@@ -1,5 +1,5 @@
-import { useState, useRef } from 'react'
-import { Users, Wrench, CalendarCheck, ShieldCheck, Plus, Power, KeyRound, Check, ChevronRight, ClipboardList, Trash2, Copy, Box, Home, FileText, FileUp, Sparkles, BookOpen } from 'lucide-react'
+import { useState, useRef, useEffect } from 'react'
+import { Users, Wrench, CalendarCheck, ShieldCheck, Plus, Power, KeyRound, Check, ChevronRight, ClipboardList, Trash2, Copy, Box, Home, FileText, FileUp, Sparkles, BookOpen, Loader2, CheckCircle2, AlertTriangle } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
 import { Pill, Spinner, Empty } from '../components/ui'
 import { Input, Select } from './Issues'
@@ -143,29 +143,73 @@ function ChecklistStep({ building }) {
   )
 }
 
+// Cycling "working" messages so a long LLM call feels alive.
+const DISTIL_STEPS = ['Reading the manual…', 'Extracting specs & intervals…', 'Distilling troubleshooting…', 'Almost there…']
+function useCyclingMessage(active, steps, ms = 2200) {
+  const [i, setI] = useState(0)
+  useEffect(() => {
+    if (!active) { setI(0); return }
+    const t = setInterval(() => setI((x) => Math.min(x + 1, steps.length - 1)), ms)
+    return () => clearInterval(t)
+  }, [active, steps, ms])
+  return steps[i]
+}
+
 // A manual/datasheet attached to an asset (B1) — upload, view, distil, view knowledge (C1).
+// phase: idle | uploading | distilling | done | error
 function ManualCell({ asset, onChange }) {
   const fileRef = useRef(null)
-  const [busy, setBusy] = useState(false)
-  const [know, setKnow] = useState(null)   // null = closed; object = open modal
+  const [phase, setPhase] = useState('idle')
+  const [feedback, setFeedback] = useState('')
+  const [know, setKnow] = useState(null)
+  const distilMsg = useCyclingMessage(phase === 'distilling', DISTIL_STEPS)
+
+  // success / error feedback auto-clears back to idle
+  function flash(p, msg, hold = 3500) {
+    setPhase(p); setFeedback(msg)
+    setTimeout(() => { setPhase('idle'); setFeedback('') }, hold)
+  }
+
   async function upload(file) {
     if (!file) return
-    setBusy(true)
-    try { await api.uploadAssetManual(asset.id, file, file.type, file.name); onChange() }
-    catch (e) { err(e) } finally { setBusy(false) }
+    setPhase('uploading'); setFeedback(`Uploading ${file.name.slice(0, 22)}…`)
+    try { await api.uploadAssetManual(asset.id, file, file.type, file.name); onChange(); flash('done', 'Manual attached ✓') }
+    catch (e) { flash('error', e.message || 'Upload failed', 5000) }
   }
   async function distil() {
-    setBusy(true)
+    setPhase('distilling'); setFeedback('')
     try {
       const r = await api.extractAssetSkills(asset.id)
-      if (r.extracted) setKnow(r.knowledge || (await api.assetKnowledge(asset.id)))
-      else alert(r.note || 'This manual looks scanned (no text layer). Upload a digital/text PDF.')
-    } catch (e) { err(e) } finally { setBusy(false) }
+      if (r.extracted) {
+        const k = r.knowledge || (await api.assetKnowledge(asset.id))
+        const n = (k.specs?.length || 0), p = (k.ppm?.length || 0), t = (k.troubleshooting?.length || 0)
+        flash('done', `Distilled · ${n} specs · ${p} PPM · ${t} fixes`)
+        setKnow(k)
+      } else flash('error', r.note || 'This manual looks scanned — upload a digital PDF.', 6500)
+    } catch (e) { flash('error', e.message || 'Distil failed', 5000) }
   }
   async function openKnowledge() {
-    setBusy(true)
-    try { setKnow(await api.assetKnowledge(asset.id)) } catch (e) { err(e) } finally { setBusy(false) }
+    try { setKnow(await api.assetKnowledge(asset.id)) } catch (e) { flash('error', e.message, 4000) }
   }
+
+  // While processing or flashing, show an animated status chip instead of the buttons.
+  if (phase === 'uploading' || phase === 'distilling') {
+    return (
+      <div className="flex flex-col items-end gap-1 min-w-[180px]">
+        <div className={`flex items-center gap-1.5 text-xs ${phase === 'distilling' ? 'text-purple' : 'text-gold'} animate-pulse`}>
+          {phase === 'distilling' ? <Sparkles className="w-3.5 h-3.5 animate-pulse" /> : <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+          {phase === 'distilling' ? distilMsg : feedback}
+        </div>
+        {/* indeterminate shimmer bar */}
+        <div className="w-full h-1 rounded-full bg-surface-2 overflow-hidden">
+          <div className={`h-full w-1/3 rounded-full ${phase === 'distilling' ? 'bg-purple' : 'bg-gold'} animate-[shimmer_1.2s_ease-in-out_infinite]`} style={{ animation: 'shimmer 1.2s ease-in-out infinite' }} />
+        </div>
+      </div>
+    )
+  }
+  if (phase === 'done') return <div className="flex items-center gap-1.5 text-xs text-green min-w-[180px] justify-end"><CheckCircle2 className="w-3.5 h-3.5" /> {feedback}</div>
+  if (phase === 'error') return <div className="flex items-center gap-1.5 text-xs text-amber max-w-[260px] text-right"><AlertTriangle className="w-3.5 h-3.5 shrink-0" /> {feedback}</div>
+
   return (
     <div className="flex items-center gap-1">
       <input ref={fileRef} type="file" accept=".pdf,.doc,.docx,.txt,image/*" className="hidden"
@@ -173,22 +217,22 @@ function ManualCell({ asset, onChange }) {
       {asset.manual_path ? (
         <>
           <button onClick={() => api.openAssetManual(asset.manual_path)}
-            className="text-xs text-gold hover:underline flex items-center gap-1" title={asset.manual_name}>
+            className="text-xs text-gold hover:underline flex items-center gap-1 transition-colors" title={asset.manual_name}>
             <FileText className="w-3.5 h-3.5" /> manual
           </button>
-          <button onClick={distil} disabled={busy}
-            className="text-xs text-purple hover:underline flex items-center gap-1" title="Distil manual → specs, PPM intervals, troubleshooting">
-            <Sparkles className="w-3.5 h-3.5" /> {busy ? '…' : 'skills'}
+          <button onClick={distil}
+            className="text-xs text-purple hover:underline flex items-center gap-1 transition-colors" title="Distil manual → specs, PPM intervals, troubleshooting">
+            <Sparkles className="w-3.5 h-3.5" /> skills
           </button>
-          <button onClick={openKnowledge} disabled={busy}
-            className="text-xs text-text-dim hover:text-text flex items-center gap-1" title="View distilled knowledge">
+          <button onClick={openKnowledge}
+            className="text-xs text-text-dim hover:text-text flex items-center gap-1 transition-colors" title="View distilled knowledge">
             <BookOpen className="w-3.5 h-3.5" /> view
           </button>
         </>
       ) : (
-        <button onClick={() => fileRef.current?.click()} disabled={busy}
-          className="text-xs text-text-faint hover:text-text flex items-center gap-1">
-          <FileUp className="w-3.5 h-3.5" /> {busy ? '…' : 'manual'}
+        <button onClick={() => fileRef.current?.click()}
+          className="text-xs text-text-faint hover:text-text flex items-center gap-1 transition-colors">
+          <FileUp className="w-3.5 h-3.5" /> manual
         </button>
       )}
       {know && <KnowledgeModal asset={asset} k={know} onClose={() => setKnow(null)} />}

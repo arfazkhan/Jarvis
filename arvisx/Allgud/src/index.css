@@ -63,3 +63,9 @@ body {
   background: var(--color-border);
   border-radius: 8px;
 }
+
+/* Indeterminate progress shimmer (manual upload / skill distil feedback) */
+@keyframes shimmer {
+  0%   { transform: translateX(-130%); }
+  100% { transform: translateX(430%); }
+}
