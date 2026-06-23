@@ -1619,17 +1619,17 @@ def create_app():
         return ev
 
     @app.get("/api/v1/admin/usage")
-    async def admin_usage(building: str = "one-anthem", days: int = 30, all_buildings: bool = False,
+    async def admin_usage(building: str = "one-anthem", days: int = 30,
                           authorization: str = Header(default=""), x_api_key: str = Header(default="")):
-        """WhatsApp (sent/received) + LLM (tokens/context/cost) usage for the admin panel."""
+        """WhatsApp (sent/received) + LLM (tokens/context/cost) usage for the admin panel.
+        Deployment-wide: each AllGud deployment serves one building, and LLM token usage is
+        recorded at the (building-agnostic) client layer — so we aggregate across the DB."""
         if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
             raise HTTPException(403, "admin only")
         from datetime import datetime as _dt, timedelta as _td
         since = (_dt.now() - _td(days=int(days))).isoformat(timespec="seconds")
-        b = None if all_buildings else building
-        s = state.db.usage_summary(since, b)
         return {"building": building, "days": int(days), "currency": os.environ.get("ARVISX_CURRENCY", "USD"),
-                "summary": s, "daily": state.db.usage_daily(since, b)}
+                "summary": state.db.usage_summary(since), "daily": state.db.usage_daily(since)}
 
     @app.post("/api/v1/forms/run/{rid}/assign")
     async def forms_assign_run(rid: int, payload: Dict[str, Any] = Body(...)):
