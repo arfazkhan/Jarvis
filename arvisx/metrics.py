@@ -49,10 +49,14 @@ def record_llm(channel: str, model: str, prompt_tokens: int, completion_tokens: 
 
 
 def record_whatsapp(direction: str, kind: str = "", building: str = "", count: int = 1) -> None:
-    """direction = 'in' (received) | 'out' (sent)."""
+    """direction = 'in' (received) | 'out' (sent). On the Official API only business-initiated
+    UTILITY templates (proactive notifications) are billable; inbound + service replies are
+    FREE — so cost is applied only to out+notification."""
     if _db is None or count <= 0:
         return
+    billable = (direction == "out" and kind == "notification")
     try:
-        _db.log_usage(building, f"whatsapp_{direction}", channel=kind, n=count, cost=wa_cost(count))
+        _db.log_usage(building, f"whatsapp_{direction}", channel=kind, n=count,
+                      cost=wa_cost(count) if billable else 0.0)
     except Exception as e:
         logger.warning(f"record_whatsapp failed: {e}")

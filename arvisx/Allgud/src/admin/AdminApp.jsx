@@ -227,12 +227,14 @@ function Usage() {
 
       <Card className="p-5 mb-6">
         <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-text-faint mb-3"><MessageSquare className="w-4 h-4" /> WhatsApp messages (bot)</div>
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-5 gap-4">
           <Mini label="Received (in)" value={num(wa.in)} />
           <Mini label="Sent (out)" value={num(wa.out)} />
-          <Mini label="Total" value={num(wa.total)} />
+          <Mini label="Billable (utility)" value={num(wa.billable)} tone="amber" />
+          <Mini label="Free (service/reply)" value={num(wa.free)} tone="green" />
           <Mini label="Cost" value={money(wa.cost)} />
         </div>
+        <div className="text-xs text-text-faint mt-3">Official API bills only business-initiated utility templates; inbound + replies are free.</div>
       </Card>
 
       <Card className="p-5 mb-6">

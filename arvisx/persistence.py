@@ -681,6 +681,11 @@ class ArvisxDb:
         wa_in = sum(r["n"] for r in rows if r["kind"] == "whatsapp_in")
         wa_out = sum(r["n"] for r in rows if r["kind"] == "whatsapp_out")
         wa_cost = sum(r["cost"] for r in rows if (r["kind"] or "").startswith("whatsapp"))
+        # Split: billable = business-initiated utility templates (out + notification);
+        # free = inbound + service replies.
+        wa_billable = sum(r["n"] for r in rows
+                          if r["kind"] == "whatsapp_out" and r["channel"] == "notification")
+        wa_free = (wa_in + wa_out) - wa_billable
         llm = [r for r in rows if r["kind"] == "llm"]
         calls = sum(r["n"] for r in llm)
         pin = sum(r["pin"] for r in llm); pout = sum(r["pout"] for r in llm)
@@ -692,7 +697,8 @@ class ArvisxDb:
             ch["calls"] += r["n"]; ch["prompt_tokens"] += r["pin"]
             ch["completion_tokens"] += r["pout"]; ch["cost"] = round(ch["cost"] + r["cost"], 6)
         return {
-            "whatsapp": {"in": wa_in, "out": wa_out, "total": wa_in + wa_out, "cost": round(wa_cost, 4)},
+            "whatsapp": {"in": wa_in, "out": wa_out, "total": wa_in + wa_out,
+                         "billable": wa_billable, "free": wa_free, "cost": round(wa_cost, 4)},
             "llm": {"calls": calls, "prompt_tokens": pin, "completion_tokens": pout,
                     "total_tokens": pin + pout, "avg_context": (round(pin / calls) if calls else 0),
                     "cost": round(llm_cost, 4), "model": (llm[0]["model"] if llm else ""),
