@@ -290,6 +290,16 @@ def create_app():
     from arvisx import metrics as _metrics
     _metrics.set_db(state.db)
 
+    # Background-task keeper: asyncio GCs tasks with no strong reference mid-run, so hold
+    # them until done (used for fire-and-forget LLM work like manual-distil + learn-from-fix).
+    state._bg_tasks = set()
+    def _spawn(coro):
+        import asyncio as _aio
+        t = _aio.create_task(coro)
+        state._bg_tasks.add(t)
+        t.add_done_callback(state._bg_tasks.discard)
+        return t
+
     # Checklist builder: make DB custom templates visible everywhere templates_for is used.
     from arvisx.checklist_forms import set_custom_loader, Template as _Tmpl
     def _load_custom(building: str):
@@ -1831,8 +1841,7 @@ def create_app():
         # Learn from the fix: when an issue is RESOLVED, an LLM synthesizes a reusable lesson
         # → pending memory candidate for manager approval. Background (no blocking, best-effort).
         if status == "resolved" and old_status != "resolved":
-            import asyncio as _aio
-            _aio.create_task(_learn_from_resolved_issue(issue_id))
+            _spawn(_learn_from_resolved_issue(issue_id))
         return _jsonable(fresh)
 
     @app.post("/api/v1/issues/{issue_id}/visited")
@@ -2116,8 +2125,7 @@ def create_app():
         # C1: distil the manual into structured skills in the background (no LLM token-burst on
         # the upload request; the manager can also trigger it explicitly via /extract-skills).
         try:
-            import asyncio as _aio
-            _aio.create_task(_extract_asset_skills(asset_id))
+            _spawn(_extract_asset_skills(asset_id))
         except Exception:
             pass
         return {"saved": True, "asset_id": asset_id, "manual_path": name, "manual_name": filename or name}
