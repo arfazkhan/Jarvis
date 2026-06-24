@@ -1152,6 +1152,40 @@ def create_app():
             if ph and ph not in seen:
                 state.db.enqueue_notification(building, line, to_number=ph, kind="issue_lifecycle")
 
+    async def _learn_from_resolved_issue(issue_id: int) -> None:
+        """An LLM distils a reusable lesson from a resolved issue → pending memory candidate +
+        notify the manager to approve. Falls back to the resolution note if no LLM."""
+        import json as _json
+        iss = state.db.get_issue(issue_id)
+        if not iss:
+            return
+        try:
+            iss["history"] = _json.loads(iss.get("history") or "[]")
+        except Exception:
+            iss["history"] = []
+        try:
+            from arvisx.llm_client import make_llm
+            llm = make_llm()
+        except Exception:
+            llm = None
+        from arvisx.checklist_skills import lesson_from_issue
+        lesson = await lesson_from_issue(llm, iss)
+        if not lesson:                       # deterministic fallback from the last resolution note
+            notes = [h.get("note") for h in iss["history"] if h.get("note")]
+            if notes:
+                lesson = {"title": f"{iss.get('asset') or iss.get('title', 'issue')}: {str(notes[-1])[:100]}",
+                          "detail": iss.get("title", "")}
+        if not lesson:
+            return
+        cid = state.db.add_memory_candidate(iss["building_id"], "rca_lesson", lesson["title"],
+                                            lesson.get("detail", ""), source="resolved_issue",
+                                            dedup_key=f"issue:{issue_id}")
+        if cid:
+            state.db.enqueue_notification(
+                iss["building_id"], f"📚 AllGud learned from a fix:\n*{lesson['title']}*\n"
+                f"Reply *approve {cid}* or *reject {cid}* (or use the Knowledge page).",
+                to_number="", kind="memory_candidate")
+
     # ── A2: manager actions over WhatsApp (deterministic, owner/fm only) ──
     def _shift_num(tok: str):
         return {"i": 1, "ii": 2, "iii": 3, "1": 1, "2": 2, "3": 3,
@@ -1794,6 +1828,11 @@ def create_app():
         if events:
             _notify_issue_event(fresh, " · ".join(events),
                                 by=str(p.get("by", "")), note=str(p.get("note", "")))
+        # Learn from the fix: when an issue is RESOLVED, an LLM synthesizes a reusable lesson
+        # → pending memory candidate for manager approval. Background (no blocking, best-effort).
+        if status == "resolved" and old_status != "resolved":
+            import asyncio as _aio
+            _aio.create_task(_learn_from_resolved_issue(issue_id))
         return _jsonable(fresh)
 
     @app.post("/api/v1/issues/{issue_id}/visited")
@@ -2165,6 +2204,25 @@ def create_app():
         state.db.save_asset_knowledge(asset_id, a["building_id"], a["name"],
                                       a.get("manual_name", ""), knowledge)
         return {"saved": True, "knowledge": knowledge}
+
+    @app.post("/api/v1/assets/{asset_id}/apply-ppm")
+    async def asset_apply_ppm(asset_id: int):
+        """One-click: turn the manual's extracted PPM intervals into this asset's PPM schedule.
+        Uses the SHORTEST stated interval (services at least that often); last_done = today."""
+        a = state.db.get_asset(asset_id)
+        if not a:
+            raise HTTPException(404, f"unknown asset {asset_id}")
+        k = state.db.get_asset_knowledge(asset_id) or {}
+        dated = [p for p in (k.get("ppm") or [])
+                 if isinstance(p.get("interval_days"), int) and p["interval_days"] > 0]
+        if not dated:
+            raise HTTPException(400, "no PPM intervals with a day-count in this asset's knowledge — "
+                                     "distil a manual or add a PPM row with an interval first")
+        best = min(dated, key=lambda p: p["interval_days"])
+        state.db.set_ppm_schedule(a["building_id"], a["name"],
+                                  interval_days=int(best["interval_days"]), last_done=_today_str())
+        return {"applied": True, "asset": a["name"], "interval_days": int(best["interval_days"]),
+                "task": best.get("task", ""), "from_count": len(dated)}
 
     # ── C2: building memory — recurring issues + approved/pending lessons ──
     @app.get("/api/v1/building/memory")

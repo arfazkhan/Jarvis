@@ -139,6 +139,7 @@ export const api = {
   extractAssetSkills: (id) => api.post(`/assets/${id}/extract-skills`),
   assetKnowledge: (id) => api.get(`/assets/${id}/knowledge`),
   saveAssetKnowledge: (id, knowledge) => api.post(`/assets/${id}/knowledge`, knowledge),
+  applyAssetPpm: (id) => api.post(`/assets/${id}/apply-ppm`),
   // C2: building memory — recurring issues + learned-lesson approval queue
   buildingMemory: (building, days) => api.get('/building/memory', { building, days }),
   decideMemory: (id, status, by) => api.post(`/memory/candidates/${id}/decide`, { status, by }),

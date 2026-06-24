@@ -361,6 +361,36 @@ def _looks_like_reasoning(text: str) -> bool:
     return sum(m in t for m in _REASONING_MARKERS) >= 1
 
 
+_LESSON_SYS = (
+    "You are a maintenance knowledge curator. From ONE resolved building issue, write a REUSABLE "
+    "lesson the team can apply next time. Use ONLY the facts given — never invent a cause or fix. "
+    'Output JSON only: {"title": "...", "detail": "..."}. The title is one line in the form '
+    "'When <symptom> on <asset> → likely <cause>; <fix/prevention>'. The detail is one short "
+    "sentence of context. If the facts don't support a generalizable lesson (e.g. no cause/fix "
+    "recorded), return {}."
+)
+
+
+async def lesson_from_issue(llm, issue: Dict[str, Any]) -> Dict[str, Any]:
+    """LLM-synthesize a generalizable lesson from a RESOLVED issue + its resolution notes.
+    Grounded (only the issue's facts). Returns {title, detail} or {} (no llm / not enough)."""
+    if not llm:
+        return {}
+    hist = issue.get("history") or []
+    notes = " | ".join(f"{h.get('action', '')}: {h.get('note', '')}" for h in hist if h.get("note"))
+    facts = (f"Asset: {issue.get('asset') or '—'}\nIssue: {issue.get('title', '')}\n"
+             f"Detail: {issue.get('detail') or '—'}\nSeverity: {issue.get('severity', '')}\n"
+             f"Resolution notes: {notes or '—'}")
+    try:
+        out = await llm.ask_json(messages=[{"role": "user", "content": facts}],
+                                 system_msgs=[{"role": "system", "content": _LESSON_SYS}], channel="extract")
+    except Exception:
+        return {}
+    if isinstance(out, dict) and out.get("title"):
+        return {"title": str(out["title"])[:140], "detail": str(out.get("detail", ""))[:300]}
+    return {}
+
+
 async def run_building_qa(llm, db, building: str, question: str, today: str) -> Dict[str, Any]:
     if llm is not None:
         try:

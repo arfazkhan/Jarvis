@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import {
   BookOpen, Brain, FileText, FileUp, Sparkles, Loader2, CheckCircle2,
-  AlertTriangle, RotateCcw, Wrench, Gauge, ListChecks, Plus, X, Save, Pencil, ArrowLeft,
+  AlertTriangle, RotateCcw, Wrench, Gauge, ListChecks, Plus, X, Save, Pencil, ArrowLeft, CalendarCheck,
 } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
 import { Card, Spinner, Empty } from '../components/ui'
@@ -126,6 +126,12 @@ function KnowledgeEditor({ asset, onClose, onManualChange }) {
       else { setPhase('error'); setNote(r.note || 'This manual looks scanned — upload a digital PDF.') }
     } catch (e) { setPhase('error'); setNote(e.message || 'Distil failed') }
   }
+  async function applyPpm() {
+    setPhase('saving'); setNote('')
+    try { const r = await api.applyAssetPpm(asset.id); setPhase('idle'); setNote(`PPM schedule set — service every ${r.interval_days}d (from "${r.task || 'manual'}")`); setTimeout(() => setNote(''), 4000) }
+    catch (e) { setPhase('error'); setNote(e.message || 'Could not apply PPM') }
+  }
+  const ppmDated = (k.ppm || []).some((p) => p.interval_days > 0)
 
   const busy = phase === 'uploading' || phase === 'distilling' || phase === 'saving'
 
@@ -157,6 +163,7 @@ function KnowledgeEditor({ asset, onClose, onManualChange }) {
                 <button onClick={() => fileRef.current?.click()} disabled={busy} className="text-text-faint hover:text-text flex items-center gap-1 disabled:opacity-50"><FileUp className="w-3.5 h-3.5" /> replace</button>
               </>
             : <button onClick={() => fileRef.current?.click()} disabled={busy} className="text-text-dim hover:text-text flex items-center gap-1"><FileUp className="w-3.5 h-3.5" /> upload manual to auto-distil</button>}
+          {ppmDated && <button onClick={applyPpm} disabled={busy} className="text-green hover:underline flex items-center gap-1 disabled:opacity-50" title="Create the PPM schedule from the manual's intervals"><CalendarCheck className="w-3.5 h-3.5" /> apply to PPM</button>}
         </div>
 
         {/* processing / feedback */}
