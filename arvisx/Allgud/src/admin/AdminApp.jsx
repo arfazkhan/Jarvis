@@ -3,6 +3,7 @@ import {
   QrCode, BarChart3, LogIn, LogOut, Lock, User, Loader2, CheckCircle2,
   RefreshCw, ClipboardList, TriangleAlert, CalendarCheck, Users,
   DollarSign, MessageSquare, Cpu, ArrowDownLeft, ArrowUpRight,
+  UserPlus, Activity, Plus, Power, AlertTriangle,
 } from 'lucide-react'
 import { AllGudLogo } from '../components/Logo'
 import { Card, Pill, Spinner } from '../components/ui'
@@ -42,12 +43,16 @@ export default function AdminApp() {
       <nav className="flex gap-1 px-8 pt-4">
         <Tab active={tab === 'analytics'} onClick={() => setTab('analytics')} icon={BarChart3}>Analytics</Tab>
         <Tab active={tab === 'usage'} onClick={() => setTab('usage')} icon={DollarSign}>Usage & Cost</Tab>
+        <Tab active={tab === 'team'} onClick={() => setTab('team')} icon={Users}>Team</Tab>
+        <Tab active={tab === 'llm'} onClick={() => setTab('llm')} icon={Activity}>LLM</Tab>
         <Tab active={tab === 'bot'} onClick={() => setTab('bot')} icon={QrCode}>WhatsApp Bot</Tab>
       </nav>
 
       <main className="px-8 py-6">
         {tab === 'analytics' && <Analytics />}
         {tab === 'usage' && <Usage />}
+        {tab === 'team' && <Team />}
+        {tab === 'llm' && <LlmTest />}
         {tab === 'bot' && <BotPairing />}
       </main>
     </div>
@@ -363,6 +368,91 @@ function Stat({ icon: Icon, label, value, sub, tone }) {
 // ── Bot pairing ──────────────────────────────────────────────────────────────
 const B_TONE = { connected: 'green', waiting_scan: 'amber', disconnected: 'red', unknown: 'neutral' }
 const B_LABEL = { connected: 'Connected', waiting_scan: 'Waiting for scan', disconnected: 'Disconnected', unknown: 'Not reporting yet' }
+// ── Team: owner / manager logins (+ WhatsApp number) ─────────────────────────
+const ROLE_LABEL = { owner: 'Owner', fm: 'Manager', viewer: 'Viewer', system: 'System', admin: 'Operator' }
+function Team() {
+  const [users, setUsers] = useState(null); const [err, setErr] = useState(null)
+  const [f, setF] = useState({ username: '', password: '', role: 'fm', phone: '' })
+  const [busy, setBusy] = useState(false); const [msg, setMsg] = useState('')
+  const load = useCallback(() => api.adminUsers().then((d) => setUsers(d.users || [])).catch(setErr), [])
+  useEffect(() => { load() }, [load])
+  async function add() {
+    if (!f.username.trim() || !f.password) { setMsg('Username + password required'); return }
+    setBusy(true); setMsg('')
+    try { await api.adminAddUser({ username: f.username.trim(), password: f.password, role: f.role, phone: f.phone.trim() }); setF({ username: '', password: '', role: 'fm', phone: '' }); load(); setMsg('Added ✓'); setTimeout(() => setMsg(''), 2500) }
+    catch (e) { setMsg(e.message) } finally { setBusy(false) }
+  }
+  return (
+    <div className="max-w-3xl">
+      <div className="text-sm text-text-dim mb-4">Add owners and managers. A phone on an owner/manager also grants <b>WhatsApp privileges</b> — they get alerts and can run commands (assign, close, approve…).</div>
+      <Card className="p-5 mb-6">
+        <div className="grid grid-cols-[1fr_1fr_120px_1fr_auto] gap-3 items-end">
+          <Field label="Username"><Inp value={f.username} onChange={(v) => setF({ ...f, username: v })} /></Field>
+          <Field label="Password"><Inp type="password" value={f.password} onChange={(v) => setF({ ...f, password: v })} /></Field>
+          <Field label="Role">
+            <select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })} className="w-full bg-surface border border-border rounded-lg px-2 py-2 text-sm text-text">
+              <option value="owner">Owner</option><option value="fm">Manager</option><option value="viewer">Viewer</option>
+            </select>
+          </Field>
+          <Field label="WhatsApp (no +)"><Inp value={f.phone} onChange={(v) => setF({ ...f, phone: v.replace(/[^0-9]/g, '') })} /></Field>
+          <button onClick={add} disabled={busy} className="flex items-center gap-1 text-sm bg-primary text-white rounded-lg px-4 py-2 disabled:opacity-50 h-[38px]"><UserPlus className="w-4 h-4" /> Add</button>
+        </div>
+        {msg && <div className="text-xs text-green mt-2">{msg}</div>}
+      </Card>
+      {err && <div className="text-sm text-red">{err.message}</div>}
+      {!users ? <Spinner /> : (
+        <div className="flex flex-col gap-2">
+          {users.map((u) => (
+            <Card key={u.username} className="p-3 flex items-center gap-3">
+              <div className="w-8 h-8 rounded-full bg-surface-2 flex items-center justify-center text-xs text-text-dim">{(u.username || '?').slice(0, 2).toUpperCase()}</div>
+              <div className="flex-1"><div className="text-sm text-text">{u.username}</div><div className="text-xs text-text-faint">{u.phone || 'no WhatsApp number'}</div></div>
+              <Pill tone={u.role === 'owner' ? 'gold' : u.role === 'fm' ? 'green' : 'neutral'}>{ROLE_LABEL[u.role] || u.role}</Pill>
+              {u.phone && (u.role === 'owner' || u.role === 'fm') && <span className="text-[10px] text-green flex items-center gap-1"><MessageSquare className="w-3 h-3" /> WhatsApp</span>}
+              <Pill tone={u.active === 0 ? 'neutral' : 'green'}>{u.active === 0 ? 'inactive' : 'active'}</Pill>
+              {u.active !== 0 && <button onClick={async () => { await api.adminDeactivateUser(u.username); load() }} className="text-text-faint hover:text-red p-1" title="Deactivate"><Power className="w-4 h-4" /></button>}
+            </Card>
+          ))}
+          {!users.length && <div className="text-sm text-text-faint">No users yet — add the building owner + manager above.</div>}
+        </div>
+      )}
+    </div>
+  )
+}
+function Field({ label, children }) { return <label className="block"><div className="text-xs text-text-faint mb-1">{label}</div>{children}</label> }
+function Inp({ value, onChange, type = 'text' }) { return <input type={type} value={value} onChange={(e) => onChange(e.target.value)} className="w-full bg-surface border border-border rounded-lg px-3 py-2 text-sm text-text outline-none focus:border-gold/50" /> }
+
+// ── LLM smoke test ───────────────────────────────────────────────────────────
+function LlmTest() {
+  const [r, setR] = useState(null); const [busy, setBusy] = useState(false)
+  async function run() { setBusy(true); setR(null); try { setR(await api.adminLlmTest()) } catch (e) { setR({ ok: false, reason: e.message }) } finally { setBusy(false) } }
+  return (
+    <div className="max-w-xl">
+      <div className="text-sm text-text-dim mb-4">A one-call round-trip to the configured LLM — confirms the Ask Arvis / RCA / distil brain is reachable.</div>
+      <Card className="p-6">
+        <button onClick={run} disabled={busy} className="flex items-center gap-2 text-sm bg-primary text-white rounded-lg px-4 py-2 disabled:opacity-50">
+          {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Activity className="w-4 h-4" />} {busy ? 'Testing…' : 'Run LLM test'}
+        </button>
+        {r && (
+          <div className="mt-5">
+            <div className={`flex items-center gap-2 text-base ${r.ok ? 'text-green' : 'text-red'}`}>
+              {r.ok ? <CheckCircle2 className="w-5 h-5" /> : <AlertTriangle className="w-5 h-5" />}
+              {r.ok ? 'LLM is working' : 'LLM not reachable'}
+            </div>
+            {r.reason && <div className="text-xs text-amber mt-1">{r.reason}</div>}
+            <div className="grid grid-cols-2 gap-3 mt-4">
+              <Mini label="Provider" value={r.provider || '—'} />
+              <Mini label="Model" value={r.model || '—'} />
+              <Mini label="Latency" value={r.latency_ms != null ? `${r.latency_ms} ms` : '—'} />
+              <Mini label="Round-trip" value={r.pong ? 'JSON ✓' : (r.ok ? 'reached' : '—')} />
+            </div>
+            {r.reply && <pre className="mt-4 text-xs text-text-faint bg-bg border border-border rounded-lg p-3 overflow-auto">{JSON.stringify(r.reply, null, 2)}</pre>}
+          </div>
+        )}
+      </Card>
+    </div>
+  )
+}
+
 function BotPairing() {
   const [s, setS] = useState(null); const [err, setErr] = useState(null)
   const [resetting, setResetting] = useState(false); const [msg, setMsg] = useState('')

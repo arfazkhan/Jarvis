@@ -66,6 +66,7 @@ class ArvisxDb:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, ts TEXT, data TEXT);
             CREATE TABLE IF NOT EXISTS users (
                 username TEXT PRIMARY KEY, role TEXT, pw_hash TEXT, created_at TEXT);
+            -- phone (→ WhatsApp manager privileges) + active flag; migration for existing DBs below.
             CREATE TABLE IF NOT EXISTS signal_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, asset_id TEXT,
                 signal TEXT, value REAL, ts TEXT);
@@ -205,6 +206,12 @@ class ArvisxDb:
             for col in ("manual_path TEXT", "manual_name TEXT"):
                 try:
                     c.execute(f"ALTER TABLE building_assets ADD COLUMN {col}")
+                except Exception:
+                    pass
+            # Users get a phone (→ WhatsApp manager privileges) + active flag (migration).
+            for col in ("phone TEXT", "active INTEGER DEFAULT 1"):
+                try:
+                    c.execute(f"ALTER TABLE users ADD COLUMN {col}")
                 except Exception:
                     pass
             # C1: structured knowledge distilled from an asset's manual (specs/PPM/troubleshoot)
@@ -426,10 +433,12 @@ class ArvisxDb:
             return [json.loads(r["data"]) for r in rows]
 
     # ── Users (frontend auth) ────────────────────────────────────────────
-    def create_user(self, username: str, role: str, pw_hash: str) -> None:
+    def create_user(self, username: str, role: str, pw_hash: str, phone: str = "") -> None:
+        digits = "".join(ch for ch in str(phone).split("@")[0] if ch.isdigit())
         with self._lock, self._conn() as c:
-            c.execute("INSERT OR REPLACE INTO users (username, role, pw_hash, created_at) VALUES (?,?,?,?)",
-                      (username, role, pw_hash, datetime.now().isoformat()))
+            c.execute("INSERT OR REPLACE INTO users (username, role, pw_hash, phone, active, created_at)"
+                      " VALUES (?,?,?,?,1,?)",
+                      (username, role, pw_hash, digits, datetime.now().isoformat()))
 
     def get_user(self, username: str) -> Optional[Dict[str, Any]]:
         with self._lock, self._conn() as c:
@@ -442,8 +451,19 @@ class ArvisxDb:
 
     def list_users(self) -> List[Dict[str, Any]]:
         with self._lock, self._conn() as c:
-            rows = c.execute("SELECT username, role, created_at FROM users ORDER BY username").fetchall()
+            rows = c.execute("SELECT username, role, phone, active, created_at FROM users ORDER BY username").fetchall()
             return [dict(r) for r in rows]
+
+    def set_user_active(self, username: str, active: bool) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE users SET active=? WHERE username=?", (1 if active else 0, username))
+
+    def manager_phones(self) -> List[str]:
+        """Phones of active owner/fm users → WhatsApp manager privileges (alerts + actions)."""
+        with self._lock, self._conn() as c:
+            rows = c.execute("SELECT phone FROM users WHERE active=1 AND role IN ('owner','fm','system')"
+                             " AND phone IS NOT NULL AND phone!=''").fetchall()
+            return [r["phone"] for r in rows]
 
     # ── Signal log (timestamped history: billing + reading verification) ──
     def log_signal(self, asset_id: str, signal: str, value, ts: Optional[datetime] = None,

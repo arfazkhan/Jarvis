@@ -1144,9 +1144,14 @@ def create_app():
         return "".join(ch for ch in str(num).split("@")[0] if ch.isdigit())
 
     def _manager_numbers() -> List[str]:
-        """Manager/owner WhatsApp numbers that receive alerts + may run actions.
-        OWNER_NUMBER + optional ARVISX_MANAGER_NUMBERS (comma-separated)."""
+        """Manager/owner WhatsApp numbers that receive alerts + may run actions: env
+        (OWNER_NUMBER + ARVISX_MANAGER_NUMBERS) PLUS active owner/fm users added in the admin
+        panel (DB) — so a manager can be added without editing env / SSH."""
         raw = [os.environ.get("OWNER_NUMBER", "")] + os.environ.get("ARVISX_MANAGER_NUMBERS", "").split(",")
+        try:
+            raw += state.db.manager_phones()
+        except Exception:
+            pass
         out, seen = [], set()
         for n in (_norm_phone(x) for x in raw):
             if n and n not in seen:
@@ -1829,6 +1834,69 @@ def create_app():
         since = (_dt.now() - _td(days=int(days))).isoformat(timespec="seconds")
         return {"building": building, "days": int(days), "currency": os.environ.get("ARVISX_CURRENCY", "USD"),
                 "summary": state.db.usage_summary(since), "daily": state.db.usage_daily(since)}
+
+    # ── Admin: manage building team (owner / manager logins + WhatsApp numbers) ──
+    @app.get("/api/v1/admin/users")
+    async def admin_users_list(authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
+            raise HTTPException(403, "admin only")
+        return {"users": state.db.list_users()}
+
+    @app.post("/api/v1/admin/users")
+    async def admin_users_add(payload: Dict[str, Any] = Body(...),
+                              authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        """Add an owner / manager (fm) / viewer with a login + optional WhatsApp number.
+        A phone on an owner/fm grants WhatsApp manager privileges (alerts + actions)."""
+        if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
+            raise HTTPException(403, "admin only")
+        p = payload or {}
+        u = str(p.get("username", "")).strip()
+        pw = str(p.get("password", ""))
+        role = str(p.get("role", "fm")).strip().lower()
+        if not u or not pw:
+            raise HTTPException(400, "provide username + password")
+        if role not in ("owner", "fm", "viewer"):
+            raise HTTPException(400, "role must be owner, fm (manager), or viewer")
+        state.db.create_user(u, role, _auth_mod.hash_password(pw), phone=str(p.get("phone", "")))
+        return {"username": u, "role": role}
+
+    @app.post("/api/v1/admin/users/{username}/deactivate")
+    async def admin_users_deactivate(username: str,
+                                     authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
+            raise HTTPException(403, "admin only")
+        state.db.set_user_active(username, False)
+        return {"username": username, "active": False}
+
+    @app.get("/api/v1/admin/llm/test")
+    async def admin_llm_test(authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        """Smoke-test the LLM: one minimal round-trip. Returns ok + provider/model/latency."""
+        if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
+            raise HTTPException(403, "admin only")
+        import time as _t
+        if os.environ.get("ARVIS_X_LLM", "").strip() not in ("1", "true", "True"):
+            return {"ok": False, "reason": "LLM disabled (ARVIS_X_LLM is off)"}
+        try:
+            from arvisx.llm_client import make_llm
+            llm = make_llm()
+        except Exception as e:
+            return {"ok": False, "reason": f"make_llm failed: {e}"}
+        if llm is None:
+            return {"ok": False, "reason": "no LLM client (missing API key / SDK)"}
+        t0 = _t.time()
+        try:
+            out = await llm.ask_json(
+                messages=[{"role": "user", "content": 'Reply with exactly this JSON: {"pong": true}'}],
+                system_msgs=[{"role": "system", "content": "You are a connectivity test. Output ONLY JSON."}],
+                channel="chat")
+        except Exception as e:
+            return {"ok": False, "provider": getattr(llm, "provider", "?"), "model": getattr(llm, "model", "?"),
+                    "latency_ms": round((_t.time() - t0) * 1000), "reason": f"call failed: {e}"}
+        ms = round((_t.time() - t0) * 1000)
+        reached = isinstance(out, dict)
+        return {"ok": reached, "provider": getattr(llm, "provider", "?"), "model": getattr(llm, "model", "?"),
+                "latency_ms": ms, "pong": bool(out.get("pong")) if isinstance(out, dict) else False,
+                "reply": out, "reason": "" if reached else "no JSON returned"}
 
     @app.post("/api/v1/forms/run/{rid}/assign")
     async def forms_assign_run(rid: int, payload: Dict[str, Any] = Body(...)):
