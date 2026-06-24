@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import {
   BookOpen, Brain, FileText, FileUp, Sparkles, Loader2, CheckCircle2,
-  AlertTriangle, RotateCcw, Wrench, Gauge, ListChecks, Plus, X, Save,
+  AlertTriangle, RotateCcw, Wrench, Gauge, ListChecks, Plus, X, Save, Pencil, ArrowLeft,
 } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
 import { Card, Spinner, Empty } from '../components/ui'
@@ -86,10 +86,12 @@ function KnowledgeEditor({ asset, onClose, onManualChange }) {
   const fileRef = useRef(null)
   const [k, setK] = useState(empty)
   const [loaded, setLoaded] = useState(false)
+  const [mode, setMode] = useState('view')     // view (preview) | edit
   const [phase, setPhase] = useState('idle')   // idle | uploading | distilling | saving | error
   const [note, setNote] = useState('')
   const [manual, setManual] = useState(asset.manual_path)
   const distilMsg = useCycling(phase === 'distilling')
+  const hasKnow = (k.specs?.length || 0) + (k.ppm?.length || 0) + (k.troubleshooting?.length || 0) > 0
 
   useEffect(() => {
     let on = true
@@ -105,7 +107,7 @@ function KnowledgeEditor({ asset, onClose, onManualChange }) {
 
   async function save() {
     setPhase('saving'); setNote('')
-    try { await api.saveAssetKnowledge(asset.id, k); dirty.current = false; setPhase('idle'); setNote('Saved ✓'); setTimeout(() => setNote(''), 2500) }
+    try { await api.saveAssetKnowledge(asset.id, k); dirty.current = false; setPhase('idle'); setMode('view'); setNote('Saved ✓'); setTimeout(() => setNote(''), 2500) }
     catch (e) { setPhase('error'); setNote(e.message || 'Save failed') }
   }
   async function upload(file) {
@@ -118,7 +120,7 @@ function KnowledgeEditor({ asset, onClose, onManualChange }) {
     setPhase('distilling'); setNote('')
     try {
       const r = await api.extractAssetSkills(asset.id)
-      if (r.extracted) { const d = r.knowledge || await api.assetKnowledge(asset.id); setK({ specs: d.specs || [], ppm: d.ppm || [], troubleshooting: d.troubleshooting || [] }); setPhase('idle'); setNote('Distilled — review & save') }
+      if (r.extracted) { const d = r.knowledge || await api.assetKnowledge(asset.id); setK({ specs: d.specs || [], ppm: d.ppm || [], troubleshooting: d.troubleshooting || [] }); setPhase('idle'); setMode('edit'); setNote('Distilled — review & save') }
       else { setPhase('error'); setNote(r.note || 'This manual looks scanned — upload a digital PDF.') }
     } catch (e) { setPhase('error'); setNote(e.message || 'Distil failed') }
   }
@@ -130,11 +132,17 @@ function KnowledgeEditor({ asset, onClose, onManualChange }) {
       <div className="bg-surface border border-border rounded-2xl max-w-2xl w-full max-h-[88vh] overflow-auto p-6" onClick={(e) => e.stopPropagation()}>
         {/* header */}
         <div className="flex items-start justify-between mb-4">
-          <div>
-            <div className="text-xl font-serif text-text flex items-center gap-2"><BookOpen className="w-5 h-5 text-purple" /> {asset.name}</div>
-            <div className="text-xs text-text-faint mt-0.5">{[asset.kind, asset.location].filter(Boolean).join(' · ') || 'equipment knowledge'}</div>
+          <div className="flex items-center gap-2">
+            {mode === 'edit' && <button onClick={() => setMode('view')} className="text-text-faint hover:text-text" title="Back to preview"><ArrowLeft className="w-5 h-5" /></button>}
+            <div>
+              <div className="text-xl font-serif text-text flex items-center gap-2"><BookOpen className="w-5 h-5 text-purple" /> {asset.name}{mode === 'edit' && <span className="text-xs text-purple uppercase tracking-wide">editing</span>}</div>
+              <div className="text-xs text-text-faint mt-0.5">{[asset.kind, asset.location].filter(Boolean).join(' · ') || 'equipment knowledge'}</div>
+            </div>
           </div>
-          <button onClick={onClose} className="text-text-faint hover:text-text"><X className="w-5 h-5" /></button>
+          <div className="flex items-center gap-3">
+            {mode === 'view' && <button onClick={() => setMode('edit')} className="flex items-center gap-1 text-xs border border-border rounded-lg px-2.5 py-1.5 text-text-dim hover:border-purple/40 hover:text-text" title="Edit knowledge"><Pencil className="w-3.5 h-3.5" /> edit</button>}
+            <button onClick={onClose} className="text-text-faint hover:text-text"><X className="w-5 h-5" /></button>
+          </div>
         </div>
 
         {/* manual actions */}
@@ -161,7 +169,25 @@ function KnowledgeEditor({ asset, onClose, onManualChange }) {
         )}
         {phase === 'error' && <div className="mb-4 flex items-start gap-1.5 text-xs text-amber"><AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" /> {note}</div>}
 
-        {!loaded ? <Spinner /> : (
+        {!loaded ? <Spinner /> : mode === 'view' ? (
+          // ── PREVIEW (read-only) ──
+          !hasKnow ? (
+            <div className="text-sm text-text-faint py-4">No knowledge yet. {manual ? <>Click <span className="text-purple">distil from manual</span> above, or</> : <>Upload a manual, or</>} click <span className="text-text-dim">edit</span> to add specs, PPM intervals & troubleshooting by hand.</div>
+          ) : (
+            <div className="flex flex-col gap-5">
+              {!!k.specs.length && <ViewSection icon={Gauge} tone="text-blue" title="Specifications">
+                {k.specs.map((s, i) => <div key={i} className="flex justify-between gap-3 text-sm py-1 border-b border-border-soft"><span className="text-text-dim">{s.name}</span><span className="text-text text-right">{s.value}</span></div>)}
+              </ViewSection>}
+              {!!k.ppm.length && <ViewSection icon={ListChecks} tone="text-gold-soft" title="PPM intervals">
+                {k.ppm.map((p, i) => <div key={i} className="text-sm py-1 border-b border-border-soft text-text">{p.task} <span className="text-gold-soft">· {p.interval_text || (p.interval_days ? p.interval_days + 'd' : '—')}</span></div>)}
+              </ViewSection>}
+              {!!k.troubleshooting.length && <ViewSection icon={Wrench} tone="text-amber" title="Troubleshooting">
+                {k.troubleshooting.map((t, i) => <div key={i} className="text-sm py-1 border-b border-border-soft"><span className="text-amber">{t.symptom}</span> <span className="text-text-faint">→</span> <span className="text-text-dim">{t.action}</span></div>)}
+              </ViewSection>}
+            </div>
+          )
+        ) : (
+          // ── EDIT ──
           <div className="flex flex-col gap-5">
             <EditSection icon={Gauge} tone="text-blue" title="Specifications" rows={k.specs}
               cols={[['name', 'Name'], ['value', 'Value']]}
@@ -179,13 +205,22 @@ function KnowledgeEditor({ asset, onClose, onManualChange }) {
           <div className="text-xs text-green">{note && phase === 'idle' ? note : ''}</div>
           <div className="flex items-center gap-3">
             <button onClick={onClose} className="text-sm text-text-faint hover:text-text">Close</button>
-            <button onClick={save} disabled={busy} className="flex items-center gap-1.5 text-sm bg-primary text-white rounded-lg px-4 py-2 disabled:opacity-50">
-              <Save className="w-4 h-4" /> Save knowledge
-            </button>
+            {mode === 'edit'
+              ? <button onClick={save} disabled={busy} className="flex items-center gap-1.5 text-sm bg-primary text-white rounded-lg px-4 py-2 disabled:opacity-50"><Save className="w-4 h-4" /> Save knowledge</button>
+              : <button onClick={() => setMode('edit')} className="flex items-center gap-1.5 text-sm border border-border rounded-lg px-4 py-2 text-text-dim hover:text-text hover:border-purple/40"><Pencil className="w-4 h-4" /> Edit</button>}
           </div>
         </div>
-        <div className="text-xs text-text-faint mt-3">Saved knowledge is what the bot recalls in Ask Arvis answers + root-cause. Edit freely — distil drafts it, you curate it.</div>
+        <div className="text-xs text-text-faint mt-3">The bot recalls this knowledge in Ask Arvis answers + root-cause. Distil drafts it; the pencil lets you curate — add, edit, or remove.</div>
       </div>
+    </div>
+  )
+}
+
+function ViewSection({ icon: Icon, tone, title, children }) {
+  return (
+    <div>
+      <div className={`flex items-center gap-1.5 text-xs uppercase tracking-wide ${tone} mb-1`}><Icon className="w-3.5 h-3.5" /> {title}</div>
+      {children}
     </div>
   )
 }
