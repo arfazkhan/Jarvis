@@ -1169,9 +1169,13 @@ def create_app():
         iss = state.db.get_issue(issue_id)
         if not iss:
             return
-        try:
-            iss["history"] = _json.loads(iss.get("history") or "[]")
-        except Exception:
+        h = iss.get("history")
+        if isinstance(h, str):          # get_issue may return it already-parsed; don't clobber
+            try:
+                iss["history"] = _json.loads(h or "[]")
+            except Exception:
+                iss["history"] = []
+        elif not isinstance(h, list):
             iss["history"] = []
         try:
             from arvisx.llm_client import make_llm
