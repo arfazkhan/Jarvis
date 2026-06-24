@@ -63,6 +63,17 @@ def _checklist_bot_mode() -> bool:
     return os.environ.get("ARVISX_BOT_MODE", "checklist").lower() != "residential"
 
 
+# When a fix is recorded with NO cause note, AllGud asks the resolver — curious, not naggy.
+# Initial ask + 2 gently-varied nudges (one per heartbeat gap), then it lets go.
+_KNOWLEDGE_ASK = [
+    "Nice — {subject} sorted 👏 For the record, what was actually wrong / what did you do to fix "
+    "it? I'll remember it so it's quicker next time. One line is plenty (or reply 'skip').",
+    "Still curious about that {subject} fix 🙂 — what was the cause? A quick line whenever you get a sec.",
+    "Last little nudge on {subject} — what fixed it? It helps the whole team next round. (or reply 'skip')",
+]
+_KNOWLEDGE_ABANDON = "No worries about {subject} — I'll pick it up from the pattern if it comes back 👍"
+
+
 class _State:
     """Community state. Default = in-memory simulator. With ARVISX_SOURCE=mqtt it is
     a live AssetStore fed by the MQTT ingest adapter (broker on ARVISX_MQTT_BROKER)."""
@@ -242,6 +253,25 @@ def create_app():
                                    f"*{cand['title']}*\n{cand['detail']}\n"
                                    f"Reply *approve {cand['id']}* or *reject {cand['id']}* "
                                    f"(or use the Knowledge page).", to_number="", kind="memory_candidate")
+                        # Curiosity nudges: gently follow up unanswered "what was the fix?" asks
+                        # (≤2 more, varied wording), then let it go. Spaced by env gap (default 6h).
+                        gap_h = float(os.environ.get("ARVISX_KNOWLEDGE_NUDGE_HOURS", "6"))
+                        for kreq in state.db.list_open_knowledge_requests(b):
+                            try:
+                                last = _dt.fromisoformat(str(kreq["last_nudge_at"])[:19])
+                            except Exception:
+                                continue
+                            if (nowt - last).total_seconds() < gap_h * 3600:
+                                continue
+                            subj = kreq.get("subject", "that")
+                            if kreq["nudges"] < 2:
+                                state.db.enqueue_notification(b, _KNOWLEDGE_ASK[kreq["nudges"] + 1].format(subject=subj),
+                                                              to_number=kreq["ask_number"], kind="knowledge_request")
+                                state.db.bump_knowledge_request_nudge(kreq["id"])
+                            else:
+                                state.db.enqueue_notification(b, _KNOWLEDGE_ABANDON.format(subject=subj),
+                                                              to_number=kreq["ask_number"], kind="knowledge_request")
+                                state.db.close_knowledge_request(kreq["id"], "abandoned")
                         # weekly (Mon ≥8am, once/wk) + monthly (1st ≥8am, once/mo) summary to owner
                         if owner and nowt.hour >= 8:
                             if nowt.weekday() == 0 and state.db.notifications_since(
@@ -859,6 +889,14 @@ def create_app():
                         "please try again later."}
             hist.append(now_t)
             state._ask_rate[by] = hist
+        # Curiosity loop: if this sender has an open "what was the fix?" request, their free-text
+        # reply IS the answer — record it (unless it's a manager command / a pending-action reply).
+        if by and not _CMD_VERBS.match(q) and not (hasattr(state, "_wa_pending") and state._wa_pending.get(by)):
+            kreq = state.db.open_knowledge_request_for(building, by)
+            if kreq:
+                r = _capture_knowledge_answer(kreq, q, building)
+                if r:
+                    return r
         # A2: managers can RUN actions from WhatsApp (assign / open / start / close / sign-off).
         # Deterministic command parser; only a BACKEND-resolved manager number (not a claimed
         # role) may act. Short-circuits before Q&A.
@@ -1200,6 +1238,47 @@ def create_app():
                 f"Reply *approve {cid}* or *reject {cid}* (or use the Knowledge page).",
                 to_number="", kind="memory_candidate")
 
+    def _issue_subject(iss: Dict[str, Any]) -> str:
+        s = iss.get("title", "the issue")
+        return f"{s} on {iss['asset']}" if iss.get("asset") else s
+
+    def _ask_for_knowledge(issue_id: int, by: str = "") -> None:
+        """Fix recorded with no cause → curiously ask the resolver (the tech, else a manager)."""
+        iss = state.db.get_issue(issue_id)
+        if not iss:
+            return
+        phone = ""
+        if by:
+            t = state.db.get_technician(iss["building_id"], by)
+            phone = _norm_phone((t or {}).get("phone", "")) if t else ""
+        if not phone:
+            mn = _manager_numbers()
+            phone = mn[0] if mn else ""
+        if not phone:
+            return                      # nobody reachable — skip quietly
+        subject = _issue_subject(iss)
+        state.db.add_knowledge_request(iss["building_id"], issue_id, phone, subject)
+        state.db.enqueue_notification(iss["building_id"], _KNOWLEDGE_ASK[0].format(subject=subject),
+                                      to_number=phone, kind="knowledge_request")
+
+    _CMD_VERBS = re.compile(r"^(assign|open|start|in[-\s]?progress|close|resolve|sign|approve|"
+                            r"reject|add\s+memory|help|commands|menu|yes|y|confirm|ok|okay|cancel|stop)\b",
+                            re.I)
+
+    def _capture_knowledge_answer(kreq: Dict[str, Any], text: str, building: str) -> Optional[Dict[str, Any]]:
+        """The resolver replied to a 'what was the fix?' ask — record it (or accept a skip)."""
+        low = text.strip().lower()
+        subject = kreq.get("subject", "that")
+        if low in ("skip", "no", "nope", "dunno", "don't know", "dont know", "na", "n/a", "later", "nvm"):
+            state.db.close_knowledge_request(kreq["id"], "abandoned")
+            return {"intent": "knowledge", "source": "knowledge", "text": "All good — thanks anyway 👍"}
+        iid = kreq["issue_id"]
+        state.db.append_issue_history(iid, "cause noted", by="(via WhatsApp)", note=text.strip())
+        state.db.close_knowledge_request(kreq["id"], "answered", answer=text.strip())
+        _spawn(_learn_from_resolved_issue(iid))      # now there's a cause → learn a lesson
+        return {"intent": "knowledge", "source": "knowledge",
+                "text": f"Thanks! 🧠 Noted — I'll remember that for {subject}."}
+
     # ── A2: manager actions over WhatsApp (deterministic, owner/fm only) ──
     def _shift_num(tok: str):
         return {"i": 1, "ii": 2, "iii": 3, "1": 1, "2": 2, "3": 3,
@@ -1234,10 +1313,12 @@ def create_app():
         iss = state.db.get_issue(iid)
         if not iss or iss.get("building_id") != building:
             return f"No issue #{iid} found for this building."
-        state.db.update_issue(iid, status=status, by=actor, note="via WhatsApp")
+        state.db.update_issue(iid, status=status, by=actor, note="")
         fresh = state.db.get_issue(iid)
         label = {"in_progress": "Work started", "resolved": "Resolved ✅"}.get(status, status)
         _notify_issue_event(fresh, label, by=actor)
+        if status == "resolved":          # no cause given → curiously ask the resolver
+            _ask_for_knowledge(iid, actor)
         return f"✅ Issue #{iid} → {label}."
 
     def _do_signoff(rid: int, actor: str) -> str:
@@ -1845,7 +1926,11 @@ def create_app():
         # Learn from the fix: when an issue is RESOLVED, an LLM synthesizes a reusable lesson
         # → pending memory candidate for manager approval. Background (no blocking, best-effort).
         if status == "resolved" and old_status != "resolved":
-            _spawn(_learn_from_resolved_issue(issue_id))
+            rnote = str(p.get("note", "")).strip()
+            if len(rnote) >= 6:
+                _spawn(_learn_from_resolved_issue(issue_id))   # has a cause → learn now
+            else:
+                _ask_for_knowledge(issue_id, str(p.get("by", "")))   # no cause → curiously ask
         return _jsonable(fresh)
 
     @app.post("/api/v1/issues/{issue_id}/visited")

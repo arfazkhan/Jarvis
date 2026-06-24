@@ -119,6 +119,14 @@ class ArvisxDb:
                 title TEXT, detail TEXT, status TEXT, source TEXT,
                 created_at TEXT, decided_at TEXT, decided_by TEXT);
             CREATE INDEX IF NOT EXISTS ix_memcand ON memory_candidates(building_id, status);
+            -- Knowledge requests: when an issue is fixed with NO cause note, AllGud asks the
+            -- resolver "what was the fix?" — gently nudges (≤3), then lets go. The reply becomes
+            -- the resolution note → a learned lesson.
+            CREATE TABLE IF NOT EXISTS knowledge_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, issue_id INTEGER,
+                ask_number TEXT, subject TEXT, status TEXT, nudges INTEGER,
+                created_at TEXT, last_nudge_at TEXT, answered_at TEXT, answer TEXT);
+            CREATE INDEX IF NOT EXISTS ix_kreq ON knowledge_requests(building_id, status);
             -- PPM schedule per asset: date-based (interval_days) and/or condition-based
             -- (run_hours_limit). Phase-S — drives the PPM planner + compliance.
             CREATE TABLE IF NOT EXISTS ppm_schedule (
@@ -752,6 +760,41 @@ class ArvisxDb:
         with self._lock, self._conn() as c:
             c.execute("UPDATE memory_candidates SET status=?, decided_at=?, decided_by=? WHERE id=?",
                       (status, datetime.now().isoformat(timespec="seconds"), by, cand_id))
+
+    # ── Knowledge requests (ask the resolver for the cause of a note-less fix) ─
+    def add_knowledge_request(self, building_id: str, issue_id: int, ask_number: str, subject: str) -> int:
+        now = datetime.now().isoformat(timespec="seconds")
+        with self._lock, self._conn() as c:
+            cur = c.execute(
+                "INSERT INTO knowledge_requests (building_id, issue_id, ask_number, subject,"
+                " status, nudges, created_at, last_nudge_at) VALUES (?,?,?,?, 'open', 0, ?, ?)",
+                (building_id, issue_id, ask_number, subject, now, now))
+            return int(cur.lastrowid)
+
+    def open_knowledge_request_for(self, building_id: str, ask_number: str) -> Optional[Dict[str, Any]]:
+        digits = "".join(ch for ch in str(ask_number).split("@")[0] if ch.isdigit())
+        if not digits:
+            return None
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT * FROM knowledge_requests WHERE building_id=? AND ask_number=? "
+                          "AND status='open' ORDER BY id DESC LIMIT 1", (building_id, digits)).fetchone()
+            return dict(r) if r else None
+
+    def list_open_knowledge_requests(self, building_id: str) -> List[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT * FROM knowledge_requests WHERE building_id=? AND status='open' ORDER BY id",
+                (building_id,)).fetchall()]
+
+    def bump_knowledge_request_nudge(self, req_id: int) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE knowledge_requests SET nudges=nudges+1, last_nudge_at=? WHERE id=?",
+                      (datetime.now().isoformat(timespec="seconds"), req_id))
+
+    def close_knowledge_request(self, req_id: int, status: str, answer: str = "") -> None:
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE knowledge_requests SET status=?, answered_at=?, answer=? WHERE id=?",
+                      (status, datetime.now().isoformat(timespec="seconds"), answer, req_id))
 
     def usage_daily(self, since_iso: str, building_id: Optional[str] = None) -> List[Dict[str, Any]]:
         q = ("SELECT substr(ts,1,10) d, kind, SUM(n) n, SUM(prompt_tokens+completion_tokens) tok,"
