@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { Target, ClipboardList, TriangleAlert, Box, Users, Sparkles, LogOut, Smartphone, Settings } from 'lucide-react'
+import { Target, ClipboardList, TriangleAlert, Box, Users, Sparkles, LogOut, Smartphone, Settings, BookOpen } from 'lucide-react'
 import { AllGudLogo } from './Logo'
 import { useAuth } from '../lib/AuthContext'
 
@@ -11,6 +11,7 @@ const primary = [
 ]
 const more = [
   { to: '/assets', label: 'Assets', icon: Box },
+  { to: '/knowledge', label: 'Knowledge', icon: BookOpen },
   { to: '/people', label: 'People', icon: Users },
   { to: '/intelligence', label: 'Intelligence', icon: Sparkles },
 ]

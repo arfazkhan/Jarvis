@@ -9,6 +9,7 @@ import RoundDetail from './pages/RoundDetail'
 import CheckItem from './pages/CheckItem'
 import Issues from './pages/Issues'
 import Assets from './pages/Assets'
+import KnowledgeBase from './pages/KnowledgeBase'
 import People from './pages/People'
 import Intelligence from './pages/Intelligence'
 import Setup from './pages/Setup'
@@ -87,6 +88,7 @@ function Shell() {
           <Route path="/operations/round/:rid/check/:itemIndex" element={<CheckItem />} />
           <Route path="/issues" element={<Issues />} />
           <Route path="/assets" element={<Assets />} />
+          <Route path="/knowledge" element={<KnowledgeBase />} />
           <Route path="/people" element={<People />} />
           <Route path="/intelligence" element={<Intelligence />} />
           <Route path="/setup" element={<Setup />} />
