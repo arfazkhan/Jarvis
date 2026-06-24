@@ -138,6 +138,7 @@ export const api = {
   // C1: distil manual → skills + read stored knowledge
   extractAssetSkills: (id) => api.post(`/assets/${id}/extract-skills`),
   assetKnowledge: (id) => api.get(`/assets/${id}/knowledge`),
+  saveAssetKnowledge: (id, knowledge) => api.post(`/assets/${id}/knowledge`, knowledge),
   // C2: building memory — recurring issues
   buildingMemory: (building, days) => api.get('/building/memory', { building, days }),
 

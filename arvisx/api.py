@@ -2124,6 +2124,23 @@ def create_app():
         return state.db.get_asset_knowledge(asset_id) or {
             "asset_id": asset_id, "specs": [], "ppm": [], "troubleshooting": []}
 
+    @app.post("/api/v1/assets/{asset_id}/knowledge")
+    async def asset_knowledge_save(asset_id: int, payload: Dict[str, Any] = Body(...)):
+        """Manually add/remove/edit an asset's knowledge (the operator can curate what the
+        AI distilled). Replaces the stored specs/ppm/troubleshooting with what's sent."""
+        a = state.db.get_asset(asset_id)
+        if not a:
+            raise HTTPException(404, f"unknown asset {asset_id}")
+        p = payload or {}
+        knowledge = {
+            "specs": [s for s in (p.get("specs") or []) if isinstance(s, dict) and s.get("name")],
+            "ppm": [s for s in (p.get("ppm") or []) if isinstance(s, dict) and s.get("task")],
+            "troubleshooting": [s for s in (p.get("troubleshooting") or []) if isinstance(s, dict) and s.get("symptom")],
+        }
+        state.db.save_asset_knowledge(asset_id, a["building_id"], a["name"],
+                                      a.get("manual_name", ""), knowledge)
+        return {"saved": True, "knowledge": knowledge}
+
     # ── C2: building memory — recurring issues over a window ──────────────
     @app.get("/api/v1/building/memory")
     async def building_memory(building: str = "one-anthem", days: int = 90):
