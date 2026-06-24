@@ -234,6 +234,14 @@ def create_app():
                         for s in ci.due_scheduled_checklists(state.db, b, nowt):
                             if s["assignee"]:
                                 _notify_assignment(s["run_id"])
+                        # Learned-lesson candidates: propose recurring patterns for approval +
+                        # notify the manager (they approve/reject from dashboard or WhatsApp).
+                        for cand in ci.propose_memory_candidates(state.db, b):
+                            state.db.enqueue_notification(
+                                b, f"📚 AllGud learned something — review to add to building memory:\n"
+                                   f"*{cand['title']}*\n{cand['detail']}\n"
+                                   f"Reply *approve {cand['id']}* or *reject {cand['id']}* "
+                                   f"(or use the Knowledge page).", to_number="", kind="memory_candidate")
                         # weekly (Mon ≥8am, once/wk) + monthly (1st ≥8am, once/mo) summary to owner
                         if owner and nowt.hour >= 8:
                             if nowt.weekday() == 0 and state.db.notifications_since(
@@ -1252,9 +1260,26 @@ def create_app():
                                       "run": (lambda rid=run["id"], a=actor: _do_signoff(rid, a))}
             return f"⚠️ Reply YES to confirm signing off {_run_name(run)}."
 
+        # Building-memory curation: approve/reject a learned-lesson candidate, or add one.
+        m = _re.match(r"(approve|reject)\s+#?(\d+)", low)
+        if m:
+            cid = int(m.group(2)); cand = state.db.get_memory_candidate(cid)
+            if not cand or cand.get("building_id") != building:
+                return f"No learning #{cid} found."
+            status = "approved" if m.group(1) == "approve" else "rejected"
+            state.db.decide_memory_candidate(cid, status, by=actor)
+            return (f"✅ Learning #{cid} added to building memory." if status == "approved"
+                    else f"🗑️ Learning #{cid} rejected — won't be remembered.")
+        m = _re.match(r"add\s+memory[:\s]+(.+)$", text.strip(), _re.I)
+        if m:
+            cid = state.db.add_memory_candidate(building, "manual", m.group(1).strip()[:120],
+                                                source="manual", status="approved", decided_by=actor)
+            return f"✅ Noted in building memory (#{cid})."
+
         if low in ("help", "commands", "?", "menu"):
             return ("Manager commands:\n• assign shift II to <name>\n• open today\n"
-                    "• start issue <n>\n• close issue <n>\n• sign off shift I")
+                    "• start issue <n>\n• close issue <n>\n• sign off shift I\n"
+                    "• approve <n> / reject <n>  (learned lessons)\n• add memory: <note>")
         return None
 
     # ── A3: resident common-area tickets over WhatsApp ───────────────────
@@ -2141,12 +2166,41 @@ def create_app():
                                       a.get("manual_name", ""), knowledge)
         return {"saved": True, "knowledge": knowledge}
 
-    # ── C2: building memory — recurring issues over a window ──────────────
+    # ── C2: building memory — recurring issues + approved/pending lessons ──
     @app.get("/api/v1/building/memory")
     async def building_memory(building: str = "one-anthem", days: int = 90):
         from arvisx import checklist_intel as ci
         return {"building": building, "days": days,
-                "recurring": ci.recurring_issues(state.db, building, days=days)}
+                "recurring": ci.recurring_issues(state.db, building, days=days),
+                "lessons": state.db.list_memory_candidates(building, "approved"),
+                "pending": state.db.list_memory_candidates(building, "pending")}
+
+    @app.get("/api/v1/memory/candidates")
+    async def memory_candidates_list(building: str = "one-anthem", status: str = ""):
+        return {"candidates": state.db.list_memory_candidates(building, status or None)}
+
+    @app.post("/api/v1/memory/candidates")
+    async def memory_candidate_add(payload: Dict[str, Any] = Body(...)):
+        """Manager adds a lesson by hand → goes straight in as APPROVED (they're the curator)."""
+        p = payload or {}
+        title = str(p.get("title", "")).strip()
+        if not title:
+            raise HTTPException(400, "provide 'title'")
+        building = str(p.get("building", "one-anthem")).strip() or "one-anthem"
+        cid = state.db.add_memory_candidate(building, "manual", title, str(p.get("detail", "")),
+                                            source="manual", status="approved",
+                                            decided_by=str(p.get("by", "manager")))
+        return {"id": cid, "title": title, "status": "approved"}
+
+    @app.post("/api/v1/memory/candidates/{cand_id}/decide")
+    async def memory_candidate_decide(cand_id: int, payload: Dict[str, Any] = Body(...)):
+        if not state.db.get_memory_candidate(cand_id):
+            raise HTTPException(404, f"unknown candidate {cand_id}")
+        status = str((payload or {}).get("status", "")).strip().lower()
+        if status not in ("approved", "rejected"):
+            raise HTTPException(400, "status must be approved or rejected")
+        state.db.decide_memory_candidate(cand_id, status, by=str((payload or {}).get("by", "")))
+        return {"id": cand_id, "status": status}
 
     # ── B2: scheduled checklists (date+time triggers) ────────────────────
     @app.get("/api/v1/schedules")

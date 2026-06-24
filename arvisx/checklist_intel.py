@@ -414,6 +414,24 @@ def recurring_issues(db, building: str, days: int = 90, min_count: int = 2,
     return out
 
 
+def propose_memory_candidates(db, building: str, now: Optional["datetime"] = None) -> List[Dict[str, Any]]:
+    """Turn detected recurring patterns into LEARNED-LESSON candidates for manager approval
+    (don't auto-trust). Dedup per pattern key so each is proposed once. Returns the NEWLY
+    proposed candidates (for the WhatsApp notification)."""
+    new: List[Dict[str, Any]] = []
+    for r in recurring_issues(db, building, now=now):
+        key = "recurring:" + (r.get("asset") or r.get("key") or r.get("example") or "")
+        title = f"Recurring problem on {r.get('asset') or r.get('example')}"
+        detail = (f"\"{r.get('example')}\" has recurred {r['count']}× in 90 days "
+                  f"({r['open']} still open, last {r.get('last_seen')}). "
+                  f"Approve to remember this as a chronic pattern.")
+        cid = db.add_memory_candidate(building, "recurring_pattern", title, detail,
+                                      source="auto", dedup_key=key)
+        if cid:
+            new.append({"id": cid, "title": title, "detail": detail})
+    return new
+
+
 def round_reminders(db, building: str, now: Optional["datetime"] = None,
                     remind_after_h: float = 6.0, escalate_after_h: float = 10.0,
                     nudge_frac: float = 0.6, escalate_before_min: int = 30) -> List[Dict[str, Any]]:

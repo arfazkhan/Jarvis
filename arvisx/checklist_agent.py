@@ -82,7 +82,11 @@ def _compliance(ctx, **a):
                            "open. Use for 'has this happened before', 'recurring', 'chronic', 'history'.", _NONE)
 def _recurring_issues(ctx, **a):
     d, b, _t = _db(ctx)
-    return {"recurring": intel.recurring_issues(d, b)}
+    # Manager-APPROVED learned lessons are trusted memory; surface them alongside the
+    # raw recurring counts so the bot recalls confirmed knowledge first.
+    lessons = [{"lesson": L["title"], "detail": L.get("detail", "")}
+               for L in d.list_memory_candidates(b, "approved")]
+    return {"recurring": intel.recurring_issues(d, b), "confirmed_lessons": lessons}
 
 
 @_tool("asset_manual", "Manual-derived knowledge for ONE asset: specs, PPM intervals, and "

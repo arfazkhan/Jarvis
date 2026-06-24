@@ -111,6 +111,14 @@ class ArvisxDb:
                 channel TEXT, model TEXT, prompt_tokens INTEGER, completion_tokens INTEGER,
                 n INTEGER, cost REAL);
             CREATE INDEX IF NOT EXISTS ix_usage ON usage_events(ts, kind);
+            -- Memory candidates: LEARNED lessons AllGud proposes (recurring pattern, RCA, etc.)
+            -- The manager approves/rejects before they become trusted building memory the bot
+            -- recalls. dedup_key prevents re-proposing the same thing.
+            CREATE TABLE IF NOT EXISTS memory_candidates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, kind TEXT, dedup_key TEXT,
+                title TEXT, detail TEXT, status TEXT, source TEXT,
+                created_at TEXT, decided_at TEXT, decided_by TEXT);
+            CREATE INDEX IF NOT EXISTS ix_memcand ON memory_candidates(building_id, status);
             -- PPM schedule per asset: date-based (interval_days) and/or condition-based
             -- (run_hours_limit). Phase-S — drives the PPM planner + compliance.
             CREATE TABLE IF NOT EXISTS ppm_schedule (
@@ -705,6 +713,45 @@ class ArvisxDb:
                     "by_channel": by_channel},
             "total_cost": round(wa_cost + llm_cost, 4),
         }
+
+    # ── Memory candidates (learned-lesson approval queue) ─────────────────
+    def add_memory_candidate(self, building_id: str, kind: str, title: str, detail: str = "",
+                             source: str = "", dedup_key: str = "", status: str = "pending",
+                             decided_by: str = "") -> Optional[int]:
+        """Insert a candidate. Skips if one with the same dedup_key already exists in a
+        non-rejected state (don't re-propose). Returns the new id, or None if skipped."""
+        now = datetime.now().isoformat(timespec="seconds")
+        with self._lock, self._conn() as c:
+            if dedup_key:
+                r = c.execute("SELECT id FROM memory_candidates WHERE building_id=? AND dedup_key=? "
+                              "AND status!='rejected'", (building_id, dedup_key)).fetchone()
+                if r:
+                    return None
+            cur = c.execute(
+                "INSERT INTO memory_candidates (building_id, kind, dedup_key, title, detail, status,"
+                " source, created_at, decided_at, decided_by) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (building_id, kind, dedup_key, title, detail, status, source, now,
+                 now if status != "pending" else None, decided_by))
+            return int(cur.lastrowid)
+
+    def list_memory_candidates(self, building_id: str, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        q = "SELECT * FROM memory_candidates WHERE building_id=?"
+        args: List[Any] = [building_id]
+        if status:
+            q += " AND status=?"; args.append(status)
+        q += " ORDER BY id DESC"
+        with self._lock, self._conn() as c:
+            return [dict(r) for r in c.execute(q, tuple(args)).fetchall()]
+
+    def get_memory_candidate(self, cand_id: int) -> Optional[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT * FROM memory_candidates WHERE id=?", (cand_id,)).fetchone()
+            return dict(r) if r else None
+
+    def decide_memory_candidate(self, cand_id: int, status: str, by: str = "") -> None:
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE memory_candidates SET status=?, decided_at=?, decided_by=? WHERE id=?",
+                      (status, datetime.now().isoformat(timespec="seconds"), by, cand_id))
 
     def usage_daily(self, since_iso: str, building_id: Optional[str] = None) -> List[Dict[str, Any]]:
         q = ("SELECT substr(ts,1,10) d, kind, SUM(n) n, SUM(prompt_tokens+completion_tokens) tok,"

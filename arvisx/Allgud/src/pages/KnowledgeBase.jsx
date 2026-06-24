@@ -24,8 +24,10 @@ export default function KnowledgeBase() {
   const { building } = useBuilding()
   const [key, setKey] = useState(0)
   const [openAsset, setOpenAsset] = useState(null)
+  const [memKey, setMemKey] = useState(0)
   const assets = useAsync(() => api.assetsRegistry(building), [building, key])
-  const memory = useAsync(() => api.buildingMemory(building, 90), [building])
+  const memory = useAsync(() => api.buildingMemory(building, 90), [building, memKey])
+  const refreshMem = () => setMemKey((k) => k + 1)
   const list = (assets.data?.assets || []).filter((a) => a.id)
   const refresh = () => setKey((k) => k + 1)
 
@@ -46,8 +48,8 @@ export default function KnowledgeBase() {
 
       <div className="px-10 pt-10 pb-14">
         <div className="flex items-center gap-2 text-2xl font-serif text-text mb-1"><Brain className="w-5 h-5 text-purple" /> Building memory</div>
-        <div className="text-sm text-text-dim mb-4">Problems that recurred (≥2×) over the last 90 days — the building's learned history.</div>
-        <MemoryGrid data={memory.data} loading={memory.loading} />
+        <div className="text-sm text-text-dim mb-5">Approve what AllGud learns before it's trusted. Confirmed lessons + raw recurring patterns.</div>
+        <MemorySection data={memory.data} loading={memory.loading} building={building} onChange={refreshMem} />
       </div>
 
       {openAsset && <KnowledgeEditor asset={openAsset} onClose={() => { setOpenAsset(null); refresh() }} onManualChange={refresh} />}
@@ -248,22 +250,70 @@ function EditSection({ icon: Icon, tone, title, rows, cols, onEdit, onRemove, on
   )
 }
 
-function MemoryGrid({ data, loading }) {
-  const items = data?.recurring || []
+function MemorySection({ data, loading, building, onChange }) {
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
   if (loading) return <Spinner />
-  if (!items.length) return <Empty>No recurring problems yet — nothing has come back ≥2× in 90 days. The bot learns as issues accrue.</Empty>
+  const pending = data?.pending || [], lessons = data?.lessons || [], recurring = data?.recurring || []
+  async function decide(id, status) { setBusy(true); try { await api.decideMemory(id, status, 'manager'); onChange() } finally { setBusy(false) } }
+  async function add() { if (!text.trim()) return; setBusy(true); try { await api.addMemory({ building, title: text.trim() }); setText(''); onChange() } finally { setBusy(false) } }
+
   return (
-    <div className="grid grid-cols-3 gap-4">
-      {items.map((m, i) => (
-        <Card key={i} className="p-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-sm text-text"><RotateCcw className="w-4 h-4 text-purple" /> {m.asset || m.example}</div>
-            <span className="text-xs font-medium text-purple">{m.count}×</span>
+    <div className="flex flex-col gap-8">
+      {pending.length > 0 && (
+        <div>
+          <div className="text-sm text-text-dim mb-3 flex items-center gap-2"><Sparkles className="w-4 h-4 text-purple" /> Pending learnings — approve to remember <span className="text-xs bg-purple/15 text-purple rounded-full px-2 py-0.5">{pending.length}</span></div>
+          <div className="flex flex-col gap-2">
+            {pending.map((c) => (
+              <Card key={c.id} className="p-4 flex items-start justify-between gap-4 border-purple/30">
+                <div className="min-w-0"><div className="text-sm text-text">{c.title}</div><div className="text-xs text-text-faint mt-0.5">{c.detail}</div></div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button onClick={() => decide(c.id, 'approved')} disabled={busy} className="text-xs flex items-center gap-1 text-green border border-green/40 rounded-lg px-2.5 py-1.5 hover:bg-green/10 disabled:opacity-50"><CheckCircle2 className="w-3.5 h-3.5" /> approve</button>
+                  <button onClick={() => decide(c.id, 'rejected')} disabled={busy} className="text-xs flex items-center gap-1 text-text-faint border border-border rounded-lg px-2.5 py-1.5 hover:text-red hover:border-red/40 disabled:opacity-50"><X className="w-3.5 h-3.5" /> reject</button>
+                </div>
+              </Card>
+            ))}
           </div>
-          <div className="text-xs text-text-faint mt-1 truncate" title={m.example}>{m.example}</div>
-          <div className="text-xs mt-1">{m.open > 0 ? <span className="text-amber">{m.open} still open</span> : <span className="text-green">all resolved</span>} <span className="text-text-faint">· last {m.last_seen}</span></div>
-        </Card>
-      ))}
+        </div>
+      )}
+
+      <div>
+        <div className="text-sm text-text-dim mb-3 flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-green" /> Confirmed memory</div>
+        <div className="flex gap-2 mb-3">
+          <input value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && add()}
+            placeholder="Add a lesson by hand — e.g. 'Lift B resets on power dip → check UPS first'"
+            className="flex-1 bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text placeholder:text-text-faint outline-none focus:border-purple/50" />
+          <button onClick={add} disabled={busy || !text.trim()} className="text-sm bg-primary text-white rounded-lg px-4 disabled:opacity-50 flex items-center gap-1"><Plus className="w-4 h-4" /> add</button>
+        </div>
+        {lessons.length === 0 ? <div className="text-xs text-text-faint">No confirmed lessons yet — approve a pending learning, or add one above.</div> : (
+          <div className="flex flex-col gap-1.5">
+            {lessons.map((L) => (
+              <Card key={L.id} className="p-3 flex items-start justify-between gap-3">
+                <div className="min-w-0"><div className="text-sm text-text">{L.title}</div>{L.detail && <div className="text-xs text-text-faint mt-0.5">{L.detail}</div>}</div>
+                <button onClick={() => decide(L.id, 'rejected')} disabled={busy} className="text-text-faint hover:text-red p-1 shrink-0" title="Remove from memory"><X className="w-4 h-4" /></button>
+              </Card>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <div className="text-sm text-text-dim mb-3 flex items-center gap-2"><RotateCcw className="w-4 h-4 text-text-faint" /> Recurring patterns (last 90 days)</div>
+        {recurring.length === 0 ? <div className="text-xs text-text-faint">No recurring problems yet — nothing has come back ≥2× in 90 days.</div> : (
+          <div className="grid grid-cols-3 gap-4">
+            {recurring.map((m, i) => (
+              <Card key={i} className="p-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-sm text-text truncate"><RotateCcw className="w-4 h-4 text-purple" /> {m.asset || m.example}</div>
+                  <span className="text-xs font-medium text-purple">{m.count}×</span>
+                </div>
+                <div className="text-xs text-text-faint mt-1 truncate" title={m.example}>{m.example}</div>
+                <div className="text-xs mt-1">{m.open > 0 ? <span className="text-amber">{m.open} still open</span> : <span className="text-green">all resolved</span>} <span className="text-text-faint">· last {m.last_seen}</span></div>
+              </Card>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
