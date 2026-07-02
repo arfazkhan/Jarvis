@@ -215,7 +215,9 @@ function AssetDrawer({ asset, ppm, building, onClose, onChanged }) {
               <div key={i} className="flex items-center justify-between text-sm py-2 border-b border-border-soft">
                 <div>
                   <div className="text-text-dim">{e.item_id}</div>
-                  <div className="text-xs text-text-faint">{fmt(e.ts)}</div>
+                  <div className="text-xs text-text-faint">
+                    {fmt(e.ts)}{e.actor ? ` · by ${e.actor}` : ''}
+                  </div>
                 </div>
                 <div className={`text-sm ${e.is_issue ? 'text-red' : 'text-text'}`}>{e.value}</div>
               </div>

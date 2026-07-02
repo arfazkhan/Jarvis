@@ -177,6 +177,10 @@ export const api = {
   addResident: (body) => api.post('/residents', body),
   deactivateResident: (id) => api.post(`/residents/${id}/deactivate`),
 
+  // per-building settings (resident WhatsApp group invite link, ...)
+  getSettings: (building) => api.get('/settings', { building }),
+  setSettings: (body) => api.post('/settings', body),
+
   // scheduled checklists (B2 — date+time triggers)
   schedules: (building, all) => api.get('/schedules', { building, all }),
   addSchedule: (body) => api.post('/schedules', body),
@@ -206,6 +210,17 @@ export const api = {
   adminAnalytics: (building, days) => api.get('/admin/analytics', { building, days }),
   adminUsage: (building, days) => api.get('/admin/usage', { building, days }),
   sendSummary: (building, period) => api.post('/admin/send-summary', undefined, { building, period }),
+
+  // weekly / monthly PDF report (manager/owner)
+  downloadReport: async (period, building) => {
+    const blob = await request(`/reports/${period}.pdf`, { blob: true, params: { building } })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `allgud-${period}-report.pdf`
+    document.body.appendChild(a); a.click(); a.remove()
+    URL.revokeObjectURL(url)
+  },
 
   // sweeps
   runEscalations: (building) => api.post('/escalations/run', undefined, { building }),

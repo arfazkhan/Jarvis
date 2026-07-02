@@ -40,6 +40,10 @@ function fromTemplate(t, { clone } = {}) {
     name: clone ? `${t.name} (copy)` : (t.name || ''),
     cadence: t.cadence || 'daily',
     timing: t.timing || '',
+    sched_time: t.sched_time || '',
+    sched_dow: t.sched_dow ?? '',
+    sched_dom: t.sched_dom ?? '',
+    sched_date: t.sched_date || '',
     sections: (t.sections || []).map((s) => ({
       id: uid(), name: s.name || '',
       items: (s.items || []).map((it) => ({
@@ -53,9 +57,13 @@ function fromTemplate(t, { clone } = {}) {
 
 export default function ChecklistBuilder({ building, initial, onSaved, onCancel }) {
   const start = initial ? fromTemplate(initial, { clone: initial._clone }) : {
-    template_id: '', name: '', cadence: 'daily', timing: '', sections: [newSection()],
+    template_id: '', name: '', cadence: 'daily', timing: '',
+    sched_time: '', sched_dow: '', sched_dom: '', sched_date: '', sections: [newSection()],
   }
-  const [meta, setMeta] = useState({ template_id: start.template_id, name: start.name, cadence: start.cadence, timing: start.timing })
+  const [meta, setMeta] = useState({
+    template_id: start.template_id, name: start.name, cadence: start.cadence, timing: start.timing,
+    sched_time: start.sched_time, sched_dow: start.sched_dow, sched_dom: start.sched_dom, sched_date: start.sched_date,
+  })
   const [sections, setSections] = useState(start.sections)
   const [busy, setBusy] = useState(false)
   const [showPreview, setShowPreview] = useState(true)
@@ -134,7 +142,14 @@ export default function ChecklistBuilder({ building, initial, onSaved, onCancel 
     if (!outSections.length || !seen.size) return alert('Add at least one section with one named check')
     setBusy(true)
     try {
-      await api.saveTemplate({ building, template: { template_id: tid, name: meta.name.trim(), cadence: meta.cadence, timing: meta.timing.trim(), signoff_roles: ['technician', 'supervisor'], sections: outSections } })
+      const c = meta.cadence
+      const tpl = { template_id: tid, name: meta.name.trim(), cadence: c, timing: meta.timing.trim(), signoff_roles: ['technician', 'supervisor'], sections: outSections }
+      // Cadence-driven schedule: only the fields that cadence uses (others cleared).
+      if (c !== 'daily') tpl.sched_time = (meta.sched_time || '').trim()
+      if (c === 'weekly') tpl.sched_dow = meta.sched_dow === '' ? null : Number(meta.sched_dow)
+      if (c === 'monthly') tpl.sched_dom = meta.sched_dom === '' ? null : Number(meta.sched_dom)
+      if (c === 'quarterly' || c === 'custom') tpl.sched_date = (meta.sched_date || '').trim()
+      await api.saveTemplate({ building, template: tpl })
       onSaved()
     } catch (e) { alert(e.message) } finally { setBusy(false) }
   }
@@ -156,11 +171,13 @@ export default function ChecklistBuilder({ building, initial, onSaved, onCancel 
       </div>
 
       {/* meta */}
-      <div className="grid grid-cols-4 gap-3 bg-surface border border-border rounded-xl p-4 mb-5">
-        <Field label="Name"><Input value={meta.name} onChange={(v) => setMeta({ ...meta, name: v })} /></Field>
-        <Field label="ID (auto if blank)"><Input value={meta.template_id} onChange={(v) => setMeta({ ...meta, template_id: v })} /></Field>
-        <Field label="Cadence"><Select value={meta.cadence} options={['daily', 'weekly', 'monthly', 'quarterly']} onChange={(v) => setMeta({ ...meta, cadence: v })} /></Field>
-        <Field label="Timing (e.g. 08:00 AM – 04:15 PM)"><Input value={meta.timing} onChange={(v) => setMeta({ ...meta, timing: v })} /></Field>
+      <div className="bg-surface border border-border rounded-xl p-4 mb-5">
+        <div className="grid grid-cols-3 gap-3">
+          <Field label="Name"><Input value={meta.name} onChange={(v) => setMeta({ ...meta, name: v })} /></Field>
+          <Field label="ID (auto if blank)"><Input value={meta.template_id} onChange={(v) => setMeta({ ...meta, template_id: v })} /></Field>
+          <Field label="Cadence"><Select value={meta.cadence} options={['daily', 'weekly', 'monthly', 'quarterly', 'custom']} onChange={(v) => setMeta({ ...meta, cadence: v })} /></Field>
+        </div>
+        <ScheduleFields meta={meta} setMeta={setMeta} />
       </div>
 
       <div className={showPreview ? 'grid grid-cols-[1fr_360px] gap-6 items-start' : ''}>
@@ -272,6 +289,109 @@ function MiniInput({ label, value, onChange, w }) {
 
 function Field({ label, children }) {
   return <label className="flex flex-col gap-1 text-xs text-text-faint">{label}{children}</label>
+}
+
+const _DOW = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+const _DTCLS = 'bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text outline-none focus:border-gold/50'
+
+// Cadence-driven schedule inputs — only the fields the chosen cadence needs, + a plain-English
+// "when it runs" line. daily → shift window only (no date). The rest set an auto-open schedule.
+function ScheduleFields({ meta, setMeta }) {
+  const c = meta.cadence
+  const set = (patch) => setMeta({ ...meta, ...patch })
+  const time = (
+    <Field label="Open time">
+      <input type="time" value={meta.sched_time} onChange={(e) => set({ sched_time: e.target.value })} className={_DTCLS} />
+    </Field>
+  )
+  let fields = null
+  let hint = ''
+  if (c === 'daily') {
+    const [s24, e24] = splitTiming(meta.timing)
+    fields = (<>
+      <Field label="Shift start">
+        <input type="time" value={s24} onChange={(e) => set({ timing: composeTiming(e.target.value, e24) })} className={_DTCLS} />
+      </Field>
+      <Field label="Shift end">
+        <input type="time" value={e24} onChange={(e) => set({ timing: composeTiming(s24, e.target.value) })} className={_DTCLS} />
+      </Field>
+    </>)
+    hint = s24 && e24
+      ? `Opens every morning. Reminders/lapse use the ${to12h(s24)} – ${to12h(e24)} shift window${e24 <= s24 ? ' (overnight)' : ''}.`
+      : 'Opens automatically every morning. Pick the shift start/end so reminders fire before shift-end.'
+  } else if (c === 'weekly') {
+    fields = (<>
+      <Field label="Day of week">
+        <select value={meta.sched_dow} onChange={(e) => set({ sched_dow: e.target.value })} className={_DTCLS}>
+          <option value="">Pick a day…</option>
+          {_DOW.map((d, i) => <option key={i} value={i}>{d}</option>)}
+        </select>
+      </Field>
+      {time}
+    </>)
+    if (meta.sched_dow !== '') hint = `Runs every ${_DOW[Number(meta.sched_dow)]}${meta.sched_time ? ` at ${meta.sched_time}` : ''}.`
+  } else if (c === 'monthly') {
+    fields = (<>
+      <Field label="Day of month">
+        <select value={meta.sched_dom} onChange={(e) => set({ sched_dom: e.target.value })} className={_DTCLS}>
+          <option value="">Pick a date…</option>
+          {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => <option key={d} value={d}>{d}</option>)}
+        </select>
+      </Field>
+      {time}
+    </>)
+    if (meta.sched_dom !== '') hint = `Runs on the ${ordinal(Number(meta.sched_dom))} of every month${meta.sched_time ? ` at ${meta.sched_time}` : ''}.`
+  } else if (c === 'quarterly') {
+    fields = (<>
+      <Field label="Start date">
+        <input type="date" value={meta.sched_date} onChange={(e) => set({ sched_date: e.target.value })} className={_DTCLS} />
+      </Field>
+      {time}
+    </>)
+    if (meta.sched_date) hint = `Runs every 3 months starting ${meta.sched_date}${meta.sched_time ? ` at ${meta.sched_time}` : ''}.`
+  } else if (c === 'custom') {
+    fields = (<>
+      <Field label="Date">
+        <input type="date" value={meta.sched_date} onChange={(e) => set({ sched_date: e.target.value })} className={_DTCLS} />
+      </Field>
+      {time}
+    </>)
+    if (meta.sched_date) hint = `Runs once on ${meta.sched_date}${meta.sched_time ? ` at ${meta.sched_time}` : ''}.`
+  }
+  return (
+    <div className="mt-3 pt-3 border-t border-border-soft">
+      <div className="grid grid-cols-3 gap-3">{fields}</div>
+      {hint && <div className="text-xs text-gold/80 mt-2">🗓 {hint}</div>}
+    </div>
+  )
+}
+
+function ordinal(n) {
+  const s = ['th', 'st', 'nd', 'rd'], v = n % 100
+  return n + (s[(v - 20) % 10] || s[v] || s[0])
+}
+
+// Shift-timing string <-> 24h time pickers. Stored format stays "08:00 AM – 04:15 PM" so the
+// backend parse_shift_window is unchanged; the picker just builds/reads it.
+function to12h(t) {
+  if (!t) return ''
+  const [h, m] = t.split(':').map(Number)
+  return `${String(((h + 11) % 12) + 1).padStart(2, '0')}:${String(m).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`
+}
+function to24h(s) {
+  const m = (s || '').trim().match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i)
+  if (!m) return ''
+  let h = Number(m[1]) % 12
+  if (/pm/i.test(m[3])) h += 12
+  return `${String(h).padStart(2, '0')}:${m[2]}`
+}
+function splitTiming(t) {
+  const parts = (t || '').split(/–|—| to | - |-/).map((s) => s.trim())
+  return [to24h(parts[0] || ''), to24h(parts[1] || '')]
+}
+function composeTiming(start24, end24) {
+  const a = to12h(start24), b = to12h(end24)
+  return (a || b) ? `${a} – ${b}` : ''
 }
 
 // Live technician-view preview

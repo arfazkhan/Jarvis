@@ -6,6 +6,8 @@
 #            (PAT needs write:packages)
 # Run:       REGISTRY=ghcr.io/arfazkhan TAG=latest ./build-and-push.sh
 set -euo pipefail
+export MSYS_NO_PATHCONV=1
+
 
 REGISTRY="${REGISTRY:-ghcr.io/arfazkhan}"
 TAG="${TAG:-latest}"

@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Info, Sparkles, ArrowRight, BatteryWarning, Flame, Droplets, Waves, Box,
-  ClipboardCheck, PenLine, TriangleAlert, CheckCircle2, Clock, Brain, RotateCcw,
+  ClipboardCheck, PenLine, TriangleAlert, CheckCircle2, Clock, Brain, RotateCcw, FileDown,
 } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
 import { Card, IconCircle } from '../components/ui'
@@ -64,6 +64,8 @@ export default function Overview() {
             />
           </div>
           <div className="text-sm text-text-faint mt-1">Current state of building operations</div>
+
+          <ReportButtons building={building} />
 
           <div className="flex items-end gap-8 mt-8">
             <div className="font-serif text-[6.5rem] leading-none text-gold-soft">
@@ -200,6 +202,28 @@ function ActivityFeed({ data, loading }) {
           </div>
         )
       })}
+    </div>
+  )
+}
+
+function ReportButtons({ building }) {
+  const [busy, setBusy] = useState('')
+  const dl = async (period) => {
+    setBusy(period)
+    try { await api.downloadReport(period, building) }
+    catch (e) { alert(e.message || 'Could not generate the report') }
+    finally { setBusy('') }
+  }
+  const btn = (period, label) => (
+    <button onClick={() => dl(period)} disabled={!!busy}
+      className="flex items-center gap-1.5 text-sm border border-border rounded-lg px-3 py-2 text-text-dim hover:border-gold/40 disabled:opacity-50">
+      <FileDown className="w-4 h-4" /> {busy === period ? 'Preparing…' : label}
+    </button>
+  )
+  return (
+    <div className="flex items-center gap-2 mt-5">
+      {btn('weekly', 'Weekly report')}
+      {btn('monthly', 'Monthly report')}
     </div>
   )
 }

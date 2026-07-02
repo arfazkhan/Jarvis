@@ -128,6 +128,9 @@ class ArvisxDb:
                 ask_number TEXT, subject TEXT, status TEXT, nudges INTEGER,
                 created_at TEXT, last_nudge_at TEXT, answered_at TEXT, answer TEXT);
             CREATE INDEX IF NOT EXISTS ix_kreq ON knowledge_requests(building_id, status);
+            -- Simple per-building key/value settings (e.g. resident WhatsApp group invite link).
+            CREATE TABLE IF NOT EXISTS building_settings (
+                building_id TEXT, key TEXT, value TEXT, PRIMARY KEY (building_id, key));
             -- PPM schedule per asset: date-based (interval_days) and/or condition-based
             -- (run_hours_limit). Phase-S — drives the PPM planner + compliance.
             CREATE TABLE IF NOT EXISTS ppm_schedule (
@@ -165,7 +168,8 @@ class ArvisxDb:
             CREATE INDEX IF NOT EXISTS ix_vision ON vision_suggestions(building_id, status);
             CREATE TABLE IF NOT EXISTS checklist_run_entries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER, item_id TEXT,
-                value TEXT, status TEXT, note TEXT, is_issue INTEGER, ts TEXT, photo TEXT);
+                value TEXT, status TEXT, note TEXT, is_issue INTEGER, ts TEXT, photo TEXT,
+                actor TEXT);
             CREATE INDEX IF NOT EXISTS ix_cl_entries ON checklist_run_entries(run_id, item_id);
             CREATE TABLE IF NOT EXISTS checklist_signoffs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER, role TEXT,
@@ -190,6 +194,10 @@ class ArvisxDb:
             tcols = [r[1] for r in c.execute("PRAGMA table_info(technicians)").fetchall()]
             if tcols and "pin_hash" not in tcols:
                 c.execute("ALTER TABLE technicians ADD COLUMN pin_hash TEXT")
+            # Accountability: WHO recorded each checklist entry (technician/manager/owner name).
+            ecols = [r[1] for r in c.execute("PRAGMA table_info(checklist_run_entries)").fetchall()]
+            if ecols and "actor" not in ecols:
+                c.execute("ALTER TABLE checklist_run_entries ADD COLUMN actor TEXT")
             # SLA/vendor columns on issues (added later than the table).
             icols = [r[1] for r in c.execute("PRAGMA table_info(checklist_issues)").fetchall()]
             for col, decl in (("priority", "TEXT"), ("vendor", "TEXT"),
@@ -663,6 +671,18 @@ class ArvisxDb:
         with self._lock, self._conn() as c:
             c.execute("UPDATE residents SET active=? WHERE id=?", (1 if active else 0, resident_id))
 
+    # ── Per-building key/value settings ───────────────────────────────────
+    def get_setting(self, building_id: str, key: str, default: str = "") -> str:
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT value FROM building_settings WHERE building_id=? AND key=?",
+                          (building_id, key)).fetchone()
+            return r["value"] if r else default
+
+    def set_setting(self, building_id: str, key: str, value: str) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("INSERT OR REPLACE INTO building_settings (building_id, key, value) VALUES (?,?,?)",
+                      (building_id, key, value))
+
     # ── Outbound WhatsApp notification queue (bot polls + delivers + acks) ─
     def enqueue_notification(self, building_id: str, text: str, to_number: str = "",
                              kind: str = "info") -> int:
@@ -935,7 +955,10 @@ class ArvisxDb:
         if not item_ids:
             return []
         ph = ",".join("?" for _ in item_ids)
+        # actor = who recorded it; fall back to the round's technician/assignee for entries
+        # logged before per-entry accountability existed, so old history still names someone.
         q = (f"SELECT e.item_id, e.value, e.status, e.note, e.is_issue, e.ts, e.photo,"
+             f" COALESCE(NULLIF(e.actor,''), NULLIF(r.technician,''), r.assignee) AS actor,"
              f" r.shift_date, r.template_id FROM checklist_run_entries e"
              f" JOIN checklist_runs r ON e.run_id=r.id"
              f" WHERE r.building_id=? AND e.item_id IN ({ph})"
@@ -969,19 +992,21 @@ class ArvisxDb:
             return dict(r) if r else None
 
     def save_checklist_entry(self, run_id: int, item_id: str, value: str = "", status: str = "",
-                             note: str = "", is_issue: bool = False) -> None:
+                             note: str = "", is_issue: bool = False, actor: str = "") -> None:
         """Upsert one item's entry (operator may correct before submit). Server-timestamped.
-        Preserves any photo already attached to this item across the upsert."""
+        Preserves any photo already attached to this item across the upsert. `actor` = WHO
+        recorded it (accountability) — preserved across upsert if a later save omits it."""
         with self._lock, self._conn() as c:
-            old = c.execute("SELECT photo FROM checklist_run_entries WHERE run_id=? AND item_id=?",
+            old = c.execute("SELECT photo, actor FROM checklist_run_entries WHERE run_id=? AND item_id=?",
                             (run_id, item_id)).fetchone()
             photo = old["photo"] if old else None
+            actor = actor or (old["actor"] if old else "") or ""
             c.execute("DELETE FROM checklist_run_entries WHERE run_id=? AND item_id=?",
                       (run_id, item_id))
             c.execute("INSERT INTO checklist_run_entries (run_id, item_id, value, status, note,"
-                      " is_issue, ts, photo) VALUES (?,?,?,?,?,?,?,?)",
+                      " is_issue, ts, photo, actor) VALUES (?,?,?,?,?,?,?,?,?)",
                       (run_id, item_id, value, status, note, 1 if is_issue else 0,
-                       datetime.now().isoformat(timespec="seconds"), photo))
+                       datetime.now().isoformat(timespec="seconds"), photo, actor))
 
     def set_checklist_entry_photo(self, run_id: int, item_id: str, photo: str) -> None:
         """Attach a photo; create a stub entry if the item hasn't been filled yet so a
@@ -1002,7 +1027,7 @@ class ArvisxDb:
             rows = c.execute("SELECT * FROM checklist_run_entries WHERE run_id=?", (run_id,)).fetchall()
         return {r["item_id"]: {"value": r["value"], "status": r["status"], "note": r["note"],
                                "is_issue": bool(r["is_issue"]), "ts": r["ts"],
-                               "photo": r["photo"]} for r in rows}
+                               "photo": r["photo"], "actor": r["actor"]} for r in rows}
 
     # ── Tracked issues (lifecycle + photo + history) ─────────────────────
     def create_issue(self, building_id: str, title: str, detail: str = "", *, run_id: int = None,

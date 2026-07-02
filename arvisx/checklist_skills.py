@@ -280,10 +280,64 @@ def render_work_order(s: Dict[str, Any]) -> str:
 
 
 # ── C-4 Digital-Twin Q&A ("ask the building") ─────────────────────────────
+# Pure social messages — answered warmly WITHOUT the LLM (natural, instant, zero tokens, never a
+# robotic stats dump). Greeting/bye via regex; thanks/ack via token-match so STACKED social words
+# ("ok great", "great thanks", "thanks a lot") are caught — but anything with a real ask ('?' or a
+# non-social word like "ok what's pending") falls through to Q&A.
+_SOC_GREET = re.compile(r"^(hi+|hey+|hello+|yo|hiya|good (morning|afternoon|evening)|gm|namaste|namaskar)[\s!,.😊👋]*$", re.I)
+_SOC_BYE = re.compile(r"^(bye+|goodbye|see ya|see you|good ?night|gn|cya|tata)[\s!,.👋]*$", re.I)
+_THANKS_WORDS = {"thanks", "thank", "thankyou", "thx", "ty", "tysm", "cheers", "🙏"}
+_PRAISE_WORDS = {"great", "nice", "perfect", "awesome", "super", "good", "job", "well", "done",
+                 "cool", "fab", "fantastic", "excellent", "brilliant", "lovely"}
+_FILLER_WORDS = {"ok", "okay", "k", "kk", "alright", "fine", "sure", "noted", "got", "it",
+                 "yep", "yeah", "yup", "a", "lot", "much", "so", "you", "👍", "😊", "🙏"}
+_SOCIAL_WORDS = _THANKS_WORDS | _PRAISE_WORDS | _FILLER_WORDS
+
+
+def _social_reply(question: str):
+    """Warm, natural reply for a message that is ENTIRELY social — else None (→ real Q&A)."""
+    s = (question or "").strip()
+    if not s or len(s) > 40 or "?" in s:
+        return None
+    if _SOC_GREET.match(s):
+        return "Hey! 👋 I'm AllGud. Ask me anything about the building — today's rounds, what's pending, issues, or any asset."
+    if _SOC_BYE.match(s):
+        return "👍 I'm here whenever you need the building's status."
+    words = [w.strip("!,.👍🙏😊") for w in s.lower().split()]
+    words = [w for w in words if w]
+    if words and all(w in _SOCIAL_WORDS for w in words):
+        if any(w in _THANKS_WORDS or w in _PRAISE_WORDS for w in words):
+            return "You're welcome! 🙏 Anything else I can check on the building?"
+        return "👍"
+    return None
+
+
 def building_qa_deterministic(db, building: str, today: str, question: str) -> str:
     """Grounded fallback for the common questions — riskiest system, what's open, overview."""
     q = (question or "").lower()
     health = intel.asset_health_all(db, building, today)
+    # Broad status / 'anything wrong' → sweep EVERYTHING (open issues + incomplete rounds +
+    # overdue PPM), not just one tool. A pending checklist counts as something to flag.
+    if any(w in q for w in ("worry", "everything", "wrong", "all good", "all ok", "all clear",
+                            "status", "summary", "how are things", "how is it", "hows it")):
+        parts = []
+        oi = [i for i in db.list_issues(building) if i["status"] != "resolved"]
+        if oi:
+            parts.append(f"{len(oi)} open issue(s): " + ", ".join(i["title"] for i in oi[:4]))
+        incomplete = [p for p in intel.pending_tasks(db, building, today)
+                      if p["status"] in ("open", "lapsed") and p["pending_count"] > 0]
+        if incomplete:
+            parts.append("incomplete rounds: " + ", ".join(
+                f"{p['shift']} {p['completion_pct']:.0f}% ({p['pending_count']} pending)"
+                for p in incomplete[:4]))
+        od = intel.compliance(db, building, today).get("overdue_ppm") or []
+        if od:
+            parts.append("overdue PPM: " + ", ".join(
+                o["asset"] + (f" ({o['days_overdue']}d)" if o.get("days_overdue") else "")
+                for o in od[:4]))
+        if not parts:
+            return "✅ All clear — no open issues, all rounds done, nothing overdue."
+        return "⚠️ Worth a look:\n• " + "\n• ".join(parts)
     if any(w in q for w in ("risk", "worst", "attention", "danger", "bad")):
         risky = [h for h in health if h["band"] != "good"][:3] or health[:3]
         L = ["*Riskiest systems:*"]
@@ -304,12 +358,27 @@ def building_qa_deterministic(db, building: str, today: str, question: str) -> s
 _QA_SYSTEM = (
     "You are ArvisX, a friendly building-operations assistant on WhatsApp for the building "
     "manager/owner. Help with THIS building — rounds, checks, issues, assets, PPM, readings, "
-    "technicians — using ONLY the tools (health_overview, open_issues, asset_history, "
-    "reading_anomalies, compliance, list_assets, asset_manual, recurring_issues). For specs / "
-    "service intervals / how-to-fix, call asset_manual (the equipment's uploaded manual); for "
-    "'has this happened before / chronic / recurring', call recurring_issues (building memory). "
-    "Cite the asset + figure; if the data isn't "
-    "there, say so; never invent a number or status.\n"
+    "technicians — using ONLY the tools (shift_rounds, team_roster, health_overview, open_issues, "
+    "asset_history, reading_anomalies, compliance, list_assets, asset_manual, recurring_issues). "
+    "For anything about SHIFTS / who worked / round status (e.g. 'did anyone work the morning "
+    "shift', 'is shift II done', 'who's assigned'), call shift_rounds — it returns each shift's "
+    "assignee, who actually did it, status and completion. For 'what's PENDING / what's left / "
+    "my pending items / who hasn't finished / how much has X done', call pending_tasks — it lists "
+    "the undone items per shift with each assignee's completion %. It auto-scopes: a TECHNICIAN "
+    "only ever sees their OWN pending items; a MANAGER/owner sees everyone. When a manager asks "
+    "and someone is behind, name them with their % and add a nudge hint like: \"Reply 'remind "
+    "<name>' to nudge them.\" Note: morning ≈ Shift I, afternoon/evening ≈ Shift II, night ≈ "
+    "Shift III. For 'who's on the team / who can I assign', call team_roster. For specs / service "
+    "intervals / how-to-fix, call "
+    "asset_manual (the equipment's uploaded manual); for 'has this happened before / chronic / "
+    "recurring', call recurring_issues (building memory). Cite the asset + figure; if the data "
+    "isn't there, say so; never invent a number or status.\n"
+    "BROAD STATUS / 'is anything wrong' / 'what should I worry about' / 'how is everything' / "
+    "'all good?' → check the WHOLE picture before answering: call open_issues AND pending_tasks "
+    "(incomplete/lapsed rounds today) AND compliance (overdue PPM + stale assets). Surface "
+    "everything that is OPEN, INCOMPLETE, or OVERDUE — a pending checklist counts as something to "
+    "worry about, not just PPM. Only say 'all clear' when all three are genuinely clean. Don't "
+    "answer a worry/status question from a single tool.\n"
     "TONE: warm and conversational, like a helpful colleague — NOT a rigid rule-bot. A greeting, "
     "a thanks, or a short/ambiguous reply (e.g. 'carry over', 'ok', 'and?') → reply briefly and "
     "naturally, and offer what you can help with. When a message refers to a round/issue/asset, "
@@ -391,10 +460,94 @@ async def lesson_from_issue(llm, issue: Dict[str, Any]) -> Dict[str, Any]:
     return {}
 
 
-async def run_building_qa(llm, db, building: str, question: str, today: str) -> Dict[str, Any]:
+_PHRASE_SYS = (
+    "You rewrite ONE building-operations WhatsApp alert so it reads natural and human, not "
+    "robotic or templated. Keep the EXACT meaning and the leading emoji. Use ONLY what the "
+    "baseline states — never add or change a number, percentage, name, date, shift, cause, or "
+    "outcome, and never invent praise or blame beyond what's there. Keep any *bold* markers. "
+    "One or two short sentences, warm and direct, under 220 characters. "
+    'Return JSON only: {"line": "..."}.'
+)
+
+
+def _numbers_grounded(line: str, allowed: str) -> bool:
+    """Every number in the rephrased line must already appear in the grounded source.
+    Blocks the LLM from inventing a percentage / day-count / id."""
+    import re as _re
+    allowed_nums = set(_re.findall(r"\d+", allowed))
+    return all(n in allowed_nums for n in _re.findall(r"\d+", line))
+
+
+async def phrase_line(llm, baseline: str, facts: str = "") -> str:
+    """Rephrase a grounded deterministic alert into a natural WhatsApp line. Falls back to the
+    baseline on no-llm / leaked reasoning / new numbers / any error — the substance never
+    depends on the LLM, only the wording does."""
+    if not llm or not baseline:
+        return baseline
+    try:
+        out = await llm.ask_json(
+            messages=[{"role": "user",
+                       "content": f"Baseline alert:\n{baseline}\n\nFacts:\n{facts or baseline}"}],
+            system_msgs=[{"role": "system", "content": _PHRASE_SYS}], channel="chat")
+    except Exception:
+        return baseline
+    line = _crisp(str(out.get("line", ""))).strip() if isinstance(out, dict) else ""
+    if not line or _looks_like_reasoning(line) or len(line) > 300:
+        return baseline
+    if not _numbers_grounded(line, f"{baseline} {facts}"):
+        return baseline
+    return line
+
+
+_RESIDENT_SYS = (
+    "You are AllGud, a warm, friendly building assistant chatting with a RESIDENT on WhatsApp. "
+    "A resident may: (1) REPORT a common-area problem (lift, water, lights, cleaning, security, "
+    "parking, pool, fire/safety), (2) ask about the STATUS of THEIR OWN reports, (3) make small "
+    "talk. A resident must NEVER be told staff schedules, technicians, equipment health, PPM, or "
+    "any other resident's data — for those, kindly say you only help with their own reports and "
+    "common-area issues. Use ONLY the resident's existing reports given below; never invent a "
+    "ticket number or a status. Decide intent and write a natural, kind 1–2 sentence reply.\n"
+    "intent='report' → they describe a problem (or it's ambiguous): set issue_title to a short "
+    "title; reply = a brief empathetic acknowledgement (do NOT state a ticket number — the system "
+    "adds the real one). intent='status' → they ask about their report(s): answer from their list "
+    "only, cite the ticket # and status. intent='smalltalk' → greeting/thanks: short warm reply. "
+    "intent='other' → out-of-scope (staff/equipment/building internals): politely redirect to "
+    "reporting common-area issues. When unsure, prefer 'report' — better to log than miss a "
+    'problem. Output JSON only: {"intent":"report|status|smalltalk|other","reply":"...","issue_title":"..."}.'
+)
+
+
+async def run_resident_chat(llm, tickets, building_name: str, name: str, text: str):
+    """Resident-scoped conversational turn. Returns {intent, reply, issue_title} or None.
+    Grounded: the model only sees the resident's OWN tickets, and the caller guards any number
+    it cites. Falls back (None) on no-llm / bad output so the caller can default to ticket-intake."""
+    if not llm:
+        return None
+    lst = "\n".join(f"#{t['id']} {t['title']} [{t['status']}]" for t in tickets) or "(no reports yet)"
+    msg = (f"Resident {name} at {building_name} says:\n{text}\n\n"
+           f"Their existing reports:\n{lst}")
+    try:
+        out = await llm.ask_json(messages=[{"role": "user", "content": msg}],
+                                 system_msgs=[{"role": "system", "content": _RESIDENT_SYS}], channel="chat")
+    except Exception:
+        return None
+    if not isinstance(out, dict):
+        return None
+    intent = str(out.get("intent", "")).strip().lower()
+    if intent not in ("report", "status", "smalltalk", "other"):
+        return None
+    return {"intent": intent, "reply": _crisp(str(out.get("reply", ""))).strip(),
+            "issue_title": str(out.get("issue_title", "")).strip()}
+
+
+async def run_building_qa(llm, db, building: str, question: str, today: str,
+                          asker: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    soc = _social_reply(question)            # pure greeting/thanks/ack → warm, no LLM, no stats dump
+    if soc:
+        return {"text": soc, "source": "social"}
     if llm is not None:
         try:
-            ctx = build_ctx(db, building, today)
+            ctx = build_ctx(db, building, today, asker=asker)
             out = await run_agent(llm, _QA_SYSTEM, question, ctx)
             text = _crisp(out.get("text") or "")
             ev = out.get("evidence")

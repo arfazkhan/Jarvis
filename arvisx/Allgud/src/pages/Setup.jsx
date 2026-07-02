@@ -384,7 +384,8 @@ function ResidentStep({ building }) {
   }
 
   return (
-    <Section title="Residents" hint="Pre-registered residents can flag common-area issues via WhatsApp (e.g. 'Lift not working in B block') — each becomes a ticket the team is notified about. Only numbers listed here can raise tickets.">
+    <Section title="Residents" hint="Pre-registered residents can flag common-area issues via WhatsApp (e.g. 'Lift not working in B block') — each becomes a ticket the team is notified about. Only numbers listed here can raise tickets. When you add a resident, AllGud sends them a one-time welcome on WhatsApp.">
+      <GroupLinkBar building={building} />
       <AddBar onAdd={add} busy={busy} label="Add resident">
         <Field label="Name"><Input value={f.name} onChange={(v) => setF({ ...f, name: v })} /></Field>
         <Field label="WhatsApp (no +)"><Input value={f.phone} onChange={(v) => setF({ ...f, phone: v })} /></Field>
@@ -406,6 +407,47 @@ function ResidentStep({ building }) {
         </div>
       )}
     </Section>
+  )
+}
+
+function GroupLinkBar({ building }) {
+  const [link, setLink] = useState('')
+  const [saved, setSaved] = useState(false)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    let on = true
+    api.getSettings(building).then((s) => { if (on) setLink(s?.resident_group_link || '') }).catch(() => {})
+    return () => { on = false }
+  }, [building])
+
+  async function save() {
+    setBusy(true)
+    try {
+      await api.setSettings({ building, resident_group_link: link.trim() })
+      setSaved(true); setTimeout(() => setSaved(false), 2000)
+    } catch (e) { err(e) } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="bg-surface border border-border rounded-xl p-4 mb-5">
+      <div className="flex items-center gap-1.5 text-sm font-medium text-text mb-1">
+        <Users className="w-4 h-4 text-primary" /> Residents' WhatsApp group invite link
+      </div>
+      <div className="text-xs text-text-faint mb-3">
+        Optional. Create the residents' group in WhatsApp yourself, paste its invite link here
+        (Group → Invite via link). New residents get this link in their welcome message and
+        self-join — AllGud never auto-adds anyone (avoids WhatsApp spam blocks).
+      </div>
+      <div className="flex items-end gap-2 flex-wrap">
+        <div className="flex-1 min-w-[16rem]">
+          <Input value={link} onChange={setLink} placeholder="https://chat.whatsapp.com/..." />
+        </div>
+        <button onClick={save} disabled={busy}
+          className="flex items-center gap-1.5 bg-primary text-white rounded-lg px-3 py-2.5 text-sm font-medium disabled:opacity-50">
+          {saved ? <Check className="w-4 h-4" /> : null} {saved ? 'Saved' : 'Save link'}
+        </button>
+      </div>
+    </div>
   )
 }
 

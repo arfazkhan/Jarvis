@@ -121,19 +121,60 @@ def parse_shift_window(timing: str, shift_date: str):
         return None
 
 
+def _template_due_today(tmpl, now, min_hour: int) -> bool:
+    """Is this template's cadence schedule due to OPEN now? daily → every day; weekly → its
+    day-of-week; monthly → its day-of-month; quarterly → its anchor day, every 3rd month from
+    the anchor; custom → its one specific date. All gated to >= sched_time (else >= min_hour).
+    Non-daily templates with NO schedule set never auto-open (stay manual) — backward-safe."""
+    from datetime import datetime as _dt
+    cad = (getattr(tmpl, "cadence", "daily") or "daily").lower()
+    st = (getattr(tmpl, "sched_time", "") or "").strip()
+    if st:
+        try:
+            hh, mm = [int(x) for x in st.split(":")[:2]]
+        except Exception:
+            hh, mm = min_hour, 0
+        if (now.hour, now.minute) < (hh, mm):
+            return False
+    elif now.hour < min_hour:
+        return False
+    if cad == "daily":
+        return True
+    if cad == "weekly":
+        dow = getattr(tmpl, "sched_dow", None)
+        return dow is not None and now.weekday() == int(dow)
+    if cad == "monthly":
+        dom = getattr(tmpl, "sched_dom", None)
+        if dom is None:
+            return False
+        import calendar
+        last = calendar.monthrange(now.year, now.month)[1]   # clamp 29-31 to short months
+        return now.day == min(int(dom), last)
+    if cad == "quarterly":
+        anchor = (getattr(tmpl, "sched_date", "") or "").strip()
+        if not anchor:
+            return False
+        try:
+            a = _dt.strptime(anchor, "%Y-%m-%d")
+        except Exception:
+            return False
+        return now.date() >= a.date() and now.day == a.day and (now.month - a.month) % 3 == 0
+    if cad == "custom":
+        return (getattr(tmpl, "sched_date", "") or "").strip() == now.strftime("%Y-%m-%d")
+    return False
+
+
 def ensure_daily_runs(db, building: str, today: str, now=None, min_hour: int = 6) -> List[Dict[str, Any]]:
-    """Auto-open today's recurring (cadence='daily') rounds so the day's checklists always
-    appear — carrying forward each template's usual technician. Idempotent (skips templates
-    that already have a run today). Gated to >= min_hour local time so it opens in the
-    morning, not at midnight (min_hour=0 = open immediately, for the manual button)."""
+    """Auto-open today's DUE rounds so the day's checklists always appear. Daily templates open
+    every morning; weekly/monthly/quarterly/custom open when their builder-set schedule lands
+    today (see _template_due_today). Idempotent (skips templates that already have a run today).
+    Gated to >= min_hour local time (min_hour=0 = open immediately, for the manual button)."""
     from datetime import datetime as _dt
     now = now or _dt.now()
-    if now.hour < min_hour:
-        return []
     have = {r["template_id"] for r in db.checklist_runs_for(building, today)}
     created: List[Dict[str, Any]] = []
     for tmpl in templates_for(building):
-        if tmpl.cadence != "daily" or tmpl.template_id in have:
+        if tmpl.template_id in have or not _template_due_today(tmpl, now, min_hour):
             continue
         # Open UNASSIGNED — the manager assigns each day (no auto carry-forward of the
         # previous person). The round still appears so the day's checklist is visible.
@@ -187,11 +228,160 @@ def due_scheduled_checklists(db, building: str, now=None) -> List[Dict[str, Any]
     return fired
 
 
-def lapse_stale_rounds(db, building: str, now=None) -> List[Dict[str, Any]]:
+def _ordinal(n: int) -> str:
+    if 10 <= n % 100 <= 20:
+        suf = "th"
+    else:
+        suf = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suf}"
+
+
+def lapse_streak(db, building: str, template_id: str, upto_date: str, max_back: int = 30):
+    """How many consecutive days (ending on upto_date) this template lapsed — i.e. closed
+    incomplete. Streak breaks the first day it didn't run or didn't lapse. Also reports
+    whether the whole streak was unassigned (the 'nobody's using this shift' signal).
+    Pure history read — grounds the escalation, fabricates nothing."""
+    from datetime import datetime as _dt, timedelta as _td
+    d0 = _dt.strptime(upto_date, "%Y-%m-%d")
+    streak, all_unassigned = 0, True
+    for i in range(max_back):
+        d = (d0 - _td(days=i)).strftime("%Y-%m-%d")
+        runs = [r for r in db.checklist_runs_for(building, d) if r["template_id"] == template_id]
+        if not runs or not all(r["status"] == "lapsed" for r in runs):
+            break
+        if any((r.get("assignee") or r.get("technician")) for r in runs):
+            all_unassigned = False
+        streak += 1
+    return streak, all_unassigned
+
+
+def _lapse_message(name: str, shift_date: str, pct: float, who: str,
+                   streak: int, all_unassigned: bool) -> str:
+    """Streak-aware escalation ladder. Day 1 = neutral; days 2-3 = firmer, names the streak;
+    day 4+ = chronic-gap escalation with a concrete next action. Adapts to whether the gap is
+    'unassigned' (nobody picked it up) vs 'assigned-but-not-done' (the tech isn't doing it)."""
+    head = f"{name} ({shift_date}) closed INCOMPLETE at {pct:.0f}% (assigned: {who})."
+    if streak <= 1:
+        return (f"⚠️ {head} Logged as a gap — today's round repeats these checks; "
+                f"any open issues stay tracked.")
+    if streak <= 3:
+        nudge = ("Still nobody assigned — assign a technician so it actually gets done."
+                 if all_unassigned else
+                 "Assigned but still not completed — check in with the technician.")
+        return f"⚠️ {name} — {_ordinal(streak)} day running at {pct:.0f}% (assigned: {who}). {nudge}"
+    # streak >= 4 → chronic. Escalate tone + give the manager a decision to make.
+    if all_unassigned:
+        action = (f"*{streak} days straight* with nobody assigned and nothing done. "
+                  f"Assign a regular technician to this shift — or pause it if it isn't a real "
+                  f"shift (Setup → Checklists).")
+    else:
+        action = (f"*{streak} days straight* lapsed despite being assigned to {who}. "
+                  f"The shift isn't getting done — reassign or follow up directly.")
+    return f"🔴 {name} — chronic gap. {action}"
+
+
+def shift_activity(db, building: str, date: str) -> List[Dict[str, Any]]:
+    """Who worked which shift on `date`, and how it went — the personnel/round view the
+    conversational bot needs to answer 'did anyone work the morning shift', 'what's pending',
+    'who's assigned', 'is shift II done'. Real run rows only; nothing inferred."""
+    from arvisx.checklist_forms import get_template, run_summary
+    out: List[Dict[str, Any]] = []
+    for run in db.checklist_runs_for(building, date):
+        tmpl = get_template(run["template_id"], building)
+        summ = run_summary(tmpl, db.checklist_entries(run["id"])) if tmpl else {}
+        out.append({
+            "shift": tmpl.name if tmpl else run["template_id"],
+            "timing": (getattr(tmpl, "timing", "") or "") if tmpl else "",
+            "date": run["shift_date"],
+            "assignee": run.get("assignee") or "",          # who it's assigned to
+            "worked_by": run.get("technician") or "",        # who actually did it (if anyone)
+            "status": run["status"],                         # open / submitted / lapsed
+            "completion_pct": summ.get("completion_pct", 0.0),
+            "items_done": summ.get("done", 0),
+            "items_total": summ.get("total", 0),
+            "open_issues": len(summ.get("issues", []) or []),
+        })
+    return out
+
+
+def pending_tasks(db, building: str, date: str, technician: str = "") -> List[Dict[str, Any]]:
+    """What's still NOT DONE on `date`'s rounds, per shift — the undone item labels, the
+    assignee, and completion %. Pass `technician` to scope to ONE person's assigned rounds
+    (a tech asking 'my pending'); omit for the whole building (a manager's overview)."""
+    from arvisx.checklist_forms import get_template, run_summary
+    out: List[Dict[str, Any]] = []
+    want = technician.strip().lower()
+    for run in db.checklist_runs_for(building, date):
+        assignee = run.get("assignee") or ""
+        if want and assignee.lower() != want:
+            continue
+        tmpl = get_template(run["template_id"], building)
+        if not tmpl:
+            continue
+        summ = run_summary(tmpl, db.checklist_entries(run["id"]))
+        by_id = {it.item_id: it for it in tmpl.all_items()}
+        missing = [by_id[m].label for m in summ.get("missing", []) if m in by_id]
+        out.append({
+            "shift": tmpl.name,
+            "assignee": assignee or "unassigned",
+            "status": run["status"],
+            "completion_pct": summ["completion_pct"],
+            "done": summ["done"], "total": summ["total"],
+            "pending_count": len(missing),
+            "pending_items": missing,
+        })
+    return out
+
+
+def completion_streak(db, building: str, template_id: str, upto_date: str, max_back: int = 90) -> int:
+    """Consecutive days (ending upto_date) this template was actually DONE (submitted).
+    Breaks the first day it wasn't submitted. The positive mirror of lapse_streak."""
+    from datetime import datetime as _dt, timedelta as _td
+    d0 = _dt.strptime(upto_date, "%Y-%m-%d")
+    streak = 0
+    for i in range(max_back):
+        d = (d0 - _td(days=i)).strftime("%Y-%m-%d")
+        runs = [r for r in db.checklist_runs_for(building, d) if r["template_id"] == template_id]
+        if not runs or not any(r["status"] == "submitted" for r in runs):
+            break
+        streak += 1
+    return streak
+
+
+def recognition_message(db, building: str, run: Dict[str, Any], name: str, who: str):
+    """A round was actually DONE — decide whether it's worth a positive note, and what to say.
+    Routine good days stay SILENT (no spam). Speaks up only for the two moments that mean
+    something: RECOVERY (broke a run of missed days) and MILESTONE good streaks (3/7/14/30).
+    Returns (message, facts) or (None, ''). Grounded in real run history — no fabrication."""
+    from datetime import datetime as _dt, timedelta as _td
+    date, tid = run["shift_date"], run["template_id"]
+    good = completion_streak(db, building, tid, date)
+    person = who if who and who != "unassigned" else ""
+    # lapse run immediately BEFORE today → was this a recovery?
+    prev = (_dt.strptime(date, "%Y-%m-%d") - _td(days=1)).strftime("%Y-%m-%d")
+    missed, _ = lapse_streak(db, building, tid, prev)
+    if missed >= 2:
+        thanks = f" Thanks {person}." if person else " Nice recovery."
+        msg = (f"✅ {name} back on track — done today after {missed} missed "
+               f"day{'s' if missed != 1 else ''} in a row.{thanks}")
+        facts = f"shift={name}; date={date}; done_by={person or '—'}; recovered_after_missed_days={missed}"
+        return msg, facts
+    if good in (3, 7, 14, 30):
+        msg = f"✅ {name} — {_ordinal(good)} day running, fully done. Consistent, reliable shift."
+        facts = f"shift={name}; date={date}; done_by={person or '—'}; consecutive_done_days={good}"
+        return msg, facts
+    return None, ""
+
+
+def lapse_stale_rounds(db, building: str, now=None, enqueue: bool = True) -> List[Dict[str, Any]]:
     """Give incomplete rounds a TERMINAL. A run lapses once its shift window has ENDED
     (shift-end-aware; overnight shifts end next morning). Templates without a clock window
     fall back to the prior-day rule. Manager gets a notice; a round never hangs open or
-    silently disappears. Runs at 100% but unsubmitted still lapse, recorded with completion."""
+    silently disappears. Runs at 100% but unsubmitted still lapse, recorded with completion.
+
+    enqueue=True (default) sends the deterministic notice inline — the always-works path. Pass
+    enqueue=False to get each fired entry's `msg`+`facts` back WITHOUT sending, so an async
+    caller can run them through the LLM phraser first, then enqueue."""
     from datetime import datetime as _dt, timedelta as _td
     now = now or _dt.now()
     today = now.strftime("%Y-%m-%d")
@@ -215,11 +405,15 @@ def lapse_stale_rounds(db, building: str, now=None) -> List[Dict[str, Any]]:
             db.set_run_status(run["id"], "lapsed")
             name = tmpl.name if tmpl else run["template_id"]
             who = run.get("assignee") or run.get("technician") or "unassigned"
-            db.enqueue_notification(
-                building, f"⚠️ {name} ({run['shift_date']}) closed INCOMPLETE at {pct:.0f}% "
-                          f"(assigned: {who}). Logged as a gap — today's round repeats these checks; "
-                          f"any open issues stay tracked.", to_number="", kind="round_lapsed")
-            fired.append({"run_id": run["id"], "shift_date": run["shift_date"], "completion_pct": pct})
+            streak, all_unassigned = lapse_streak(db, building, run["template_id"], run["shift_date"])
+            msg = _lapse_message(name, run["shift_date"], pct, who, streak, all_unassigned)
+            facts = (f"shift={name}; date={run['shift_date']}; completion={pct:.0f}%; "
+                     f"assigned={who}; consecutive_missed_days={streak}; "
+                     f"nobody_assigned={all_unassigned}")
+            if enqueue:
+                db.enqueue_notification(building, msg, to_number="", kind="round_lapsed")
+            fired.append({"run_id": run["id"], "shift_date": run["shift_date"],
+                          "completion_pct": pct, "streak": streak, "msg": msg, "facts": facts})
     return fired
 
 

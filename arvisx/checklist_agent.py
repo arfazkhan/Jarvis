@@ -102,9 +102,61 @@ def _asset_manual(ctx, **a):
             "troubleshooting": k.get("troubleshooting", [])}
 
 
-def build_ctx(db, building: str = "one-anthem", today: str = "") -> Dict[str, Any]:
+_DATE_OPT = {"type": "object", "properties": {
+    "date": {"type": "string", "description": "YYYY-MM-DD; omit for today"}}}
+
+
+@_tool("shift_rounds", "Who worked which shift and how it went, for a date (default TODAY). "
+                       "Per shift: name, timing, who it's assigned to, who actually did it, status "
+                       "(open/submitted/lapsed), completion %, and open-issue count. Use this for "
+                       "'did anyone work the morning shift', 'what's pending', 'who's on shift II', "
+                       "'is the round done', 'what happened today/yesterday'.", _DATE_OPT)
+def _shift_rounds(ctx, **a):
+    d, b, t = _db(ctx)
+    date = (a.get("date") or "").strip() or t
+    return {"date": date, "shifts": intel.shift_activity(d, b, date)}
+
+
+@_tool("team_roster", "Active technicians on this building's team (the people who can be "
+                      "assigned shifts/issues). Use for 'who's on the team', 'who can do this', "
+                      "'list technicians'.", _NONE)
+def _team_roster(ctx, **a):
+    d, b, _t = _db(ctx)
+    techs = [{"name": x.get("name", ""), "phone": x.get("phone", "")}
+             for x in d.list_technicians(b, active_only=True)]
+    return {"technicians": techs, "count": len(techs)}
+
+
+_PENDING_ARGS = {"type": "object", "properties": {
+    "date": {"type": "string", "description": "YYYY-MM-DD; omit for today"},
+    "technician": {"type": "string", "description": "scope to one technician's assigned rounds"}}}
+
+
+@_tool("pending_tasks", "What's still NOT DONE on the rounds (today by default). Each shift with "
+                        "its assignee, completion %, and the list of undone item names. For a "
+                        "MANAGER: omit technician to see everyone — who's behind and by how much. "
+                        "For a TECHNICIAN asking about their OWN work, it is auto-scoped to them. "
+                        "Use for 'what's pending', 'what's left', 'my pending items', 'who hasn't "
+                        "finished', 'how much has X done'.", _PENDING_ARGS)
+def _pending_tasks(ctx, **a):
+    d, b, t = _db(ctx)
+    date = (a.get("date") or "").strip() or t
+    asker = ctx.get("asker") or {}
+    # A technician may only see THEIR OWN pending work — force the scope to them, ignore any
+    # technician they name. A manager/owner sees whoever they ask about (or everyone).
+    if asker.get("kind") == "technician":
+        who = asker.get("name", "")
+    else:
+        who = (a.get("technician") or "").strip()
+    return {"date": date, "asked_as": asker.get("kind", "viewer"),
+            "pending": intel.pending_tasks(d, b, date, technician=who)}
+
+
+def build_ctx(db, building: str = "one-anthem", today: str = "",
+              asker: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     from datetime import datetime
-    return {"db": db, "building": building, "today": today or datetime.now().strftime("%Y-%m-%d")}
+    return {"db": db, "building": building, "today": today or datetime.now().strftime("%Y-%m-%d"),
+            "asker": asker or {}}
 
 
 _GROUNDING_RULES = (

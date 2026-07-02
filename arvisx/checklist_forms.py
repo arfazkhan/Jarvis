@@ -73,11 +73,18 @@ class Section:
 class Template:
     template_id: str
     name: str
-    cadence: str                           # daily | quarterly
+    cadence: str                           # daily | weekly | monthly | quarterly | custom
     sections: List[Section]
     timing: str = ""                       # shift window, informational
     signoff_roles: List[str] = field(default_factory=list)
     per_asset: List[str] = field(default_factory=list)  # PPM: one run-block per asset
+    # Cadence-driven auto-open schedule (set by the builder). sched_time = open time HH:MM.
+    # weekly→sched_dow (0=Mon..6=Sun); monthly→sched_dom (1..31); quarterly→sched_date anchor
+    # (recurs every 3 months from it); custom→sched_date (one specific date). daily ignores all.
+    sched_time: str = ""
+    sched_dow: Optional[int] = None
+    sched_dom: Optional[int] = None
+    sched_date: str = ""
 
     def all_items(self) -> List[Item]:
         return [it for s in self.sections for it in s.items]
@@ -85,15 +92,26 @@ class Template:
     def to_dict(self) -> Dict[str, Any]:
         return {"template_id": self.template_id, "name": self.name, "cadence": self.cadence,
                 "timing": self.timing, "signoff_roles": self.signoff_roles,
-                "per_asset": self.per_asset, "sections": [s.to_dict() for s in self.sections]}
+                "per_asset": self.per_asset, "sched_time": self.sched_time,
+                "sched_dow": self.sched_dow, "sched_dom": self.sched_dom,
+                "sched_date": self.sched_date, "sections": [s.to_dict() for s in self.sections]}
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "Template":
+        def _int_or_none(v):
+            try:
+                return int(v) if v is not None and str(v).strip() != "" else None
+            except (TypeError, ValueError):
+                return None
         return cls(template_id=str(d["template_id"]), name=str(d.get("name", "")),
                    cadence=str(d.get("cadence", "daily")),
                    sections=[Section.from_dict(s) for s in d.get("sections", [])],
                    timing=str(d.get("timing", "")), signoff_roles=list(d.get("signoff_roles", [])),
-                   per_asset=list(d.get("per_asset", [])))
+                   per_asset=list(d.get("per_asset", [])),
+                   sched_time=str(d.get("sched_time", "")),
+                   sched_dow=_int_or_none(d.get("sched_dow")),
+                   sched_dom=_int_or_none(d.get("sched_dom")),
+                   sched_date=str(d.get("sched_date", "")))
 
 
 def validate_template_dict(d: Dict[str, Any]) -> None:

@@ -685,6 +685,14 @@ def create_app():
         except Exception:
             return None
 
+    def _phrasing_llm():
+        """LLM used ONLY to reword grounded alerts into natural language. On by default when an
+        LLM is configured; flip ARVISX_LLM_PHRASING=0 to keep alerts deterministic (zero tokens).
+        Cheap (a few short calls a day) and always falls back to the deterministic baseline."""
+        if os.environ.get("ARVISX_LLM_PHRASING", "1").strip().lower() not in ("1", "true", "yes", "on"):
+            return None
+        return _llm_for_reasoning()
+
     @app.post("/api/v1/reason/correlate")
     async def reason_correlate():
         """Cross-asset 'thinking': find a common root cause across the active risks."""
@@ -911,7 +919,7 @@ def create_app():
                 return {"intent": "action", "text": cmd, "source": "command"}
         # A3: a pre-registered (backend-resolved) resident's message → common-area ticket.
         if sender.get("kind") == "resident":
-            return _handle_resident_message(q, sender, building)
+            return await _handle_resident_message(q, sender, building)
         # Building phase (learning vs operational) drives the situation-aware answers.
         try:
             blds = state.commissioner.list()
@@ -944,7 +952,7 @@ def create_app():
                     llm = make_llm()
                 except Exception:
                     llm = None
-                qa = await run_building_qa(llm, state.db, building, q, _today_str())
+                qa = await run_building_qa(llm, state.db, building, q, _today_str(), asker=sender)
                 if qa.get("text"):
                     res["text"] = qa["text"]
                     res["source"] = qa.get("source", "")
@@ -1136,6 +1144,37 @@ def create_app():
                "Open the app to assign + resolve.")
         state.db.enqueue_notification(building, txt, to_number="", kind="issue")   # ops broadcast
 
+    def _remind_technician(building: str, name: str) -> str:
+        """Manager-triggered nudge: DM `name` their still-open assigned round(s) for today with
+        the pending count + a deep-link. Returns a manager-facing summary string."""
+        from arvisx.checklist_forms import get_template, run_summary
+        tech = state.db.get_technician(building, name)
+        phone = _norm_phone((tech or {}).get("phone", ""))
+        pend = []
+        for run in state.db.checklist_runs_for(building, _today_str()):
+            if (run.get("assignee") or "").lower() != name.lower() or run["status"] != "open":
+                continue
+            tmpl = get_template(run["template_id"], building)
+            if not tmpl:
+                continue
+            summ = run_summary(tmpl, state.db.checklist_entries(run["id"]))
+            openn = summ["total"] - summ["done"]
+            if openn > 0:
+                pend.append((run, tmpl, summ, openn))
+        if not pend:
+            return f"{name} has nothing pending on today's assigned rounds — nothing to remind."
+        total = sum(o for *_, o in pend)
+        if not phone:
+            return (f"{name} has {total} pending item(s), but no WhatsApp number on file — "
+                    f"add their number in Setup to remind them here.")
+        for run, tmpl, summ, openn in pend:
+            link = _field_deeplink(run["id"], building, name)
+            state.db.enqueue_notification(
+                building, f"⏰ Reminder: *{tmpl.name}* — {openn} item(s) still pending "
+                f"({summ['completion_pct']:.0f}% done). Please finish before shift end.{link}",
+                to_number=phone, kind="round_reminder")
+        return f"✅ Reminded {name} — {total} pending item(s) across {len(pend)} round(s)."
+
     # ── A0: WhatsApp sender identity & role map ──────────────────────────
     def _norm_phone(num: str) -> str:
         """Digits only — strips +, spaces, and any '@s.whatsapp.net' suffix."""
@@ -1205,6 +1244,76 @@ def create_app():
             ph = _norm_phone((tech or {}).get("phone", ""))
             if ph and ph not in seen:
                 state.db.enqueue_notification(building, line, to_number=ph, kind="issue_lifecycle")
+
+    def _building_name(building: str) -> str:
+        return (building or "").replace("-", " ").replace("_", " ").title() or "the building"
+
+    def _welcome_member(building: str, name: str, phone: str, role: str) -> None:
+        """One-time, role-aware welcome DM when someone is added to the roster. Skipped
+        silently if there's no phone. Roles: resident, technician, manager (owner/fm), viewer."""
+        ph = _norm_phone(phone)
+        if not ph:
+            return
+        first = (name or "").strip().split(" ")[0] or "there"
+        bname = _building_name(building)
+        clink = f"\nConsole: {_PUBLIC_URL}" if _PUBLIC_URL else ""
+        role = (role or "").strip().lower()
+        if role == "technician":
+            lines = [
+                f"Hi {first} 👋 You're added as a technician for {bname} on AllGud.",
+                "You'll get your daily checklist rounds and any issues assigned to you right "
+                "here on WhatsApp — each with a tap-to-open link, no login needed.",
+                "When you finish a task, just submit it from the link. We'll nudge you if "
+                "something's still pending before your shift ends.",
+            ]
+            kind = "technician_welcome"
+        elif role in ("owner", "fm", "manager"):
+            label = "the owner" if role == "owner" else "a manager"
+            lines = [
+                f"Hi {first} 👋 You're added as {label} for {bname} on AllGud.",
+                "You'll get issue alerts and the daily summary here. You can manage issues by "
+                "replying — e.g. *assign 12 to Rohit*, *close 12*, *approve 3*." + clink,
+            ]
+            kind = "manager_welcome"
+        elif role == "viewer":
+            lines = [
+                f"Hi {first} 👋 You're added as a viewer for {bname} on AllGud.",
+                "You'll get the daily summary and key alerts here (read-only)." + clink,
+            ]
+            kind = "viewer_welcome"
+        else:  # resident
+            lines = [
+                f"Hi {first} 👋 You're now registered with AllGud for {bname}.",
+                "To report any common-area issue — lift, water, lights, cleaning — just message "
+                "here and the building team gets it right away.",
+            ]
+            link = state.db.get_setting(building, "resident_group_link", "").strip()
+            if link:
+                lines.append(f"\nJoin the residents' group here 👉 {link}")
+            lines.append("\nFor emergencies, contact the facility desk directly.")
+            kind = "resident_welcome"
+        state.db.enqueue_notification(building, "\n".join(lines), to_number=ph, kind=kind)
+
+    async def _recognize_submission(rid: int) -> None:
+        """A round was actually completed → if it's a RECOVERY (broke a missed-day run) or a
+        MILESTONE good streak, DM the manager a short positive note (phrased if enabled).
+        Routine good days stay silent — the positive mirror of the lapse escalation."""
+        from arvisx.checklist_forms import get_template
+        from arvisx import checklist_intel as ci
+        run = state.db.get_checklist_run(rid)
+        if not run:
+            return
+        tmpl = get_template(run["template_id"], run["building_id"])
+        name = tmpl.name if tmpl else run["template_id"]
+        who = run.get("technician") or run.get("assignee") or ""
+        msg, facts = ci.recognition_message(state.db, run["building_id"], run, name, who)
+        if not msg:
+            return
+        llm = _phrasing_llm()
+        if llm is not None:
+            from arvisx.checklist_skills import phrase_line
+            msg = await phrase_line(llm, msg, facts)
+        state.db.enqueue_notification(run["building_id"], msg, to_number="", kind="round_done")
 
     async def _learn_from_resolved_issue(issue_id: int) -> None:
         """An LLM distils a reusable lesson from a resolved issue → pending memory candidate +
@@ -1371,6 +1480,23 @@ def create_app():
             opened = ci.ensure_daily_runs(state.db, building, _today_str())
             return f"✅ Today's rounds are open ({len(opened)} created). Assign in the app or here."
 
+        m = _re.match(r"remind\s+(.+)$", low)
+        if m:
+            name = _match_technician(building, m.group(1))
+            if not name:
+                return f"No active technician matches '{m.group(1).strip()}'."
+            return _remind_technician(building, name)
+
+        # Weekly / monthly report → summary text + a tappable PDF link.
+        m = _re.match(r"(weekly|monthly|month|week)\s*(report|summary)?\s*$", low)
+        if m or low in ("report", "reports", "summary"):
+            from arvisx import checklist_intel as ci
+            monthly = bool(m and m.group(1).startswith("month"))
+            txt = ci.period_summary_text(state.db, building, "month" if monthly else "week")
+            link = _report_link("monthly" if monthly else "weekly", building, sender)
+            return txt + (f"\n\n📄 Full PDF report: {link}" if link else
+                          "\n\n(Set ARVISX_PUBLIC_URL to enable the PDF download link.)")
+
         m = _re.match(r"(?:start|in[-\s]?progress)\s+issue\s+#?(\d+)", low)
         if m:
             return _issue_action(int(m.group(1)), "in_progress", actor, building)
@@ -1412,9 +1538,10 @@ def create_app():
             return f"✅ Noted in building memory (#{cid})."
 
         if low in ("help", "commands", "?", "menu"):
-            return ("Manager commands:\n• assign shift II to <name>\n• open today\n"
-                    "• start issue <n>\n• close issue <n>\n• sign off shift I\n"
-                    "• approve <n> / reject <n>  (learned lessons)\n• add memory: <note>")
+            return ("Manager commands:\n• assign shift II to <name>\n• remind <name>\n• open today\n"
+                    "• weekly report / monthly report\n• start issue <n>\n• close issue <n>\n"
+                    "• sign off shift I\n• approve <n> / reject <n>  (learned lessons)\n"
+                    "• add memory: <note>")
         return None
 
     # ── A3: resident common-area tickets over WhatsApp ───────────────────
@@ -1433,28 +1560,89 @@ def create_app():
                 return label
         return "Common area"
 
-    def _handle_resident_message(text: str, sender: Dict[str, Any], building: str) -> Dict[str, Any]:
-        """A pre-registered resident reports a common-area problem → logged as an issue,
-        manager notified, resident gets a reference. Greetings get instructions. Residents
-        cannot see equipment status (no sensors) — this channel is for raising tickets."""
-        low = text.strip().lower()
+    def _resident_who(sender: Dict[str, Any]) -> str:
         name = sender.get("name") or "Resident"
         unit = sender.get("unit") or ""
-        who = name + (f" (Unit {unit})" if unit else "")
-        if low in ("hi", "hello", "hey", "help", "menu", "?", "start", "salam") or len(low) < 4:
-            return {"intent": "resident", "source": "resident", "text":
-                    f"Hi {name}! 👋 Describe any *common-area* problem (e.g. 'Lift not working in "
-                    "B block', 'No water in lobby washroom') and I'll log it for the building team.\n"
-                    "For emergencies, please contact the facility desk directly."}
+        return name + (f" (Unit {unit})" if unit else "")
+
+    def _my_resident_tickets(building: str, sender: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """The resident's OWN reports (match on the name we stamp into raised_by). Resident-scoped
+        — never exposes other residents' or staff data."""
+        name = (sender.get("name") or "").strip().lower()
+        if not name:
+            return []
+        out = []
+        for i in state.db.list_issues(building):
+            if i.get("source") == "resident" and name in (i.get("raised_by") or "").lower():
+                out.append({"id": i["id"], "title": i.get("title", ""), "status": i["status"]})
+        return out[:10]
+
+    def _log_resident_ticket(text: str, sender: Dict[str, Any], building: str, title: str = "") -> Dict[str, Any]:
+        """Create a common-area ticket from a resident report + notify the team. The grounded
+        confirmation always carries the REAL ticket number."""
+        who = _resident_who(sender)
         cat = _resident_category(text)
-        title = text.strip()
-        title = (title[:80] + "…") if len(title) > 80 else title
-        iid = state.db.create_issue(building, title, detail=f"Reported by {who} via WhatsApp",
+        t = (title or text).strip()
+        t = (t[:80] + "…") if len(t) > 80 else t
+        iid = state.db.create_issue(building, t, detail=f"Reported by {who} via WhatsApp",
                                     asset=cat, severity="issue", source="resident", raised_by=who)
         _notify_issue_event(state.db.get_issue(iid), f"Opened — resident report ({cat})", by=who)
         return {"intent": "resident", "source": "resident", "text":
                 f"✅ Logged as ticket #{iid} ({cat}) — the building team has been notified. Thank you!\n"
                 "For emergencies, please contact the facility desk directly."}
+
+    def _resident_status_list(building: str, sender: Dict[str, Any]) -> str:
+        """Deterministic 'your reports' list — the safe answer for a status question."""
+        mine = _my_resident_tickets(building, sender)
+        openish = [t for t in mine if t["status"] != "resolved"]
+        if not mine:
+            return ("You don't have any reports on file yet. Describe any common-area problem and "
+                    "I'll log it for the team.")
+        if not openish:
+            return "Good news — all your reports are resolved. ✅"
+        return "Here are your open reports:\n" + "\n".join(
+            f"• #{t['id']} {t['title']} [{t['status']}]" for t in openish[:6])
+
+    async def _handle_resident_message(text: str, sender: Dict[str, Any], building: str) -> Dict[str, Any]:
+        """Resident conversational turn: warm small talk, status of THEIR OWN reports, or log a
+        common-area ticket. Resident-scoped (never staff/equipment data). LLM-driven with a hard
+        safety net — any failure defaults to ticket-intake so a real problem is never lost."""
+        low = text.strip().lower()
+        name = sender.get("name") or "Resident"
+        from arvisx.checklist_skills import _social_reply, run_resident_chat, _numbers_grounded
+        # Resident greeting → resident-appropriate instructions FIRST (before the generic social
+        # reply, which is phrased for managers and would mislead a resident).
+        if (low in ("hi", "hello", "hey", "help", "menu", "?", "start", "salam", "good morning",
+                    "good afternoon", "good evening", "gm") or len(low) < 4
+                or low.startswith(("hi ", "hello ", "hey ", "good morning", "good afternoon", "good evening"))):
+            return {"intent": "resident", "source": "resident", "text":
+                    f"Hi {name}! 👋 Describe any *common-area* problem (e.g. 'Lift not working in "
+                    "B block', 'No water in lobby washroom') and I'll log it for the building team.\n"
+                    "You can also ask me about the status of your reports anytime."}
+        soc = _social_reply(text)            # thanks / acks → warm, no ticket
+        if soc:
+            return {"intent": "resident", "source": "resident", "text": soc}
+        llm = _llm_for_reasoning()
+        if llm is not None:
+            try:
+                tickets = _my_resident_tickets(building, sender)
+                r = await run_resident_chat(llm, tickets, _building_name(building), name, text)
+                if r and r["intent"] == "report":
+                    return _log_resident_ticket(text, sender, building, title=r.get("issue_title"))
+                if r and r["intent"] == "status":
+                    allowed = " ".join(f"#{t['id']}" for t in tickets)
+                    reply = r.get("reply") or ""
+                    txt = reply if (reply and _numbers_grounded(reply, allowed)) else _resident_status_list(building, sender)
+                    return {"intent": "resident", "source": "resident", "text": txt}
+                if r and r["intent"] in ("smalltalk", "other") and r.get("reply"):
+                    return {"intent": "resident", "source": "resident", "text": r["reply"]}
+            except Exception:
+                pass
+        # Safety net: deterministic status (keyword) or ticket — never lose a real report.
+        if any(w in low for w in ("status", "update", "my report", "my complaint", "my ticket",
+                                  "any news", "fixed yet", "resolved yet", "done yet")):
+            return {"intent": "resident", "source": "resident", "text": _resident_status_list(building, sender)}
+        return _log_resident_ticket(text, sender, building)
 
     def _run_view(rid: int) -> Dict[str, Any]:
         from arvisx.checklist_forms import get_template, run_summary
@@ -1612,8 +1800,11 @@ def create_app():
         status = str(p.get("status", "")).strip().lower()
         note = str(p.get("note", ""))
         flagged = entry_is_issue(item, value, status)
+        # Accountability: stamp WHO recorded this. Prefer the authenticated subject (technician
+        # PIN/login, manager/owner login); fall back to the round's assignee in open dev mode.
+        actor = sub or run.get("technician") or run.get("assignee") or ""
         state.db.save_checklist_entry(rid, item_id, value=str(value), status=status,
-                                      note=note, is_issue=flagged)
+                                      note=note, is_issue=flagged, actor=actor)
         # Auto issue lifecycle: a flagged entry opens a tracked issue (once); correcting
         # it back to OK auto-resolves the auto-opened issue. Manual issues are untouched.
         if flagged:
@@ -1652,6 +1843,7 @@ def create_app():
                 f"📝 *{name}* ({run['shift_date']}) submitted by {who} — review & sign off:\n"
                 f"{_PUBLIC_URL}/operations/round/{rid}",
                 to_number=owner, kind="signoff_request")
+        _spawn(_recognize_submission(rid))   # recovery / milestone praise, off the request path
         return _run_view(rid)
 
     @app.post("/api/v1/forms/run/{rid}/signoff")
@@ -1703,7 +1895,9 @@ def create_app():
         if not name:
             raise HTTPException(400, "provide 'name'")
         building = str(p.get("building", "one-anthem")).strip() or "one-anthem"
-        tid = state.db.add_technician(building, name, str(p.get("phone", "")).strip())
+        phone = str(p.get("phone", "")).strip()
+        tid = state.db.add_technician(building, name, phone)
+        _welcome_member(building, name, phone, "technician")
         return {"id": tid, "name": name}
 
     @app.post("/api/v1/technicians/{tech_id}/deactivate")
@@ -1726,12 +1920,27 @@ def create_app():
             raise HTTPException(400, "provide 'name' and 'phone'")
         building = str(p.get("building", "one-anthem")).strip() or "one-anthem"
         rid = state.db.add_resident(building, name, phone, unit=str(p.get("unit", "")).strip())
+        _welcome_member(building, name, phone, "resident")
         return {"id": rid, "name": name}
 
     @app.post("/api/v1/residents/{resident_id}/deactivate")
     async def resident_deactivate(resident_id: int):
         state.db.set_resident_active(resident_id, False)
         return {"id": resident_id, "active": False}
+
+    @app.get("/api/v1/settings")
+    async def get_settings(building: str = "one-anthem"):
+        return {"building": building,
+                "resident_group_link": state.db.get_setting(building, "resident_group_link", "")}
+
+    @app.post("/api/v1/settings")
+    async def set_settings(payload: Dict[str, Any] = Body(...)):
+        p = payload or {}
+        building = str(p.get("building", "one-anthem")).strip() or "one-anthem"
+        if "resident_group_link" in p:
+            state.db.set_setting(building, "resident_group_link", str(p.get("resident_group_link", "")).strip())
+        return {"building": building,
+                "resident_group_link": state.db.get_setting(building, "resident_group_link", "")}
 
     @app.get("/api/v1/whatsapp/notifications")
     async def wa_notifications():
@@ -1857,7 +2066,10 @@ def create_app():
             raise HTTPException(400, "provide username + password")
         if role not in ("owner", "fm", "viewer"):
             raise HTTPException(400, "role must be owner, fm (manager), or viewer")
-        state.db.create_user(u, role, _auth_mod.hash_password(pw), phone=str(p.get("phone", "")))
+        phone = str(p.get("phone", ""))
+        state.db.create_user(u, role, _auth_mod.hash_password(pw), phone=phone)
+        _welcome_member(str(p.get("building", "one-anthem")).strip() or "one-anthem",
+                        str(p.get("name", "")).strip() or u, phone, role)
         return {"username": u, "role": role}
 
     @app.post("/api/v1/admin/users/{username}/deactivate")
@@ -2079,7 +2291,16 @@ def create_app():
         from arvisx import checklist_intel as ci
         remind_h = float(os.environ.get("ARVISX_ROUND_REMIND_H", "6"))
         esc_h = float(os.environ.get("ARVISX_ROUND_ESCALATE_H", "10"))
-        lapsed = ci.lapse_stale_rounds(state.db, building)                 # shift-end → terminal
+        llm = _phrasing_llm()
+        # No phraser → lapse_stale_rounds sends its deterministic notice inline. With a phraser,
+        # defer the send, reword each grounded notice, then enqueue (baseline on any failure).
+        lapsed = ci.lapse_stale_rounds(state.db, building, enqueue=(llm is None))
+        if llm is not None:
+            from arvisx.checklist_skills import phrase_line
+            for f in lapsed:
+                line = await phrase_line(llm, f.get("msg", ""), f.get("facts", ""))
+                if line:
+                    state.db.enqueue_notification(building, line, to_number="", kind="round_lapsed")
         fired = ci.round_reminders(state.db, building, remind_after_h=remind_h, escalate_after_h=esc_h)
         return {"building": building, "lapsed": lapsed, "fired": fired}
 
@@ -2199,6 +2420,34 @@ def create_app():
         """Weekly/monthly summary text for the bot to push (or the owner to pull)."""
         from arvisx import checklist_intel as ci
         return {"period": period, "text": ci.period_summary_text(state.db, building, period)}
+
+    @app.get("/api/v1/reports/{period}.pdf")
+    async def report_pdf(period: str, building: str = "one-anthem", token: str = "",
+                         authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        """Download the weekly/monthly operations report as a PDF. Manager/owner only. Accepts
+        a normal Authorization header (dashboard) OR a ?token=<jwt> in the URL (the WhatsApp link;
+        the auth middleware also honours ?token= for non-header clients like a browser tap)."""
+        auth_hdr = authorization or (f"Bearer {token}" if token else "")
+        _sub, role = _auth_mod.identify(auth_hdr, x_api_key, _api_key)
+        if role not in ("owner", "fm", "manager", "system", "admin"):
+            raise HTTPException(403, "manager/owner only")
+        from arvisx import reports
+        from fastapi.responses import Response
+        per = "monthly" if str(period).lower().startswith(("month", "mo")) else "weekly"
+        data = reports.report_data(state.db, building, per)
+        summary = await reports.narrative(_llm_for_reasoning(), data, _building_name(building))
+        pdf = reports.render_pdf(data, _building_name(building), summary)
+        fname = f"allgud-{per}-report-{data['end']}.pdf"
+        return Response(content=pdf, media_type="application/pdf",
+                        headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+    def _report_link(period: str, building: str, sender: Dict[str, Any]) -> str:
+        """A tappable, self-authenticating PDF link for WhatsApp (carries a manager token)."""
+        if not _PUBLIC_URL:
+            return ""
+        per = "monthly" if str(period).lower().startswith(("month", "mo")) else "weekly"
+        tok = _auth_mod.make_token(sender.get("name") or "manager", "fm")
+        return f"{_PUBLIC_URL}/api/v1/reports/{per}.pdf?building={building}&token={tok}"
 
     @app.post("/api/v1/admin/send-summary")
     async def admin_send_summary(building: str = "one-anthem", period: str = "week",

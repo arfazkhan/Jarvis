@@ -6,3 +6,4 @@ uvicorn[standard]>=0.27
 paho-mqtt>=2.0
 python-dotenv>=1.0
 pypdf>=4.0          # C1: extract text from uploaded equipment manuals (PDF)
+fpdf2>=2.7          # weekly/monthly operations report → PDF (pure-Python, no system deps)
