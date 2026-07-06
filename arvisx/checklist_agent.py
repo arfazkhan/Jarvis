@@ -161,18 +161,29 @@ def build_ctx(db, building: str = "one-anthem", today: str = "",
 
 _GROUNDING_RULES = (
     "\n\nRULES:\n"
-    "- Use ONLY the tools to get facts. Never state a number, asset name, or status you "
-    "did not get from a tool result.\n"
-    "- If the tools don't have enough data, say so plainly — do not estimate or invent.\n"
-    "- Be concise and operational. No preamble."
+    "- For any FACT (a number, asset name, status, who did what), use ONLY the tools — never "
+    "state one you didn't get from a tool result. If the tools don't have it, say so plainly; "
+    "never estimate or invent.\n"
+    "- But TALK like a warm, real colleague, not a form. Natural and brief, first-person, a "
+    "little personable. Greetings, thanks, and small talk get a friendly human reply with no "
+    "tools. Use the person's name when it feels natural. Don't dump bullet lists unless asked.\n"
+    "- You remember the recent conversation (shown as earlier messages) — use it for follow-ups; "
+    "resolve 'it', 'that', 'him', 'the second one' from context."
 )
 
 
 async def run_agent(llm, system: str, user: str, ctx: Dict[str, Any],
-                    max_steps: int = 6) -> Dict[str, Any]:
+                    max_steps: int = 6, history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
     """ReAct loop: the model calls read-only tools until it answers. Returns
-    {text, evidence, steps, truncated}. `evidence` = every tool output (for the guard)."""
-    messages: List[Dict[str, Any]] = [{"role": "user", "content": user}]
+    {text, evidence, steps, truncated}. `evidence` = every tool output (for the guard).
+    `history` = prior {role, content} turns so the model has conversational continuity
+    (follow-ups, 'it'/'that'/'him' resolve from context)."""
+    messages: List[Dict[str, Any]] = []
+    for h in (history or []):
+        r = h.get("role", "user")
+        messages.append({"role": r if r in ("user", "assistant") else "user",
+                         "content": str(h.get("content", ""))[:500]})
+    messages.append({"role": "user", "content": user})
     system_msgs = [{"role": "system", "content": system + _GROUNDING_RULES}]
     schemas = CHECKLIST_REGISTRY.schemas()
     evidence: List[Any] = []

@@ -437,8 +437,14 @@ def building_qa_deterministic(db, building: str, today: str, question: str) -> s
 
 
 _QA_SYSTEM = (
-    "You are ArvisX, a friendly building-operations assistant on WhatsApp for the building "
-    "manager/owner. Help with THIS building — rounds, checks, issues, assets, PPM, readings, "
+    "You are AllGud, a warm, human-sounding building-operations assistant on WhatsApp for the "
+    "building manager/owner — chat naturally, like a helpful colleague who happens to know the "
+    "building inside out. If someone asks who you are, what you can do, or what you have access "
+    "to, answer conversationally in your own words: you help with rounds & shifts, issues, assets "
+    "& their manuals, PPM/compliance, weekly/monthly reports, and you can recap what's been "
+    "discussed; managers can also tell you to assign, remind, close an issue, or sign off. You "
+    "can look things up and log a reported problem, but you don't change settings or add users. "
+    "Help with THIS building — rounds, checks, issues, assets, PPM, readings, "
     "technicians — using ONLY the tools (shift_rounds, team_roster, health_overview, open_issues, "
     "asset_history, reading_anomalies, compliance, list_assets, asset_manual, recurring_issues). "
     "For anything about SHIFTS / who worked / round status (e.g. 'did anyone work the morning "
@@ -625,23 +631,38 @@ async def run_resident_chat(llm, tickets, building_name: str, name: str, text: s
             "issue_title": str(out.get("issue_title", "")).strip()}
 
 
+def _persona(asker: Optional[Dict[str, Any]]) -> str:
+    """A short per-turn header so the assistant talks TO this person, by name + role."""
+    a = asker or {}
+    name = (a.get("name") or "").strip()
+    role = {"manager": "the manager/owner", "technician": "a technician on the team",
+            "resident": "a resident"}.get(a.get("kind", ""), "a building user")
+    who = f"You're chatting with {name} ({role})." if name else f"You're chatting with {role}."
+    return "\n\n" + who + " Address them warmly and by name when it feels natural."
+
+
 async def run_building_qa(llm, db, building: str, question: str, today: str,
-                          asker: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    soc = _social_reply(question)            # pure greeting/thanks/ack → warm, no LLM, no stats dump
-    if soc:
-        return {"text": soc, "source": "social"}
+                          asker: Optional[Dict[str, Any]] = None,
+                          history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+    """LLM-FIRST conversational turn: the model handles greetings, small talk, meta and real
+    questions in one natural voice, with recent history for continuity + the grounded tools for
+    facts. Deterministic social/meta/building replies are the graceful fallback (LLM off / a
+    fabricated figure trips the guard / error) — so it never goes silent or ships a fake number."""
     if llm is not None:
         try:
             ctx = build_ctx(db, building, today, asker=asker)
-            out = await run_agent(llm, _QA_SYSTEM, question, ctx)
+            out = await run_agent(llm, _QA_SYSTEM + _persona(asker), question, ctx, history=history)
             text = _crisp(out.get("text") or "")
             ev = out.get("evidence")
-            # Accept the reply if it's concise, isn't leaked chain-of-thought, and every NUMBER
-            # is grounded in tool output (verify_grounded passes when there are no numbers — so
-            # greetings / friendly redirects are allowed without tools, but stats can't be faked).
+            # Accept the reply if it's concise, isn't leaked chain-of-thought, and every NUMBER is
+            # grounded (verify_grounded passes when there are no numbers — so greetings / natural
+            # chat ship freely, but stats can't be faked).
             if (text and len(text) <= 800 and not _looks_like_reasoning(text)
                     and verify_grounded(text, ev)["grounded"]):
                 return {"text": text, "source": "agent"}
         except Exception:
             pass
+    soc = _social_reply(question)
+    if soc:
+        return {"text": soc, "source": "social"}
     return {"text": building_qa_deterministic(db, building, today, question), "source": "deterministic"}

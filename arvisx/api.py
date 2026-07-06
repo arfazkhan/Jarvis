@@ -949,11 +949,6 @@ def create_app():
                 rtext = await summarize_chat(_llm_for_reasoning(), turns, sreq["label"])
             state.db.log_chat(building, sender.get("name") or role, role, q, "(recap)")
             return {"intent": "qa", "text": rtext, "source": "recap"}
-        # Identity / capability / "what's my role" → an honest answer, never a stats dump.
-        meta = _meta_reply(q, sender, role)
-        if meta:
-            state.db.log_chat(building, sender.get("name") or role, role, q, meta)
-            return {"intent": "qa", "text": meta, "source": "meta"}
         # Building phase (learning vs operational) drives the situation-aware answers.
         try:
             blds = state.commissioner.list()
@@ -986,10 +981,28 @@ def create_app():
                     llm = make_llm()
                 except Exception:
                     llm = None
-                qa = await run_building_qa(llm, state.db, building, q, _today_str(), asker=sender)
+                # Conversation continuity: recent turns (this building, ~last 40 min) so follow-ups
+                # feel like a real chat — the model resolves "it"/"that"/"him" from context.
+                from datetime import datetime as _dth, timedelta as _tdh
+                recent = state.db.chat_since(building, (_dth.now() - _tdh(minutes=40)).isoformat(timespec="seconds"))
+                history = []
+                for t in recent[-6:]:
+                    if (t.get("reply") or "") == "(recap)":
+                        continue
+                    history.append({"role": "user", "content": t.get("text", "")})
+                    if t.get("reply"):
+                        history.append({"role": "assistant", "content": t.get("reply", "")})
+                qa = await run_building_qa(llm, state.db, building, q, _today_str(),
+                                           asker=sender, history=history)
                 if qa.get("text"):
                     res["text"] = qa["text"]
                     res["source"] = qa.get("source", "")
+                # LLM off + a meta/identity question → an honest answer, not the generic redirect.
+                if qa.get("source") == "deterministic":
+                    m = _meta_reply(q, sender, role)
+                    if m:
+                        res["text"] = m
+                        res["source"] = "meta"
             except Exception:
                 pass
         state.db.log_chat(building, sender.get("name") or role, role, q, res.get("text", ""))
