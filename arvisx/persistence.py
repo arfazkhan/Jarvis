@@ -136,6 +136,10 @@ class ArvisxDb:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, sender TEXT, role TEXT,
                 text TEXT, reply TEXT, ts TEXT);
             CREATE INDEX IF NOT EXISTS ix_chatlog ON chat_log(building_id, ts);
+            -- LID-era identity: map a WhatsApp @lid → the real phone number, learned whenever a
+            -- message carries both (DMs always do). Lets group messages (often lid-only) resolve
+            -- to the roster so managers can run commands from a group.
+            CREATE TABLE IF NOT EXISTS lid_map (lid TEXT PRIMARY KEY, phone TEXT, updated_at TEXT);
             -- PPM schedule per asset: date-based (interval_days) and/or condition-based
             -- (run_hours_limit). Phase-S — drives the PPM planner + compliance.
             CREATE TABLE IF NOT EXISTS ppm_schedule (
@@ -711,6 +715,21 @@ class ArvisxDb:
             rows = c.execute("SELECT sender, role, text, reply, ts FROM chat_log WHERE building_id=? "
                              "AND substr(ts,1,10)=? ORDER BY id ASC LIMIT ?", (building_id, date, limit)).fetchall()
             return [dict(r) for r in rows]
+
+    # ── LID ↔ phone mapping (LID-era group identity) ─────────────────────
+    def remember_lid(self, lid: str, phone: str) -> None:
+        if not lid or not phone:
+            return
+        with self._lock, self._conn() as c:
+            c.execute("INSERT OR REPLACE INTO lid_map (lid, phone, updated_at) VALUES (?,?,?)",
+                      (lid, phone, datetime.now().isoformat(timespec="seconds")))
+
+    def phone_for_lid(self, lid: str) -> str:
+        if not lid:
+            return ""
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT phone FROM lid_map WHERE lid=?", (lid,)).fetchone()
+            return r["phone"] if r else ""
 
     # ── Outbound WhatsApp notification queue (bot polls + delivers + acks) ─
     def enqueue_notification(self, building_id: str, text: str, to_number: str = "",

@@ -869,13 +869,14 @@ def create_app():
         from arvisx.messaging import answer
         p = payload or {}
         q = str(p.get("question", "")).strip()
-        by = str(p.get("by", "")).strip()        # sender WhatsApp number
+        by = str(p.get("by", "")).strip()        # sender WhatsApp number (phone or @lid)
+        by_lid = str(p.get("by_lid", "")).strip()   # the @lid (LID era; groups often lid-only)
         building = str(p.get("building", "one-anthem")).strip() or "one-anthem"
         claimed = str(p.get("role", "viewer")).lower()
         # A0: backend resolves WHO is texting. When the number is KNOWN (roster), that is
         # authoritative; an UNKNOWN number falls back to the bot-claimed role for Q&A voice
         # only — it can never trigger manager actions / resident tickets (gated on kind below).
-        sender = _resolve_sender(by, building) if by else {
+        sender = _resolve_sender(by, building, by_lid=by_lid) if (by or by_lid) else {
             "role": claimed, "kind": "claimed", "name": "", "number": ""}
         role = sender["role"] if sender.get("kind") in ("manager", "technician", "resident") else claimed
         if not q:
@@ -1245,12 +1246,30 @@ def create_app():
                 seen.add(n); out.append(n)
         return out
 
-    def _resolve_sender(by: str, building: str = "one-anthem") -> Dict[str, Any]:
+    def _resolve_sender(by: str, building: str = "one-anthem", by_lid: str = "") -> Dict[str, Any]:
         """Resolve an incoming WhatsApp number → AUTHORITATIVE identity+role (backend
         roster, independent of what the bot claims). Roles: owner (manager — full ops +
         actions) · technician (field; own round/issue DMs) · resident (common-area tickets
-        only, A3) · viewer (unknown number, read-only Q&A)."""
+        only, A3) · viewer (unknown number, read-only Q&A).
+
+        LID era: `by` is the phone when WhatsApp gives it, else the @lid; `by_lid` is always the
+        @lid. When both are present and differ, `by` is the real phone → learn the lid→phone map
+        (DMs always carry the phone). When only a lid arrives (common in groups), resolve it to
+        the learned phone so a manager can still run commands from the group."""
         num = _norm_phone(by)
+        lid = _norm_phone(by_lid)
+        if num and lid and num != lid:
+            try:
+                state.db.remember_lid(lid, num)
+            except Exception:
+                pass
+        elif lid and (not num or num == lid):
+            try:
+                mapped = _norm_phone(state.db.phone_for_lid(lid))
+                if mapped:
+                    num = mapped
+            except Exception:
+                pass
         if not num:
             return {"role": "viewer", "kind": "unknown", "name": "", "number": ""}
         if num in _manager_numbers():
