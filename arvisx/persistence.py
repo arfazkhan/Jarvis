@@ -136,6 +136,10 @@ class ArvisxDb:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, sender TEXT, role TEXT,
                 text TEXT, reply TEXT, ts TEXT);
             CREATE INDEX IF NOT EXISTS ix_chatlog ON chat_log(building_id, ts);
+            -- Embedding per chat turn (semantic recall over long history). vec = float32 blob.
+            CREATE TABLE IF NOT EXISTS chat_embedding (
+                chat_id INTEGER PRIMARY KEY, building_id TEXT, vec BLOB);
+            CREATE INDEX IF NOT EXISTS ix_chatemb ON chat_embedding(building_id);
             -- LID-era identity: map a WhatsApp @lid → the real phone number, learned whenever a
             -- message carries both (DMs always do). Lets group messages (often lid-only) resolve
             -- to the roster so managers can run commands from a group.
@@ -693,16 +697,51 @@ class ArvisxDb:
                       (building_id, key, value))
 
     # ── WhatsApp conversation log (for the "what did we discuss?" recap) ──
-    def log_chat(self, building_id: str, sender: str, role: str, text: str, reply: str) -> None:
-        """Record one Q&A turn. Self-pruning: keeps ~14 days so recap can look back a week
-        while the table stays small."""
-        from datetime import datetime as _dt, timedelta as _td
-        now = _dt.now()
+    def log_chat(self, building_id: str, sender: str, role: str, text: str, reply: str) -> int:
+        """Record one Q&A turn and return its id. Kept indefinitely (semantic recall can look
+        back months); the embedding for long-history search is stored separately, best-effort."""
+        from datetime import datetime as _dt
         with self._lock, self._conn() as c:
-            c.execute("INSERT INTO chat_log (building_id, sender, role, text, reply, ts) VALUES (?,?,?,?,?,?)",
-                      (building_id, sender, role, text[:600], reply[:1200], now.isoformat(timespec="seconds")))
-            c.execute("DELETE FROM chat_log WHERE building_id=? AND ts < ?",
-                      (building_id, (now - _td(days=14)).isoformat(timespec="seconds")))
+            cur = c.execute("INSERT INTO chat_log (building_id, sender, role, text, reply, ts) VALUES (?,?,?,?,?,?)",
+                            (building_id, sender, role, text[:600], reply[:1200],
+                             _dt.now().isoformat(timespec="seconds")))
+            return int(cur.lastrowid)
+
+    # ── Semantic chat recall (embeddings over the full chat history) ─────
+    def save_chat_embedding(self, chat_id: int, building_id: str, vec: bytes) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("INSERT OR REPLACE INTO chat_embedding (chat_id, building_id, vec) VALUES (?,?,?)",
+                      (chat_id, building_id, vec))
+
+    def chat_embeddings(self, building_id: str) -> List[Dict[str, Any]]:
+        """Every stored (chat_id, vec) for a building — the caller scores them in memory."""
+        with self._lock, self._conn() as c:
+            rows = c.execute("SELECT chat_id, vec FROM chat_embedding WHERE building_id=?",
+                             (building_id,)).fetchall()
+            return [{"chat_id": r["chat_id"], "vec": r["vec"]} for r in rows]
+
+    def chat_by_ids(self, chat_ids: List[int]) -> List[Dict[str, Any]]:
+        if not chat_ids:
+            return []
+        ph = ",".join("?" for _ in chat_ids)
+        with self._lock, self._conn() as c:
+            rows = c.execute(f"SELECT id, sender, role, text, reply, ts FROM chat_log WHERE id IN ({ph})",
+                             tuple(chat_ids)).fetchall()
+            return [dict(r) for r in rows]
+
+    def chat_keyword_search(self, building_id: str, terms: List[str], limit: int = 8) -> List[Dict[str, Any]]:
+        """Fallback when embeddings are unavailable: LIKE-match any term over text/reply."""
+        if not terms:
+            return []
+        clause = " OR ".join("(text LIKE ? OR reply LIKE ?)" for _ in terms)
+        args: List[Any] = []
+        for t in terms:
+            args += [f"%{t}%", f"%{t}%"]
+        with self._lock, self._conn() as c:
+            rows = c.execute(f"SELECT sender, role, text, reply, ts FROM chat_log WHERE building_id=? "
+                             f"AND ({clause}) ORDER BY id DESC LIMIT ?",
+                             (building_id, *args, limit)).fetchall()
+            return [dict(r) for r in rows]
 
     def chat_since(self, building_id: str, since_iso: str, limit: int = 200) -> List[Dict[str, Any]]:
         with self._lock, self._conn() as c:

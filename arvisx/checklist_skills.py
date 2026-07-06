@@ -531,6 +531,27 @@ _LESSON_SYS = (
 )
 
 
+_DECISION_SYS = (
+    "From ONE building-operations chat turn, extract a concrete DECISION or plan the team made "
+    "(e.g. 'Replace the borewell pump next quarter', 'Approved AMC renewal for the lifts'), if "
+    "there is one. Use ONLY what's stated — never invent. If it's just a question, chit-chat, a "
+    'status, or no clear decision, return {}. Output JSON only: {"decision": "..."} or {}.'
+)
+
+
+async def extract_decision(llm, sender: str, q: str, reply: str) -> str:
+    """Pull a durable decision/plan out of a chat turn (grounded). '' if none."""
+    if not llm:
+        return ""
+    try:
+        out = await llm.ask_json(messages=[{"role": "user", "content": f"{sender}: {q}\nAllGud: {reply}"}],
+                                 system_msgs=[{"role": "system", "content": _DECISION_SYS}], channel="extract")
+    except Exception:
+        return ""
+    d = _crisp(str(out.get("decision", ""))).strip() if isinstance(out, dict) else ""
+    return d if len(d) >= 6 else ""
+
+
 async def lesson_from_issue(llm, issue: Dict[str, Any]) -> Dict[str, Any]:
     """LLM-synthesize a generalizable lesson from a RESOLVED issue + its resolution notes.
     Grounded (only the issue's facts). Returns {title, detail} or {} (no llm / not enough)."""
@@ -629,6 +650,61 @@ async def run_resident_chat(llm, tickets, building_name: str, name: str, text: s
         return None
     return {"intent": intent, "reply": _crisp(str(out.get("reply", ""))).strip(),
             "issue_title": str(out.get("issue_title", "")).strip()}
+
+
+_RECALL_RE = re.compile(
+    r"\b(?:(?:what|when|did|have|had)\s+(?:did\s+)?we\s+(?:ever\s+|last\s+)?"
+    r"(?:discuss|discussed|talk|talked|say|said|decide|decided|cover|covered)"
+    r"|search|find|look\s*up|recall|dig\s*up|(?:our|any|the)\s+(?:past\s+)?(?:discussion|conversation|chat|talk)s?)\b",
+    re.I)
+_TOPIC_RE = re.compile(r"\b(?:about|regarding|on|for|re)\s+(.+?)[?.!]*$", re.I)
+_TOPIC_VERB_RE = re.compile(
+    r"(?:discuss(?:ed)?|talk(?:ed)? about|say about|said about|decide(?:d)? about|"
+    r"search(?: for)?|find|look\s*up|recall)\s+(.+?)[?.!]*$", re.I)
+
+
+def recall_request(text: str):
+    """Semantic-recall over the FULL history: 'what did we discuss about the pump', 'when did we
+    decide on X', 'find our chat about Y'. Returns {topic} or None. Requires a real topic (so a
+    bare 'what did we discuss today' stays a time-window recap, handled by summary_request)."""
+    low = (text or "").strip()
+    if not _RECALL_RE.search(low):
+        return None
+    m = _TOPIC_RE.search(low) or _TOPIC_VERB_RE.search(low)
+    topic = (m.group(1).strip() if m else "")
+    # drop trailing time words so "about the pump last year" → "the pump"
+    topic = re.sub(r"\b(last|past)\s+(week|month|year|quarter)\b.*$", "", topic, flags=re.I).strip()
+    if len(topic) < 3 or topic.lower() in ("today", "yesterday", "it", "that", "this"):
+        return None
+    return {"topic": topic}
+
+
+_RECALL_SYS = (
+    "You help a building manager recall PAST discussions. From the retrieved conversation turns "
+    "below (each tagged with its date), answer what was discussed about the topic and WHEN. Use "
+    "ONLY these turns — never invent. Cite the date(s). If the turns don't actually cover the "
+    'topic, say you couldn\'t find it. Be concise and natural. Output JSON only: {"answer": "..."}.'
+)
+
+
+async def answer_recall(llm, turns, topic: str) -> str:
+    """Answer a semantic-recall question from the retrieved turns (grounded, cites dates)."""
+    if not turns:
+        return f'I couldn\'t find anything in our past chats about "{topic}".'
+    ctx = "\n".join(f"[{(t.get('ts') or '')[:10]}] {t.get('sender', '?')}: {t.get('text', '')}"
+                    f" | AllGud: {t.get('reply', '')}" for t in turns)
+    if llm is not None:
+        try:
+            out = await llm.ask_json(messages=[{"role": "user", "content": ctx}],
+                                     system_msgs=[{"role": "system", "content": _RECALL_SYS + f"\nTopic: {topic}"}],
+                                     channel="chat")
+            s = _crisp(str(out.get("answer", ""))).strip() if isinstance(out, dict) else ""
+            if s and not _looks_like_reasoning(s):
+                return s
+        except Exception:
+            pass
+    lines = [f"- [{(t.get('ts') or '')[:10]}] {t.get('sender', '?')}: {t.get('text', '')}" for t in turns[:6]]
+    return f'Here\'s what I found about "{topic}":\n' + "\n".join(lines)
 
 
 def _persona(asker: Optional[Dict[str, Any]]) -> str:

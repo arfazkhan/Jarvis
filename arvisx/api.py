@@ -917,13 +917,13 @@ def create_app():
                 logger.warning(f"[wa_ask] manager command failed: {e}")
                 cmd = "Couldn't run that — try 'help' for commands."
             if cmd is not None:
-                state.db.log_chat(building, sender.get("name") or "manager", role, q, cmd)
+                _record_turn(building, sender.get("name") or "manager", role, q, cmd)
                 return {"intent": "action", "text": cmd, "source": "command"}
             # A manager/owner reporting a problem in plain words → log it (don't send them to
             # the read-only Q&A, which can only OFFER to create an issue but not actually do it).
             if _is_problem_report(q):
                 r = _log_reported_issue(q, sender.get("name") or "Manager", building)
-                state.db.log_chat(building, sender.get("name") or "manager", role, q, r["text"])
+                _record_turn(building, sender.get("name") or "manager", role, q, r["text"])
                 return r
             if _report_preamble(q):
                 return {"intent": "action", "source": "report", "text":
@@ -932,9 +932,33 @@ def create_app():
         # A3: a pre-registered (backend-resolved) resident's message → common-area ticket.
         if sender.get("kind") == "resident":
             return await _handle_resident_message(q, sender, building)
+        # Semantic recall: "what did we discuss about the pump", "when did we decide on X" →
+        # search the FULL history by meaning (embeddings; keyword fallback), answer with dates.
+        from arvisx.checklist_skills import recall_request, answer_recall, summary_request, summarize_chat
+        rreq = recall_request(q)
+        if rreq is not None:
+            from arvisx import embeddings as emb
+            topic = rreq["topic"]
+            turns = []
+            try:
+                qv = await asyncio.to_thread(emb.embed_one, topic)
+                if qv:
+                    items = [(e["chat_id"], e["vec"]) for e in state.db.chat_embeddings(building)]
+                    hits = emb.top_k(qv, items, k=6)
+                    turns = state.db.chat_by_ids([cid for cid, _ in hits])
+            except Exception:
+                turns = []
+            if not turns:                       # no embedder / no vectors / no hit → keyword
+                _stop = {"the", "a", "an", "our", "we", "did", "was", "were", "is", "are", "about",
+                         "on", "for", "of", "to", "and", "that", "this", "with", "in", "conversation",
+                         "discussion", "chat", "talk", "discuss"}
+                terms = [w for w in re.split(r"\W+", topic.lower()) if len(w) > 2 and w not in _stop][:5]
+                turns = state.db.chat_keyword_search(building, terms)
+            ans = await answer_recall(_llm_for_reasoning(), turns, topic)
+            state.db.log_chat(building, sender.get("name") or role, role, q, "(recall)")
+            return {"intent": "qa", "text": ans, "source": "recall"}
         # Recap: "what did we discuss?" → summarize the conversation log (rolling 24h, a named
         # day, or a specific date; ask when the date is ambiguous). Non-residents only.
-        from arvisx.checklist_skills import summary_request, summarize_chat
         sreq = summary_request(q)
         if sreq is not None:
             if sreq["need_date"]:
@@ -1006,7 +1030,7 @@ def create_app():
                         res["source"] = "meta"
             except Exception:
                 pass
-        state.db.log_chat(building, sender.get("name") or role, role, q, res.get("text", ""))
+        _record_turn(building, sender.get("name") or role, role, q, res.get("text", ""))
         return {"intent": res.get("intent", "qa"), "text": res["text"], "source": res.get("source", "")}
 
     @app.get("/api/v1/whatsapp/alerts")
@@ -1656,6 +1680,50 @@ def create_app():
             r"\b(complain|complaint|report (a|an|the)? ?(problem|issue|fault)|"
             r"raise (a|an|the)? ?(issue|ticket|complaint)|log (a|an|the)? ?(issue|complaint|problem))\b",
             low))
+
+    async def _embed_turn(chat_id: int, building: str, text: str) -> None:
+        """Embed a chat turn for semantic recall (best-effort, off the reply path)."""
+        from arvisx import embeddings as emb
+        try:
+            v = await asyncio.to_thread(emb.embed_one, text)
+            if v:
+                state.db.save_chat_embedding(chat_id, building, emb.to_blob(v))
+        except Exception:
+            pass
+
+    _DECISION_HINT = re.compile(
+        r"\b(we'?ll|we will|we should|we need to|let'?s|plan to|going to|decided?|approved?|"
+        r"agree(?:d)? to|replace|purchase|buy|schedule|budget|next (?:week|month|quarter|year)|"
+        r"by (?:next|end of))\b", re.I)
+
+    async def _maybe_capture_decision(building: str, sender: str, q: str, reply: str) -> None:
+        """If a turn looks like a decision/plan, an LLM extracts it → pending building-memory
+        candidate for the manager to approve (human-in-the-loop; nothing auto-saved)."""
+        if not _DECISION_HINT.search(q or ""):
+            return
+        llm = _llm_for_reasoning()
+        if llm is None:
+            return
+        from arvisx.checklist_skills import extract_decision
+        dec = await extract_decision(llm, sender, q, reply)
+        if not dec:
+            return
+        cid = state.db.add_memory_candidate(building, "decision", dec[:140],
+                                            source="chat_decision", dedup_key=f"decision:{dec[:60].lower()}")
+        if cid:
+            state.db.enqueue_notification(
+                building, f"📌 Sounds like a decision worth remembering:\n\"{dec}\"\n"
+                f"Reply *approve {cid}* to save it to building memory, or *reject {cid}*.",
+                to_number="", kind="decision_candidate")
+
+    def _record_turn(building: str, sender_name: str, role: str, q: str, reply: str) -> None:
+        """Log a substantive turn + (background) embed it for recall + scan it for a decision."""
+        try:
+            cid = state.db.log_chat(building, sender_name, role, q, reply)
+        except Exception:
+            return
+        _spawn(_embed_turn(cid, building, f"{sender_name}: {q}\n{reply}"))
+        _spawn(_maybe_capture_decision(building, sender_name, q, reply))
 
     def _meta_reply(text: str, sender: Dict[str, Any], role: str):
         """Identity / capability / 'what's my role' → an honest, specific answer instead of the
