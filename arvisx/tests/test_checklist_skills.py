@@ -177,8 +177,11 @@ def test_qa_open_issues(tmp_path):
 
 def test_qa_default_overview(tmp_path):
     db = ArvisxDb(str(tmp_path / "qa3.db"))
-    ans = building_qa_deterministic(db, "one-anthem", T, "hello")
-    assert "Building overview" in ans
+    # An overview-ish question still gets the overview…
+    assert "Building overview" in building_qa_deterministic(db, "one-anthem", T, "how is the building")
+    # …but an unrelated/meta question gets a helpful redirect, NOT a stats dump.
+    other = building_qa_deterministic(db, "one-anthem", T, "hello")
+    assert "Building overview" not in other and "help" in other.lower()
 
 
 def test_run_qa_deterministic_without_llm(tmp_path):

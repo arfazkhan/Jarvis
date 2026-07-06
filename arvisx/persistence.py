@@ -131,6 +131,11 @@ class ArvisxDb:
             -- Simple per-building key/value settings (e.g. resident WhatsApp group invite link).
             CREATE TABLE IF NOT EXISTS building_settings (
                 building_id TEXT, key TEXT, value TEXT, PRIMARY KEY (building_id, key));
+            -- WhatsApp conversation log — powers "what did we discuss?" recap (rolling window).
+            CREATE TABLE IF NOT EXISTS chat_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, building_id TEXT, sender TEXT, role TEXT,
+                text TEXT, reply TEXT, ts TEXT);
+            CREATE INDEX IF NOT EXISTS ix_chatlog ON chat_log(building_id, ts);
             -- PPM schedule per asset: date-based (interval_days) and/or condition-based
             -- (run_hours_limit). Phase-S — drives the PPM planner + compliance.
             CREATE TABLE IF NOT EXISTS ppm_schedule (
@@ -682,6 +687,30 @@ class ArvisxDb:
         with self._lock, self._conn() as c:
             c.execute("INSERT OR REPLACE INTO building_settings (building_id, key, value) VALUES (?,?,?)",
                       (building_id, key, value))
+
+    # ── WhatsApp conversation log (for the "what did we discuss?" recap) ──
+    def log_chat(self, building_id: str, sender: str, role: str, text: str, reply: str) -> None:
+        """Record one Q&A turn. Self-pruning: keeps ~14 days so recap can look back a week
+        while the table stays small."""
+        from datetime import datetime as _dt, timedelta as _td
+        now = _dt.now()
+        with self._lock, self._conn() as c:
+            c.execute("INSERT INTO chat_log (building_id, sender, role, text, reply, ts) VALUES (?,?,?,?,?,?)",
+                      (building_id, sender, role, text[:600], reply[:1200], now.isoformat(timespec="seconds")))
+            c.execute("DELETE FROM chat_log WHERE building_id=? AND ts < ?",
+                      (building_id, (now - _td(days=14)).isoformat(timespec="seconds")))
+
+    def chat_since(self, building_id: str, since_iso: str, limit: int = 200) -> List[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            rows = c.execute("SELECT sender, role, text, reply, ts FROM chat_log WHERE building_id=? "
+                             "AND ts >= ? ORDER BY id ASC LIMIT ?", (building_id, since_iso, limit)).fetchall()
+            return [dict(r) for r in rows]
+
+    def chat_on_date(self, building_id: str, date: str, limit: int = 200) -> List[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            rows = c.execute("SELECT sender, role, text, reply, ts FROM chat_log WHERE building_id=? "
+                             "AND substr(ts,1,10)=? ORDER BY id ASC LIMIT ?", (building_id, date, limit)).fetchall()
+            return [dict(r) for r in rows]
 
     # ── Outbound WhatsApp notification queue (bot polls + delivers + acks) ─
     def enqueue_notification(self, building_id: str, text: str, to_number: str = "",

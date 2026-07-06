@@ -916,10 +916,44 @@ def create_app():
                 logger.warning(f"[wa_ask] manager command failed: {e}")
                 cmd = "Couldn't run that — try 'help' for commands."
             if cmd is not None:
+                state.db.log_chat(building, sender.get("name") or "manager", role, q, cmd)
                 return {"intent": "action", "text": cmd, "source": "command"}
+            # A manager/owner reporting a problem in plain words → log it (don't send them to
+            # the read-only Q&A, which can only OFFER to create an issue but not actually do it).
+            if _is_problem_report(q):
+                r = _log_reported_issue(q, sender.get("name") or "Manager", building)
+                state.db.log_chat(building, sender.get("name") or "manager", role, q, r["text"])
+                return r
+            if _report_preamble(q):
+                return {"intent": "action", "source": "report", "text":
+                        "Sure — what's the problem? Describe it (e.g. 'lift not working in B block') "
+                        "and I'll log it right away."}
         # A3: a pre-registered (backend-resolved) resident's message → common-area ticket.
         if sender.get("kind") == "resident":
             return await _handle_resident_message(q, sender, building)
+        # Recap: "what did we discuss?" → summarize the conversation log (rolling 24h, a named
+        # day, or a specific date; ask when the date is ambiguous). Non-residents only.
+        from arvisx.checklist_skills import summary_request, summarize_chat
+        sreq = summary_request(q)
+        if sreq is not None:
+            if sreq["need_date"]:
+                rtext = ("Which day should I recap? Tell me a day (e.g. 'Sunday') or a date "
+                         "like 2026-06-29.")
+            else:
+                from datetime import datetime as _dtr, timedelta as _tdr
+                if sreq["date"]:
+                    turns = state.db.chat_on_date(building, sreq["date"])
+                else:
+                    days = 1 if "24 hours" in sreq["label"] else 7
+                    turns = state.db.chat_since(building, (_dtr.now() - _tdr(days=days)).isoformat(timespec="seconds"))
+                rtext = await summarize_chat(_llm_for_reasoning(), turns, sreq["label"])
+            state.db.log_chat(building, sender.get("name") or role, role, q, "(recap)")
+            return {"intent": "qa", "text": rtext, "source": "recap"}
+        # Identity / capability / "what's my role" → an honest answer, never a stats dump.
+        meta = _meta_reply(q, sender, role)
+        if meta:
+            state.db.log_chat(building, sender.get("name") or role, role, q, meta)
+            return {"intent": "qa", "text": meta, "source": "meta"}
         # Building phase (learning vs operational) drives the situation-aware answers.
         try:
             blds = state.commissioner.list()
@@ -958,6 +992,7 @@ def create_app():
                     res["source"] = qa.get("source", "")
             except Exception:
                 pass
+        state.db.log_chat(building, sender.get("name") or role, role, q, res.get("text", ""))
         return {"intent": res.get("intent", "qa"), "text": res["text"], "source": res.get("source", "")}
 
     @app.get("/api/v1/whatsapp/alerts")
@@ -1559,6 +1594,75 @@ def create_app():
             if _re.search(pat, t):
                 return label
         return "Common area"
+
+    def _is_problem_report(text: str) -> bool:
+        """A plain-language problem statement (not a question) → should become a logged issue."""
+        import re as _re
+        low = text.strip().lower()
+        if "?" in low:
+            return False
+        first = low.split(" ")[0] if low else ""
+        if first in ("is", "are", "was", "were", "do", "does", "did", "can", "could", "how",
+                     "what", "why", "when", "who", "should", "will", "would", "has", "have",
+                     "any", "show", "list", "status", "report", "weekly", "monthly"):
+            return False
+        return bool(_re.search(
+            r"not working|isn'?t working|won'?t (work|start|turn|open|close)|stopped working|"
+            r"broken|leak|no water|no power|power (cut|gone|out|failure|off)|stuck|jammed|"
+            r"fault|faulty|damaged|tripped|overflow|not turning on|\bdown\b|\bdead\b|sparking|"
+            r"flicker|burst|blocked|clogged|smell|smoke|noisy|not cooling|not heating",
+            low))
+
+    def _report_preamble(text: str) -> bool:
+        """A bare 'I want to report / I have a complaint' with no concrete problem yet → we
+        should ask them to describe it, not log a blank issue or dump the compliance report."""
+        import re as _re
+        low = text.strip().lower()
+        if _is_problem_report(text):
+            return False
+        return bool(_re.search(
+            r"\b(complain|complaint|report (a|an|the)? ?(problem|issue|fault)|"
+            r"raise (a|an|the)? ?(issue|ticket|complaint)|log (a|an|the)? ?(issue|complaint|problem))\b",
+            low))
+
+    def _meta_reply(text: str, sender: Dict[str, Any], role: str):
+        """Identity / capability / 'what's my role' → an honest, specific answer instead of the
+        read-only agent flailing and falling back to a stats dump."""
+        import re as _re
+        low = text.strip().lower()
+        name = sender.get("name") or ""
+        if _re.search(r"\b(who are you|what are you|are you (real|human|a bot|an ai|there)|your name)\b", low):
+            return ("I'm AllGud — an AI assistant for this building's day-to-day operations. Ask me "
+                    "about rounds, issues, assets, PPM, or say 'weekly report'.")
+        if _re.search(r"(what can you do|your capabilities|what do you do|what access|what data do you|"
+                      r"how can you help|what are your (tools|features)|what all can you)", low):
+            return ("Here's what I can do for this building:\n"
+                    "• Rounds & shifts — who's on, what's pending, who's behind\n"
+                    "• Issues — open list & history; I'll log a problem you report\n"
+                    "• Assets, health & equipment manuals\n"
+                    "• PPM / compliance — what's overdue\n"
+                    "• Weekly & monthly PDF reports\n"
+                    "• Recap what we've discussed (say 'summarise today')\n"
+                    "Managers can run commands too: assign, remind, close issue, sign off. I can't "
+                    "change settings or add users — that's the console.")
+        if _re.search(r"(what.?s my role|who am i|my access level|am i (the |an )?(owner|manager|admin))", low):
+            rl = {"owner": "the owner", "fm": "a manager", "manager": "a manager",
+                  "viewer": "a viewer", "technician": "a technician"}.get(role, role or "a user")
+            return (f"You're {rl} here{(', ' + name) if name else ''} — you can ask about operations "
+                    "and run manager commands (assign, remind, close issue, reports).")
+        return None
+
+    def _log_reported_issue(text: str, who: str, building: str) -> Dict[str, Any]:
+        """Log a manager/owner-reported problem as a tracked issue + notify the team."""
+        cat = _resident_category(text)
+        title = text.strip()
+        title = (title[:80] + "…") if len(title) > 80 else title
+        iid = state.db.create_issue(building, title, detail=f"Reported by {who} via WhatsApp",
+                                    asset=cat, severity="issue", source="manual", raised_by=who)
+        _notify_issue_event(state.db.get_issue(iid), f"Opened — reported by {who} ({cat})", by=who)
+        return {"intent": "action", "source": "report", "text":
+                f"✅ Logged as issue #{iid} ({cat}) — the team has been notified. "
+                f"Assign or close it from the console or here (e.g. 'close issue {iid}')."}
 
     def _resident_who(sender: Dict[str, Any]) -> str:
         name = sender.get("name") or "Resident"
