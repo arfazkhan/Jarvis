@@ -36,6 +36,22 @@ def wa_cost(n: int = 1) -> float:
     return round((n or 0) * _f("ARVISX_WA_MSG_COST", 0.0), 6)
 
 
+def embed_cost(tokens: int) -> float:
+    """Cost of embedding `tokens` from a configurable per-1M-token rate (ARVISX_EMBED_PRICE).
+    e.g. text-embedding-3-small ≈ ₹1.7 per 1M tokens."""
+    return round((tokens or 0) / 1_000_000 * _f("ARVISX_EMBED_PRICE", 0.0), 6)
+
+
+def record_embed(model: str, tokens: int, building: str = "") -> None:
+    if _db is None:
+        return
+    try:
+        _db.log_usage(building, "embed", model=model, prompt_tokens=tokens, n=1,
+                      cost=embed_cost(tokens))
+    except Exception as e:
+        logger.warning(f"record_embed failed: {e}")
+
+
 def record_llm(channel: str, model: str, prompt_tokens: int, completion_tokens: int,
                building: str = "") -> None:
     if _db is None:

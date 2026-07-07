@@ -833,6 +833,10 @@ class ArvisxDb:
         calls = sum(r["n"] for r in llm)
         pin = sum(r["pin"] for r in llm); pout = sum(r["pout"] for r in llm)
         llm_cost = sum(r["cost"] for r in llm)
+        emb = [r for r in rows if r["kind"] == "embed"]
+        emb_calls = sum(r["n"] for r in emb)
+        emb_tokens = sum(r["pin"] for r in emb)
+        emb_cost = sum(r["cost"] for r in emb)
         by_channel: Dict[str, Any] = {}
         for r in llm:
             ch = by_channel.setdefault(r["channel"] or "?",
@@ -846,7 +850,9 @@ class ArvisxDb:
                     "total_tokens": pin + pout, "avg_context": (round(pin / calls) if calls else 0),
                     "cost": round(llm_cost, 4), "model": (llm[0]["model"] if llm else ""),
                     "by_channel": by_channel},
-            "total_cost": round(wa_cost + llm_cost, 4),
+            "embed": {"calls": emb_calls, "tokens": emb_tokens, "cost": round(emb_cost, 4),
+                      "model": (emb[0]["model"] if emb else "")},
+            "total_cost": round(wa_cost + llm_cost + emb_cost, 4),
         }
 
     # ── Memory candidates (learned-lesson approval queue) ─────────────────

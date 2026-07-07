@@ -41,6 +41,13 @@ def embed_texts(texts: List[str]) -> Optional[List[List[float]]]:
         from openai import OpenAI
         client = OpenAI(api_key=key, base_url=base_url)
         resp = client.embeddings.create(model=model, input=[t[:2000] for t in texts])
+        try:
+            from arvisx import metrics
+            u = getattr(resp, "usage", None)
+            tok = int(getattr(u, "total_tokens", 0) or getattr(u, "prompt_tokens", 0) or 0)
+            metrics.record_embed(model, tok)
+        except Exception:
+            pass
         return [list(d.embedding) for d in resp.data]
     except Exception:
         return None

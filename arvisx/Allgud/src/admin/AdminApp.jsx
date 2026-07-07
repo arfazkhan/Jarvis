@@ -209,7 +209,7 @@ function Usage() {
   if (err) return <div className="text-red text-sm">{err.message}</div>
   if (!data) return null
   const { summary, daily, currency } = data
-  const wa = summary.whatsapp, llm = summary.llm
+  const wa = summary.whatsapp, llm = summary.llm, emb = summary.embed || { calls: 0, tokens: 0, cost: 0 }
   const money = (n) => `${currency} ${Number(n || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })}`
   const num = (n) => Number(n || 0).toLocaleString()
 
@@ -223,11 +223,12 @@ function Usage() {
         <button onClick={load} className="flex items-center gap-1 text-sm text-gold"><RefreshCw className="w-4 h-4" /> Refresh</button>
       </div>
 
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-5 gap-4 mb-6">
         <Stat icon={MessageSquare} label="WhatsApp messages" value={num(wa.total)} sub={`${num(wa.in)} in · ${num(wa.out)} out`} tone="green" />
         <Stat icon={Cpu} label="LLM calls" value={num(llm.calls)} sub={`${num(llm.total_tokens)} tokens · avg ctx ${num(llm.avg_context)}`} tone="green" />
         <Stat icon={DollarSign} label="LLM cost" value={money(llm.cost)} sub={`${num(llm.prompt_tokens)} in / ${num(llm.completion_tokens)} out`} tone="amber" />
-        <Stat icon={DollarSign} label="Total cost" value={money(summary.total_cost)} sub={`WhatsApp ${money(wa.cost)} + LLM ${money(llm.cost)}`} tone="amber" />
+        <Stat icon={DollarSign} label="Embedding cost" value={money(emb.cost)} sub={`${num(emb.calls)} calls · ${num(emb.tokens)} tokens`} tone="amber" />
+        <Stat icon={DollarSign} label="Total cost" value={money(summary.total_cost)} sub={`WA ${money(wa.cost)} + LLM ${money(llm.cost)} + Emb ${money(emb.cost)}`} tone="amber" />
       </div>
 
       <Card className="p-5 mb-6">
@@ -269,7 +270,7 @@ function Usage() {
       </Card>
 
       <UsageTrend daily={daily} currency={currency} />
-      <div className="text-xs text-text-faint mt-4">WhatsApp cost uses ARVISX_WA_MSG_COST (0 for Baileys — counts still tracked). LLM cost uses ARVISX_LLM_PRICE_IN / _OUT per 1M tokens. Set these in the deploy env to reflect real rates.</div>
+      <div className="text-xs text-text-faint mt-4">WhatsApp cost uses ARVISX_WA_MSG_COST (0 for Baileys — counts still tracked). LLM cost uses ARVISX_LLM_PRICE_IN / _OUT and embedding cost uses ARVISX_EMBED_PRICE, per 1M tokens. Set these in the deploy env to reflect real rates.</div>
     </div>
   )
 }
