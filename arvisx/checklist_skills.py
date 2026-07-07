@@ -539,6 +539,43 @@ _DECISION_SYS = (
 )
 
 
+_ACTION_SYS = (
+    "You convert a building manager's natural WhatsApp message into ONE structured action, but "
+    "ONLY if they are clearly asking to DO something. Actions:\n"
+    "- assign: put a technician on a shift. Needs shift (1/2/3) + technician.\n"
+    "- issue_status: change an issue's status. Needs issue_ref (the asset/word they name, e.g. "
+    "'lift') + status (in_progress | resolved | open).\n"
+    "- signoff: sign off a submitted shift. Needs shift.\n"
+    "- remind: nudge a technician about pending rounds. Needs technician.\n"
+    "- open_today: open today's rounds.\n"
+    "Use the CONTEXT (technicians, open issues) to fill fields — never invent a technician or "
+    "issue that isn't in context. Map words: 'mark/put/move ... in progress'→in_progress, "
+    "'close/done/fixed'→resolved, 'reopen'→open. If it's a QUESTION or not a clear action, return "
+    '{"action":"none"}. Output JSON only: '
+    '{"action":"assign|issue_status|signoff|remind|open_today|none","shift":"","technician":"","issue_ref":"","status":""}.')
+
+
+async def extract_action(llm, text: str, context: str):
+    """Map a natural manager message → a structured action (or None). The caller resolves the
+    entities against real data and ALWAYS asks the manager to confirm before executing."""
+    if not llm:
+        return None
+    try:
+        out = await llm.ask_json(messages=[{"role": "user", "content": f"Message: {text}\n\nContext:\n{context}"}],
+                                 system_msgs=[{"role": "system", "content": _ACTION_SYS}], channel="extract")
+    except Exception:
+        return None
+    if not isinstance(out, dict):
+        return None
+    act = str(out.get("action", "")).strip().lower()
+    if act in ("", "none"):
+        return None
+    return {"action": act, "shift": str(out.get("shift", "")).strip(),
+            "technician": str(out.get("technician", "")).strip(),
+            "issue_ref": str(out.get("issue_ref", "")).strip(),
+            "status": str(out.get("status", "")).strip().lower()}
+
+
 async def extract_decision(llm, sender: str, q: str, reply: str) -> str:
     """Pull a durable decision/plan out of a chat turn (grounded). '' if none."""
     if not llm:

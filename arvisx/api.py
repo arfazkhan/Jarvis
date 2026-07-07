@@ -929,6 +929,16 @@ def create_app():
                 return {"intent": "action", "source": "report", "text":
                         "Sure — what's the problem? Describe it (e.g. 'lift not working in B block') "
                         "and I'll log it right away."}
+            # Natural-language action ("reassign shift 2 to Ajith", "mark the lift in progress")
+            # → LLM maps it, asks YES, then the deterministic executor runs it.
+            try:
+                la = await _try_llm_action(q, sender, building)
+            except Exception as e:
+                logger.warning(f"[wa_ask] llm action failed: {e}")
+                la = None
+            if la is not None:
+                _record_turn(building, sender.get("name") or "manager", role, q, la)
+                return {"intent": "action", "text": la, "source": "llm_action"}
         # A3: a pre-registered (backend-resolved) resident's message → common-area ticket.
         if sender.get("kind") == "resident":
             return await _handle_resident_message(q, sender, building)
@@ -1467,8 +1477,9 @@ def create_app():
         state.db.enqueue_notification(iss["building_id"], _KNOWLEDGE_ASK[0].format(subject=subject),
                                       to_number=phone, kind="knowledge_request")
 
-    _CMD_VERBS = re.compile(r"^(assign|open|start|in[-\s]?progress|close|resolve|sign|approve|"
-                            r"reject|add\s+memory|help|commands|menu|yes|y|confirm|ok|okay|cancel|stop)\b",
+    _CMD_VERBS = re.compile(r"^(assign|re-?assign|open|start|mark|move|set|in[-\s]?progress|close|"
+                            r"resolve|reopen|re-?open|sign|signoff|remind|approve|reject|add\s+memory|"
+                            r"help|commands|menu|yes|y|confirm|ok|okay|cancel|stop)\b",
                             re.I)
 
     def _capture_knowledge_answer(kreq: Dict[str, Any], text: str, building: str) -> Optional[Dict[str, Any]]:
@@ -1530,6 +1541,91 @@ def create_app():
     def _do_signoff(rid: int, actor: str) -> str:
         state.db.add_checklist_signoff(rid, "manager", by_user=actor)
         return f"✅ Signed off {_run_name(state.db.get_checklist_run(rid))} as manager."
+
+    def _resolve_open_issue(building: str, ref: str):
+        """Find the open issue a manager means by a phrase like 'the lift issue' — token-match
+        (drop stopwords) so 'lift issue' still hits 'the lift in B block is not working'."""
+        toks = [t for t in re.split(r"\W+", (ref or "").lower())
+                if len(t) > 2 and t not in ("the", "issue", "ticket", "problem", "fault", "open", "one")]
+        if not toks:
+            return None
+        for i in state.db.list_issues(building):
+            if i["status"] == "resolved":
+                continue
+            hay = f"{i.get('title', '')} {i.get('asset') or ''}".lower()
+            if any(t in hay for t in toks):
+                return i
+        return None
+
+    _ACTIONY = re.compile(
+        r"\b(re-?assign|assign|mark|set|move|change|close|resolve|reopen|re-?open|start|"
+        r"sign\s*off|signoff|remind|put\s+\w+\s+on)\b", re.I)
+
+    async def _try_llm_action(q: str, sender: Dict[str, Any], building: str):
+        """Natural-language write, LLM-mapped → CONFIRM → deterministic execute. Handles the
+        phrasings the exact-command parser misses ('reassign shift 2 to Ajith', 'mark the lift in
+        progress'). Only fires on action-y wording; always asks YES before mutating."""
+        if not _ACTIONY.search(q or ""):
+            return None
+        llm = _llm_for_reasoning()
+        if llm is None:
+            return None
+        import time as _t
+        techs = [t["name"] for t in state.db.list_technicians(building, active_only=True)]
+        openi = [i for i in state.db.list_issues(building) if i["status"] != "resolved"]
+        ctx = ("Technicians: " + (", ".join(techs) or "none") + "\nShifts: 1, 2, 3\nOpen issues: "
+               + ("; ".join(f"#{i['id']} {i.get('title', '')} [{i.get('asset') or ''}]" for i in openi[:10]) or "none"))
+        from arvisx.checklist_skills import extract_action
+        a = await extract_action(llm, q, ctx)
+        if not a:
+            return None
+        num = sender.get("number", "")
+        actor = sender.get("name") or "manager"
+        if not hasattr(state, "_wa_pending"):
+            state._wa_pending = {}
+
+        def _arm(run_fn, confirm):
+            state._wa_pending[num] = {"ts": _t.time(), "run": run_fn}
+            return f"⚠️ {confirm} Reply YES to confirm."
+
+        act = a["action"]
+        if act == "assign":
+            run = _find_today_run(building, a["shift"])
+            if not run:
+                return None
+            name = _match_technician(building, a["technician"])
+            if not name:
+                return None
+            def _do(rid=run["id"], nm=name):
+                state.db.assign_checklist_run(rid, nm); state.db.set_run_reminded(rid, 0)
+                _notify_assignment(rid)
+                return f"✅ Assigned {_run_name(state.db.get_checklist_run(rid))} to {nm} — they've been notified."
+            return _arm(_do, f"Assign {_run_name(run)} to {name}?")
+        if act == "issue_status":
+            iss = _resolve_open_issue(building, a["issue_ref"])
+            if iss is None:
+                return None
+            st = a["status"] if a["status"] in ("in_progress", "resolved", "open") else "in_progress"
+            def _do(iid=iss["id"], s=st, ac=actor):
+                return _issue_action(iid, s, ac, building)
+            return _arm(_do, f"Set issue #{iss['id']} ({iss.get('title', '')}) to {st.replace('_', ' ')}?")
+        if act == "signoff":
+            run = _find_today_run(building, a["shift"])
+            if not run or run["status"] != "submitted":
+                return None
+            def _do(rid=run["id"], ac=actor):
+                return _do_signoff(rid, ac)
+            return _arm(_do, f"Sign off {_run_name(run)}?")
+        if act == "remind":
+            name = _match_technician(building, a["technician"])
+            if not name:
+                return None
+            return _remind_technician(building, name)      # non-destructive → do it directly
+        if act == "open_today":
+            from arvisx import checklist_intel as ci
+            opened = ci.ensure_daily_runs(state.db, building, _today_str(), min_hour=0)
+            return f"✅ Today's rounds are open ({len(opened)} created)."
+        return None
 
     def _handle_manager_command(text: str, sender: Dict[str, Any], building: str):
         """Map a manager's WhatsApp message → a real action. Returns a reply string when
