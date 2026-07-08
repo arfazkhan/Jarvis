@@ -1,0 +1,26 @@
+{
+  "template_id": "P3-MANUF-EXEC",
+  "name": "Phase 3 — Manufacturing & Execution (starter)",
+  "phase": "manufacturing_execution",
+  "tasks": [
+    {"task_id": "material_po", "name": "Raise material purchase orders", "duration_days": 2, "depends_on": [], "owner_role": "Procurement", "milestone": "Production start"},
+    {"task_id": "client_material_signoff", "name": "Client sign-off on final materials/finishes", "duration_days": 2, "depends_on": [], "owner_role": "Client", "client_owned": true, "milestone": "Production start"},
+    {"task_id": "factory_carcass", "name": "Factory production — carcasses", "duration_days": 8, "depends_on": ["material_po", "client_material_signoff"], "owner_role": "Factory", "milestone": "Production"},
+    {"task_id": "factory_shutters", "name": "Factory production — shutters & fronts", "duration_days": 10, "depends_on": ["material_po", "client_material_signoff"], "owner_role": "Factory", "milestone": "Production"},
+    {"task_id": "qc_factory", "name": "Factory QC + dispatch clearance", "duration_days": 1, "depends_on": ["factory_carcass", "factory_shutters"], "owner_role": "QC", "milestone": "Production"},
+    {"task_id": "site_prep", "name": "Site readiness check (civil/plumbing points)", "duration_days": 2, "depends_on": [], "owner_role": "Site Supervisor", "milestone": "Site works"},
+    {"task_id": "false_ceiling", "name": "False ceiling framework + boards", "duration_days": 4, "depends_on": ["site_prep"], "owner_role": "Ceiling Contractor", "milestone": "Site works"},
+    {"task_id": "electrical_roughin", "name": "Electrical rough-in (conduits, points)", "duration_days": 3, "depends_on": ["false_ceiling"], "owner_role": "Electrician", "milestone": "Site works"},
+    {"task_id": "painting_base", "name": "Base painting (primer + first coat)", "duration_days": 3, "depends_on": ["electrical_roughin"], "owner_role": "Painter", "milestone": "Site works"},
+    {"task_id": "delivery", "name": "Delivery to site", "duration_days": 1, "depends_on": ["qc_factory", "painting_base"], "owner_role": "Logistics", "milestone": "Installation"},
+    {"task_id": "install_carcass", "name": "Carcass installation", "duration_days": 3, "depends_on": ["delivery"], "owner_role": "Installer", "milestone": "Installation"},
+    {"task_id": "countertop_template", "name": "Countertop templating/measurement", "duration_days": 1, "depends_on": ["install_carcass"], "owner_role": "Stone Vendor", "milestone": "Installation"},
+    {"task_id": "countertop_install", "name": "Countertop fabrication + install", "duration_days": 5, "depends_on": ["countertop_template"], "owner_role": "Stone Vendor", "milestone": "Installation"},
+    {"task_id": "install_shutters", "name": "Shutters, hardware & alignment", "duration_days": 3, "depends_on": ["install_carcass"], "owner_role": "Installer", "milestone": "Installation"},
+    {"task_id": "electrical_fixtures", "name": "Electrical fixtures + appliance points live", "duration_days": 2, "depends_on": ["countertop_install", "install_shutters"], "owner_role": "Electrician", "milestone": "Finishing"},
+    {"task_id": "appliances", "name": "Appliance installation", "duration_days": 1, "depends_on": ["electrical_fixtures"], "owner_role": "Installer", "milestone": "Finishing"},
+    {"task_id": "touchup_paint", "name": "Final paint coat + touch-ups", "duration_days": 2, "depends_on": ["install_shutters", "countertop_install"], "owner_role": "Painter", "milestone": "Finishing"},
+    {"task_id": "deep_clean", "name": "Deep cleaning", "duration_days": 1, "depends_on": ["appliances", "touchup_paint"], "owner_role": "Site Supervisor", "milestone": "Handover-ready"},
+    {"task_id": "snag_walkthrough", "name": "Snag walkthrough with client", "duration_days": 1, "depends_on": ["deep_clean"], "owner_role": "Client", "client_owned": true, "milestone": "Handover-ready"}
+  ]
+}
