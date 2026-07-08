@@ -65,6 +65,28 @@ def reading_findings(db, building: str) -> Tuple[List[Dict[str, Any]], Dict[str,
     return findings, by_asset
 
 
+def reading_anomaly_check(db, building: str, item) -> Optional[Dict[str, Any]]:
+    """L1 band + L2 trend for ONE reading item, using its OWN history (incl the latest entry).
+    Returns a finding dict (band deviation OR strong decline/rise) or None. Abstains until the
+    item has enough history to learn a band — same detectors as the passive watchlist, now usable
+    the instant a reading is saved."""
+    if getattr(item, "kind", "") != "reading":
+        return None
+    vals = [_num(e["value"]) for e in db.asset_entries(building, [item.item_id], limit=60)]
+    vals = [v for v in vals if v is not None]
+    if len(vals) < 6:                              # need ≥5 history + the latest
+        return None
+    r = analyzers.reading_anomaly(vals[1:], vals[0])
+    if r.get("flagged"):
+        return {"item_id": item.item_id, "label": item.label, "asset": item.asset or "",
+                "unit": item.unit, "detector": "band", **r}
+    t = analyzers.trend_alert(list(reversed(vals)))   # oldest→newest
+    if t.get("flagged"):
+        return {"item_id": item.item_id, "label": item.label, "asset": item.asset or "",
+                "unit": item.unit, "detector": "trend", **t}
+    return None
+
+
 def asset_health_one(db, building: str, asset: str, today: str,
                      anomalies: int = 0) -> Dict[str, Any]:
     issues = [i for i in db.list_issues(building, asset=asset) if i["status"] != "resolved"]

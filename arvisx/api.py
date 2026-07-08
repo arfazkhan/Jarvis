@@ -1227,6 +1227,45 @@ def create_app():
                "Open the app to assign + resolve.")
         state.db.enqueue_notification(building, txt, to_number="", kind="issue")   # ops broadcast
 
+    # ── Autonomous reading-anomaly loop (learned band → auto-issue + alert + lesson) ──
+    def _anomaly_already_open(building: str, item) -> bool:
+        """Don't re-fire: an anomaly issue for this item is already open."""
+        return any(i.get("source") == "anomaly" and i.get("item_id") == item.item_id
+                   and i.get("status") != "resolved" for i in state.db.list_issues(building))
+
+    async def _learn_from_anomaly(building: str, item, finding: Dict[str, Any]) -> None:
+        """Turn an anomaly into a durable building-memory candidate (pending manager approval)."""
+        unit = item.unit or ""
+        if finding.get("detector") == "band":
+            title = (f"{item.label} on {item.asset or 'asset'} normally sits "
+                     f"{finding.get('low')}–{finding.get('high')}{unit}; flag when it deviates.")
+        else:
+            title = (f"{item.label} on {item.asset or 'asset'} trended {finding.get('direction', '')} "
+                     f"({finding.get('from')}→{finding.get('to')}{unit}); watch for continued drift.")
+        state.db.add_memory_candidate(building, "anomaly_lesson", title[:140],
+                                      source="anomaly", dedup_key=f"anomaly:{item.item_id}")
+
+    def _open_anomaly_issue(rid: int, run: Dict[str, Any], item, value, finding: Dict[str, Any]) -> None:
+        """A reading outside its learned band / in a strong trend → auto-issue + manager alert +
+        (background) a proposed lesson. Grounded in the item's own history — no threshold, no sensor."""
+        building = run["building_id"]
+        unit = item.unit or ""
+        if finding.get("detector") == "band":
+            detail = (f"{item.label} read {value}{unit} — outside its normal band "
+                      f"{finding.get('low')}–{finding.get('high')}{unit} "
+                      f"(learned from {finding.get('n')} readings, {finding.get('direction', '')}).")
+            sev = "critical" if abs(finding.get("z", 0) or 0) >= 5 else "issue"
+        else:
+            detail = (f"{item.label} is {finding.get('direction', '')}: "
+                      f"{finding.get('from')}→{finding.get('to')}{unit} "
+                      f"({finding.get('change_pct')}% over recent readings).")
+            sev = "issue"
+        iid = state.db.create_issue(building, f"{item.label} anomaly: {value}{unit}", detail=detail,
+                                    run_id=rid, item_id=item.item_id, asset=(item.asset or run.get("asset", "")),
+                                    severity=sev, source="anomaly", raised_by="AllGud (auto)")
+        _notify_issue_event(state.db.get_issue(iid), f"⚠️ Auto-detected reading anomaly — {detail}", by="AllGud")
+        _spawn(_learn_from_anomaly(building, item, finding))
+
     def _remind_technician(building: str, name: str) -> str:
         """Manager-triggered nudge: DM `name` their still-open assigned round(s) for today with
         the pending count + a deep-link. Returns a manager-facing summary string."""
@@ -2118,6 +2157,15 @@ def create_app():
             aid = state.db.find_auto_issue(rid, item_id)
             if aid is not None:
                 state.db.update_issue(aid, status="resolved", by="system", note="entry corrected to OK")
+        # Autonomous anomaly detection: a numeric reading that deviates from its OWN learned band
+        # (or is in a strong decline) auto-opens an issue + alerts the manager — no threshold to
+        # configure, no sensor. Only when the entry didn't already flag, and no anomaly is open
+        # for this item yet (don't re-fire every shift).
+        if not flagged and getattr(item, "kind", "") == "reading":
+            from arvisx import checklist_intel as ci
+            finding = ci.reading_anomaly_check(state.db, run["building_id"], item)
+            if finding and not _anomaly_already_open(run["building_id"], item):
+                _open_anomaly_issue(rid, run, item, value, finding)
         return {"saved": True, "item_id": item_id, "is_issue": flagged,
                 "summary": _run_view(rid)["summary"]}
 
