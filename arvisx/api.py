@@ -2290,6 +2290,19 @@ def create_app():
         return {"building": building,
                 "resident_group_link": state.db.get_setting(building, "resident_group_link", "")}
 
+    @app.get("/api/v1/whatsapp/roster")
+    async def wa_roster(building: str = "one-anthem"):
+        """Phone numbers the bot should accept 1:1 messages from — the live backend roster
+        (managers/owner + technicians + residents). The bot polls this so adding someone in the
+        admin panel AUTO-AUTHORIZES them; no separate bot allowlist to edit. Digits only."""
+        mgrs = _manager_numbers()
+        techs = [_norm_phone(t.get("phone", "")) for t in state.db.list_technicians(building, active_only=True)]
+        res = [_norm_phone(r.get("phone", "")) for r in state.db.list_residents(building, active_only=True)]
+        techs = [t for t in techs if t]
+        res = [r for r in res if r]
+        return {"managers": mgrs, "technicians": techs, "residents": res,
+                "all": sorted(set(mgrs) | set(techs) | set(res))}
+
     @app.get("/api/v1/whatsapp/notifications")
     async def wa_notifications():
         """Pending outbound notifications for the bot to deliver. to_number set = DM that
