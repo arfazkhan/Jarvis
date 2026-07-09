@@ -52,7 +52,7 @@ export default function AdminApp() {
         {tab === 'analytics' && <Analytics />}
         {tab === 'usage' && <Usage />}
         {tab === 'team' && <Team />}
-        {tab === 'llm' && <LlmTest />}
+        {tab === 'llm' && <div className="space-y-8"><LlmConfig /><LlmTest /></div>}
         {tab === 'bot' && <BotPairing />}
       </main>
     </div>
@@ -421,6 +421,74 @@ function Team() {
 }
 function Field({ label, children }) { return <label className="block"><div className="text-xs text-text-faint mb-1">{label}</div>{children}</label> }
 function Inp({ value, onChange, type = 'text' }) { return <input type={type} value={value} onChange={(e) => onChange(e.target.value)} className="w-full bg-surface border border-border rounded-lg px-3 py-2 text-sm text-text outline-none focus:border-gold/50" /> }
+
+// ── LLM provider/model/key config ─────────────────────────────────────────────
+function LlmConfig() {
+  const [cfg, setCfg] = useState(null)
+  const [form, setForm] = useState({ provider: '', model: '', api_key: '', base_url: '' })
+  const [busy, setBusy] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [err, setErr] = useState('')
+  const load = () => api.adminLlmConfig().then((c) => {
+    setCfg(c)
+    setForm({ provider: c.provider || '', model: c.model || '', api_key: '', base_url: c.base_url || '' })
+  }).catch((e) => setErr(e.message))
+  useEffect(() => { load() }, [])
+
+  const models = (cfg?.catalog && cfg.catalog[form.provider]) || []
+  const def = (cfg?.defaults && cfg.defaults[form.provider]) || {}
+  const setProvider = (p) => setForm((f) => ({ ...f, provider: p, model: (cfg?.catalog?.[p]?.[0]) || '' }))
+
+  async function save() {
+    if (!form.provider) { setErr('Pick a provider'); return }
+    setBusy(true); setErr(''); setSaved(false)
+    try {
+      await api.adminSetLlmConfig({ provider: form.provider, model: form.model.trim(), api_key: form.api_key.trim(), base_url: form.base_url.trim() })
+      setSaved(true); setTimeout(() => setSaved(false), 2500); load()
+    } catch (e) { setErr(e.message) } finally { setBusy(false) }
+  }
+
+  if (!cfg) return <div className="text-sm text-text-faint">Loading LLM config…</div>
+  return (
+    <div className="max-w-xl">
+      <div className="text-sm text-text-dim mb-1">LLM provider</div>
+      <div className="text-xs text-text-faint mb-4">
+        Pick a provider, model, and API key — powers Ask AllGud, reports, RCA, and the anomaly lessons.
+        Overrides the deploy env. {cfg.provider ? <>Current: <b className="text-text-dim">{cfg.provider}/{cfg.model}</b>{cfg.api_key_set ? ` · key •••${cfg.api_key_last4}` : ' · no key'}</> : 'Not configured yet.'}
+      </div>
+      <Card className="p-6 space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          <label className="flex flex-col gap-1 text-xs text-text-faint">Provider
+            <select value={form.provider} onChange={(e) => setProvider(e.target.value)}
+              className="bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text">
+              <option value="">Select…</option>
+              {(cfg.providers || []).map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-text-faint">Model
+            <input list="llm-models" value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })}
+              placeholder={def.model || 'model id'} className="bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text" />
+            <datalist id="llm-models">{models.map((m) => <option key={m} value={m} />)}</datalist>
+          </label>
+        </div>
+        <label className="flex flex-col gap-1 text-xs text-text-faint">API key
+          <input type="password" value={form.api_key} onChange={(e) => setForm({ ...form, api_key: e.target.value })}
+            placeholder={cfg.api_key_set ? `keep existing (•••${cfg.api_key_last4}) — type to change` : 'paste API key'}
+            className="bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text" />
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-text-faint">Base URL (optional — defaults to the provider's)
+          <input value={form.base_url} onChange={(e) => setForm({ ...form, base_url: e.target.value })}
+            placeholder={def.base_url || 'https://…/v1'} className="bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text" />
+        </label>
+        {err && <div className="text-xs text-red">{err}</div>}
+        <button onClick={save} disabled={busy}
+          className="flex items-center gap-2 text-sm bg-primary text-white rounded-lg px-4 py-2 disabled:opacity-50">
+          {saved ? <CheckCircle2 className="w-4 h-4" /> : null} {busy ? 'Saving…' : saved ? 'Saved — run the test below' : 'Save LLM config'}
+        </button>
+      </Card>
+    </div>
+  )
+}
 
 // ── LLM smoke test ───────────────────────────────────────────────────────────
 function LlmTest() {

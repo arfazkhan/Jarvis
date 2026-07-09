@@ -320,6 +320,15 @@ def create_app():
     # Usage/cost metrics recorder (WhatsApp + LLM) writes to this building's DB.
     from arvisx import metrics as _metrics
     _metrics.set_db(state.db)
+    # LLM provider/model/key are configurable from the admin panel (stored in the DB) — make_llm
+    # reads that before falling back to env, so the operator isn't locked to K2Think.
+    try:
+        from arvisx import llm_client as _llmc
+        _llmc.set_config_db(state.db)
+        if _llmc._db_llm_config():          # a saved provider → enable the LLM layer (survives restart)
+            os.environ["ARVIS_X_LLM"] = "1"
+    except Exception:
+        pass
 
     # Background-task keeper: asyncio GCs tasks with no strong reference mid-run, so hold
     # them until done (used for fire-and-forget LLM work like manual-distil + learn-from-fix).
@@ -2450,6 +2459,44 @@ def create_app():
             raise HTTPException(403, "admin only")
         state.db.set_user_active(username, False)
         return {"username": username, "active": False}
+
+    @app.get("/api/v1/admin/llm/config")
+    async def admin_llm_config_get(authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        """Current LLM config (from the admin panel) + the provider/model catalog for the UI.
+        The API key is never returned in full — only whether one is set + its last 4."""
+        if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
+            raise HTTPException(403, "admin only")
+        from arvisx.llm_client import PROVIDER_CATALOG, _PROVIDERS
+        key = state.db.get_setting("_llm", "api_key", "")
+        return {
+            "provider": state.db.get_setting("_llm", "provider", ""),
+            "model": state.db.get_setting("_llm", "model", ""),
+            "base_url": state.db.get_setting("_llm", "base_url", ""),
+            "api_key_set": bool(key), "api_key_last4": key[-4:] if key else "",
+            "providers": sorted(_PROVIDERS.keys()), "catalog": PROVIDER_CATALOG,
+            "defaults": {p: {"base_url": v[1], "model": v[2]} for p, v in _PROVIDERS.items()},
+        }
+
+    @app.post("/api/v1/admin/llm/config")
+    async def admin_llm_config_set(payload: Dict[str, Any] = Body(...),
+                                   authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        """Save the LLM provider/model/API key from the admin panel (overrides env). Blank
+        api_key keeps the existing one (so you can change model without re-entering the key)."""
+        if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
+            raise HTTPException(403, "admin only")
+        p = payload or {}
+        provider = str(p.get("provider", "")).strip().lower()
+        from arvisx.llm_client import _PROVIDERS
+        if provider not in _PROVIDERS:
+            raise HTTPException(400, f"unknown provider — pick one of {sorted(_PROVIDERS)}")
+        state.db.set_setting("_llm", "provider", provider)
+        state.db.set_setting("_llm", "model", str(p.get("model", "")).strip())
+        state.db.set_setting("_llm", "base_url", str(p.get("base_url", "")).strip())
+        new_key = str(p.get("api_key", "")).strip()
+        if new_key:                                     # blank = keep the existing key
+            state.db.set_setting("_llm", "api_key", new_key)
+        os.environ["ARVIS_X_LLM"] = "1"                 # enable the LLM layer once a provider is set
+        return {"saved": True, "provider": provider, "model": str(p.get("model", "")).strip()}
 
     @app.get("/api/v1/admin/llm/test")
     async def admin_llm_test(authorization: str = Header(default=""), x_api_key: str = Header(default="")):
