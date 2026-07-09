@@ -1598,7 +1598,7 @@ def create_app():
 
     _ACTIONY = re.compile(
         r"\b(re-?assign|assign|mark|set|move|change|close|resolve|reopen|re-?open|start|"
-        r"sign\s*off|signoff|remind|put\s+\w+\s+on)\b", re.I)
+        r"sign\s*off|signoff|remind|nudge|send|share|forward|give|link)\b", re.I)
 
     async def _try_llm_action(q: str, sender: Dict[str, Any], building: str):
         """Natural-language write, LLM-mapped → CONFIRM → deterministic execute. Handles the
@@ -1614,8 +1614,18 @@ def create_app():
         openi = [i for i in state.db.list_issues(building) if i["status"] != "resolved"]
         ctx = ("Technicians: " + (", ".join(techs) or "none") + "\nShifts: 1, 2, 3\nOpen issues: "
                + ("; ".join(f"#{i['id']} {i.get('title', '')} [{i.get('asset') or ''}]" for i in openi[:10]) or "none"))
+        # Recent conversation → the extractor can resolve referents ("send HIM the link").
+        from datetime import datetime as _dta, timedelta as _tda
+        recent = state.db.chat_since(building, (_dta.now() - _tda(minutes=40)).isoformat(timespec="seconds"))
+        history = []
+        for t in recent[-6:]:
+            if (t.get("reply") or "") in ("(recap)", "(recall)"):
+                continue
+            history.append({"role": "user", "content": t.get("text", "")})
+            if t.get("reply"):
+                history.append({"role": "assistant", "content": t.get("reply", "")})
         from arvisx.checklist_skills import extract_action
-        a = await extract_action(llm, q, ctx)
+        a = await extract_action(llm, q, ctx, history=history)
         if not a:
             return None
         num = sender.get("number", "")
