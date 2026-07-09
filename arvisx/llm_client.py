@@ -123,7 +123,10 @@ class ArvisxLLM:
         from openai import OpenAI
         self.provider = provider
         self.model = model
-        self._client = OpenAI(api_key=api_key, base_url=base_url)
+        # Explicit timeout + SDK retry so a slow/flaky K2Think turn fails fast and retries
+        # instead of hanging (a hang → the caller's context-blind deterministic fallback).
+        timeout = float(os.environ.get("ARVISX_LLM_TIMEOUT", "45"))
+        self._client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout, max_retries=2)
 
     async def ask_tools(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]],
                         system_msgs: Optional[List[Dict[str, str]]] = None,

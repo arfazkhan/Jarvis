@@ -208,11 +208,12 @@ async def run_agent(llm, system: str, user: str, ctx: Dict[str, Any],
 _NUMRE = re.compile(r"\d[\d,]*\.?\d*")
 
 
-def verify_grounded(text: str, evidence: Any) -> Dict[str, Any]:
-    """Every multi-digit number in `text` must appear in the tool outputs. Single digits
-    (ordinals/counts) are ignored. Returns {grounded, ungrounded:[...]}. A failure means
-    the answer contains an invented figure → caller should use the deterministic fallback."""
-    ev = json.dumps(evidence, default=str)
+def verify_grounded(text: str, evidence: Any, extra: str = "") -> Dict[str, Any]:
+    """Every multi-digit number in `text` must appear in the tool outputs (or `extra` — e.g. the
+    recent conversation, where figures were already grounded when first stated, so a follow-up may
+    reuse them). Single digits (ordinals/counts) are ignored. Returns {grounded, ungrounded:[...]}.
+    A failure means the answer contains an invented figure → caller uses the deterministic fallback."""
+    ev = json.dumps(evidence, default=str) + " " + str(extra or "")
     ungrounded = []
     for tok in _NUMRE.findall(text or ""):
         clean = tok.replace(",", "")

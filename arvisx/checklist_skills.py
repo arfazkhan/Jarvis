@@ -771,19 +771,24 @@ async def run_building_qa(llm, db, building: str, question: str, today: str,
     facts. Deterministic social/meta/building replies are the graceful fallback (LLM off / a
     fabricated figure trips the guard / error) — so it never goes silent or ships a fake number."""
     if llm is not None:
-        try:
-            ctx = build_ctx(db, building, today, asker=asker)
-            out = await run_agent(llm, _QA_SYSTEM + _persona(asker), question, ctx, history=history)
-            text = _crisp(out.get("text") or "")
-            ev = out.get("evidence")
-            # Accept the reply if it's concise, isn't leaked chain-of-thought, and every NUMBER is
-            # grounded (verify_grounded passes when there are no numbers — so greetings / natural
-            # chat ship freely, but stats can't be faked).
-            if (text and len(text) <= 800 and not _looks_like_reasoning(text)
-                    and verify_grounded(text, ev)["grounded"]):
-                return {"text": text, "source": "agent"}
-        except Exception:
-            pass
+        # Prior figures were grounded when first stated, so a follow-up may reuse them.
+        hist_ctx = " ".join(str(h.get("content", "")) for h in (history or []))
+        # Retry once — K2Think is occasionally flaky (transient timeout / a turn where it answers
+        # from context without re-calling a tool). A second pass usually lands a grounded answer,
+        # so a live blip doesn't dump the user into the context-blind deterministic fallback.
+        sys = (_QA_SYSTEM + _persona(asker) + f"\n\nToday is {today}. When you mean today, say "
+               "\"today\" — NEVER state a specific calendar date unless a tool result contains it.")
+        for _attempt in range(2):
+            try:
+                ctx = build_ctx(db, building, today, asker=asker)
+                out = await run_agent(llm, sys, question, ctx, history=history)
+                text = _crisp(out.get("text") or "")
+                ev = out.get("evidence")
+                if (text and len(text) <= 800 and not _looks_like_reasoning(text)
+                        and verify_grounded(text, ev, extra=hist_ctx)["grounded"]):
+                    return {"text": text, "source": "agent"}
+            except Exception:
+                pass
     soc = _social_reply(question)
     if soc:
         return {"text": soc, "source": "social"}
