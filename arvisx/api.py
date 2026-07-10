@@ -329,6 +329,11 @@ def create_app():
             os.environ["ARVIS_X_LLM"] = "1"
     except Exception:
         pass
+    try:                                    # embeddings provider/model/key also admin-configurable
+        from arvisx import embeddings as _emb
+        _emb.set_config_db(state.db)
+    except Exception:
+        pass
 
     # Background-task keeper: asyncio GCs tasks with no strong reference mid-run, so hold
     # them until done (used for fire-and-forget LLM work like manual-distil + learn-from-fix).
@@ -2496,6 +2501,42 @@ def create_app():
         if new_key:                                     # blank = keep the existing key
             state.db.set_setting("_llm", "api_key", new_key)
         os.environ["ARVIS_X_LLM"] = "1"                 # enable the LLM layer once a provider is set
+        return {"saved": True, "provider": provider, "model": str(p.get("model", "")).strip()}
+
+    @app.get("/api/v1/admin/embed/config")
+    async def admin_embed_config_get(authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        """Current embeddings config (semantic chat recall) + catalog. Key never returned in full."""
+        if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
+            raise HTTPException(403, "admin only")
+        from arvisx.embeddings import EMBED_PROVIDERS, EMBED_CATALOG
+        key = state.db.get_setting("_embed", "api_key", "")
+        return {
+            "provider": state.db.get_setting("_embed", "provider", ""),
+            "model": state.db.get_setting("_embed", "model", ""),
+            "base_url": state.db.get_setting("_embed", "base_url", ""),
+            "api_key_set": bool(key), "api_key_last4": key[-4:] if key else "",
+            "providers": sorted(EMBED_PROVIDERS.keys()), "catalog": EMBED_CATALOG,
+            "defaults": {p: {"base_url": v[0], "model": v[1]} for p, v in EMBED_PROVIDERS.items()},
+        }
+
+    @app.post("/api/v1/admin/embed/config")
+    async def admin_embed_config_set(payload: Dict[str, Any] = Body(...),
+                                     authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        """Save the embeddings provider/model/API key from the admin panel (overrides env). Blank
+        api_key keeps the existing one. Enables semantic (vs keyword) chat recall."""
+        if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
+            raise HTTPException(403, "admin only")
+        p = payload or {}
+        provider = str(p.get("provider", "")).strip().lower()
+        from arvisx.embeddings import EMBED_PROVIDERS
+        if provider not in EMBED_PROVIDERS:
+            raise HTTPException(400, f"unknown provider — pick one of {sorted(EMBED_PROVIDERS)}")
+        state.db.set_setting("_embed", "provider", provider)
+        state.db.set_setting("_embed", "model", str(p.get("model", "")).strip())
+        state.db.set_setting("_embed", "base_url", str(p.get("base_url", "")).strip())
+        new_key = str(p.get("api_key", "")).strip()
+        if new_key:
+            state.db.set_setting("_embed", "api_key", new_key)
         return {"saved": True, "provider": provider, "model": str(p.get("model", "")).strip()}
 
     @app.get("/api/v1/admin/llm/test")
