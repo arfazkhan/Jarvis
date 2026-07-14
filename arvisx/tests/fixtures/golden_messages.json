@@ -1,0 +1,11 @@
+[
+  {"q": "what's the riskiest system?", "contains": ["riskiest", "DG-2"], "absent": []},
+  {"q": "whats the riskiest system", "contains": ["riskiest", "DG-2"], "absent": []},
+  {"q": "what is open right now?", "contains": ["open", "WTP"], "absent": []},
+  {"q": "anything open?", "contains": ["open"], "absent": []},
+  {"q": "how is the building doing?", "contains": ["overview"], "absent": []},
+  {"q": "hi", "contains": [], "absent": ["overview"]},
+  {"q": "hello there", "contains": [], "absent": ["overview"]},
+  {"q": "thanks!", "contains": [], "absent": ["overview"]},
+  {"q": "who created you?", "contains": [], "absent": ["overview"]}
+]

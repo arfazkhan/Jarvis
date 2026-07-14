@@ -183,11 +183,15 @@ _GROUNDING_RULES = (
 
 
 async def run_agent(llm, system: str, user: str, ctx: Dict[str, Any],
-                    max_steps: int = 6, history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+                    max_steps: int = 6, history: Optional[List[Dict[str, str]]] = None,
+                    temperature: float = 0.0) -> Dict[str, Any]:
     """ReAct loop: the model calls read-only tools until it answers. Returns
     {text, evidence, steps, truncated}. `evidence` = every tool output (for the guard).
     `history` = prior {role, content} turns so the model has conversational continuity
-    (follow-ups, 'it'/'that'/'him' resolve from context)."""
+    (follow-ups, 'it'/'that'/'him' resolve from context).
+    `temperature` > 0 for conversation — at 0 the model replays its own last answer verbatim
+    once that answer is in history (see ask_tools). Grounding is unaffected: figures still come
+    only from tool results and still face verify_grounded."""
     messages: List[Dict[str, Any]] = []
     for h in (history or []):
         r = h.get("role", "user")
@@ -199,7 +203,8 @@ async def run_agent(llm, system: str, user: str, ctx: Dict[str, Any],
     evidence: List[Any] = []
     last_content = ""
     for step in range(max_steps):
-        resp = await llm.ask_tools(messages, schemas, system_msgs=system_msgs)
+        resp = await llm.ask_tools(messages, schemas, system_msgs=system_msgs,
+                                   temperature=temperature)
         messages.append(resp["assistant_message"])
         last_content = resp.get("content", "") or last_content
         calls = resp.get("tool_calls") or []

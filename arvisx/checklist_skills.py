@@ -13,8 +13,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+import logging
 import re
 from collections import Counter
+
+logger = logging.getLogger("arvisx.skills")
 
 from arvisx import checklist_intel as intel
 from arvisx.analyzers import reading_anomaly, trend_alert
@@ -388,6 +391,54 @@ async def summarize_chat(llm, turns, label: str) -> str:
     return f"🗒 Recap ({label}) — topics raised:\n" + "\n".join(lines[:12])
 
 
+# ── anti-repetition: a follow-up must ADVANCE, never restate the last answer ──
+_CHAT_TEMPERATURE = 0.4      # 0 makes the model replay its own last answer verbatim (see ask_tools)
+
+_NO_REPEAT_NUDGE = (
+    "\n\nCRITICAL: You ALREADY SENT your previous message (it's the last assistant turn above). "
+    "The user is FOLLOWING UP — they want something NEW, and repeating yourself makes you useless. "
+    "Do NOT restate your last answer. Answer what THEY actually asked:\n"
+    "- 'why is it like that' / 'explain' → give the CAUSE from the tool data (which shifts are "
+    "unassigned, which items are still pending, how long the PPM has been overdue).\n"
+    "- 'you didn't answer' / 'you're repeating' → acknowledge it briefly, then answer the ACTUAL "
+    "question with detail you have NOT already given."
+)
+
+# Both attempts came back as a restatement → don't ship a parrot. Move the conversation forward
+# by asking which thread they want, rather than dumping the same summary a third time.
+_REPEAT_FALLBACK = ("Sorry — I keep repeating myself there. Let me be specific instead: which do "
+                    "you want to dig into — the *open issues*, the *pending rounds*, or the "
+                    "*overdue PPM*?")
+
+
+def _last_assistant(history) -> str:
+    for h in reversed(history or []):
+        if h.get("role") == "assistant":
+            return str(h.get("content") or "")
+    return ""
+
+
+def _is_repeat(candidate: str, previous: str, threshold: float = 0.85) -> bool:
+    """Is this answer just the previous one again? Guards the degenerate loop where the model's
+    own last reply, fed back as history, becomes the most likely thing to say next — so it says
+    it again, every turn, no matter what was asked."""
+    import difflib
+    a, b = (candidate or "").strip().lower(), (previous or "").strip().lower()
+    if len(a) < 25 or len(b) < 25:          # short social replies legitimately look alike
+        return False
+    return difflib.SequenceMatcher(None, a, b).ratio() >= threshold
+
+
+# Catch-all when no keyword matched: a helpful nudge, not a stats dump.
+_REDIRECT_MSG = ("I can help with this building's rounds, issues, assets, PPM and reports. Try "
+                 "\"what's pending?\", \"what's open?\", \"riskiest system?\", or \"weekly report\".")
+# Shown when the language model itself is unreachable (rate-limited / down / timing out) AND we
+# have nothing grounded to fall back on — a warm "not live right now", never a technical reason.
+_LLM_BUSY_MSG = ("I'm getting a lot of requests right now and can't get to that one this moment 🙏 "
+                 "Please try again in a few minutes. Meanwhile I can still pull up rounds, what's "
+                 "pending, or open issues if you need those.")
+
+
 def building_qa_deterministic(db, building: str, today: str, question: str) -> str:
     """Grounded fallback for the common questions — riskiest system, what's open, overview."""
     q = (question or "").lower()
@@ -432,8 +483,7 @@ def building_qa_deterministic(db, building: str, today: str, question: str) -> s
         return ("*Building overview:*\n" + "\n".join(f"• {h['asset']}: {h['score']}/100" for h in top)
                 + "\nAsk 'riskiest system?' or 'what's open?'")
     # No keyword matched → a helpful redirect, NOT a stats dump for an unrelated question.
-    return ("I can help with this building's rounds, issues, assets, PPM and reports. Try "
-            "\"what's pending?\", \"what's open?\", \"riskiest system?\", or \"weekly report\".")
+    return _REDIRECT_MSG
 
 
 _QA_SYSTEM = (
@@ -460,8 +510,9 @@ _QA_SYSTEM = (
     "the undone items per shift with each assignee's completion %. It auto-scopes: a TECHNICIAN "
     "only ever sees their OWN pending items; a MANAGER/owner sees everyone. When a manager asks "
     "and someone is behind, name them with their % and add a nudge hint like: \"Reply 'remind "
-    "<name>' to nudge them.\" Note: morning ≈ Shift I, afternoon/evening ≈ Shift II, night ≈ "
-    "Shift III. For 'who's on the team / who can I assign', call team_roster. For specs / service "
+    "<name>' to nudge them.\" (A per-building shift day-part guide is appended below when "
+    "available — use it to map words like 'morning'/'night' to this building's shifts.) "
+    "For 'who's on the team / who can I assign', call team_roster. For specs / service "
     "intervals / how-to-fix, call "
     "asset_manual (the equipment's uploaded manual); for 'has this happened before / chronic / "
     "recurring', call recurring_issues (building memory). Cite the asset + figure; if the data "
@@ -472,6 +523,13 @@ _QA_SYSTEM = (
     "everything that is OPEN, INCOMPLETE, or OVERDUE — a pending checklist counts as something to "
     "worry about, not just PPM. Only say 'all clear' when all three are genuinely clean. Don't "
     "answer a worry/status question from a single tool.\n"
+    "FOLLOW-UPS — NEVER REPEAT YOURSELF. Your own previous replies are in the conversation above. "
+    "A follow-up must ADVANCE the conversation, never restate what you already said. If they ask "
+    "'why is it like that' / 'explain' → give the CAUSE from the data (which shifts are unassigned, "
+    "what's still pending, how long the PPM has been overdue) — do NOT re-list the same summary. If "
+    "they say 'you didn't answer' / 'you're repeating' → they are RIGHT: apologise in half a line, "
+    "then answer the actual question with detail you have NOT already given. Sending the same "
+    "message twice is a failure.\n"
     "TONE: warm and conversational, like a helpful colleague — NOT a rigid rule-bot. A greeting, "
     "a thanks, or a short/ambiguous reply (e.g. 'carry over', 'ok', 'and?') → reply briefly and "
     "naturally, and offer what you can help with. When a message refers to a round/issue/asset, "
@@ -552,16 +610,21 @@ _ACTION_SYS = (
     "- issue_status: change an issue's status. Needs issue_ref (the asset/word they name, e.g. "
     "'lift') + status (in_progress | resolved | open).\n"
     "- signoff: sign off a submitted shift. Needs shift.\n"
-    "- remind: nudge a technician / SEND them their round link (the deep-link to their pending "
-    "round). Needs technician. Covers 'remind X', 'send the link for X', 'send X the link', "
-    "'share X's round', 'forward the link to X', 'nudge X'.\n"
+    "- remind: DM someone on the team. Put WHO in `technician` (a technician, OR the manager/owner "
+    "— 'remind the manager' is valid). Covers 'remind X', 'tell X to …', 'ask X to …', 'nudge X', "
+    "'send the link for X', 'send X the link', 'share X's round', 'forward the link to X'.\n"
+    "  * `note` = WHAT they are being asked to do, in the MANAGER'S OWN WORDS, copied verbatim from "
+    "their message (e.g. 'remind Rohit to check the DG oil' → technician='Rohit', note='check the DG "
+    "oil'). Do NOT rewrite, embellish, or invent a task. If they only said 'remind X' / 'send X the "
+    "link' with no task, leave note empty — that sends X their pending round instead.\n"
     "- open_today: open today's rounds.\n"
     "Use the CONTEXT (technicians, open issues) AND the recent conversation to fill fields — "
     "resolve 'him/her/them/the link' from what was just discussed; never invent a technician or "
     "issue that isn't in context. Map words: 'mark/put/move ... in progress'→in_progress, "
     "'close/done/fixed'→resolved, 'reopen'→open. If it's a QUESTION or not a clear action, return "
     '{"action":"none"}. Output JSON only: '
-    '{"action":"assign|issue_status|signoff|remind|open_today|none","shift":"","technician":"","issue_ref":"","status":""}.')
+    '{"action":"assign|issue_status|signoff|remind|open_today|none","shift":"","technician":"",'
+    '"issue_ref":"","status":"","note":""}.')
 
 
 async def extract_action(llm, text: str, context: str, history=None):
@@ -588,7 +651,10 @@ async def extract_action(llm, text: str, context: str, history=None):
     return {"action": act, "shift": str(out.get("shift", "")).strip(),
             "technician": str(out.get("technician", "")).strip(),
             "issue_ref": str(out.get("issue_ref", "")).strip(),
-            "status": str(out.get("status", "")).strip().lower()}
+            "status": str(out.get("status", "")).strip().lower(),
+            # The ask, in the manager's own words. Capped, never reworded — it goes out as a
+            # message to a real person and gets attributed to them.
+            "note": str(out.get("note", "")).strip()[:300]}
 
 
 async def extract_decision(llm, sender: str, q: str, reply: str) -> str:
@@ -642,25 +708,65 @@ def _numbers_grounded(line: str, allowed: str) -> bool:
     return all(n in allowed_nums for n in _re.findall(r"\d+", line))
 
 
-async def phrase_line(llm, baseline: str, facts: str = "") -> str:
-    """Rephrase a grounded deterministic alert into a natural WhatsApp line. Falls back to the
-    baseline on no-llm / leaked reasoning / new numbers / any error — the substance never
-    depends on the LLM, only the wording does."""
-    if not llm or not baseline:
-        return baseline
+def _lead_emoji(s: str) -> str:
+    """The leading emoji of a template, if any (severity marker: ⚠️ 🔴 ✅ 🙏 …)."""
+    import re as _re
+    m = _re.match(r"\s*([\U0001F000-\U0001FAFF☀-➿⬀-⯿])", s or "")
+    return m.group(1) if m else ""
+
+
+def _invariants_preserved(out: str, source: str, locks=None) -> bool:
+    """The phrasing-sandbox invariance check. A warmed line may reword freely but must keep every
+    load-bearing token verbatim: no new numbers, each *bold* span from the source survives, the
+    leading emoji is unchanged, and any caller-supplied `locks` (names, ids) are still present.
+    Anything missing → reject, so the caller ships the deterministic template unchanged."""
+    import re as _re
+    # numbers — nothing invented
+    if not _numbers_grounded(out, source):
+        return False
+    # *bold* spans the template emphasised must still be there
+    for span in _re.findall(r"\*[^*\n]+\*", source):
+        if span not in out:
+            return False
+    # leading severity emoji must not be dropped or swapped
+    le = _lead_emoji(source)
+    if le and _lead_emoji(out) != le:
+        return False
+    # explicit locks the caller knows (a technician's name, an issue id) — must survive
+    for lk in (locks or []):
+        lk = str(lk).strip()
+        if lk and lk.lower() not in out.lower():
+            return False
+    return True
+
+
+async def render_message(llm, template: str, *, facts: str = "", locks=None) -> str:
+    """Phrasing sandbox — the one primitive for warming a deterministic message. A TEMPLATE whose
+    meaning is fixed may be reworded by the model into a more natural WhatsApp line, but ships only
+    if every invariant survives (numbers, *bold*, leading emoji, caller `locks`); otherwise the
+    template goes out unchanged. Substance never depends on the model, only the wording. Use for
+    alerts, digests, recognitions — anything with a locked meaning. (Grounded Q&A answers are NOT
+    templates; they keep their own verify_grounded contract.) No llm / any failure → template."""
+    if not llm or not template:
+        return template
     try:
         out = await llm.ask_json(
             messages=[{"role": "user",
-                       "content": f"Baseline alert:\n{baseline}\n\nFacts:\n{facts or baseline}"}],
+                       "content": f"Baseline alert:\n{template}\n\nFacts:\n{facts or template}"}],
             system_msgs=[{"role": "system", "content": _PHRASE_SYS}], channel="chat")
     except Exception:
-        return baseline
+        return template
     line = _crisp(str(out.get("line", ""))).strip() if isinstance(out, dict) else ""
     if not line or _looks_like_reasoning(line) or len(line) > 300:
-        return baseline
-    if not _numbers_grounded(line, f"{baseline} {facts}"):
-        return baseline
+        return template
+    if not _invariants_preserved(line, f"{template} {facts}", locks=locks):
+        return template
     return line
+
+
+async def phrase_line(llm, baseline: str, facts: str = "", locks=None) -> str:
+    """Back-compat wrapper over render_message (the phrasing sandbox)."""
+    return await render_message(llm, baseline, facts=facts, locks=locks)
 
 
 _RESIDENT_SYS = (
@@ -791,19 +897,52 @@ async def run_building_qa(llm, db, building: str, question: str, today: str,
         # Retry once — K2Think is occasionally flaky (transient timeout / a turn where it answers
         # from context without re-calling a tool). A second pass usually lands a grounded answer,
         # so a live blip doesn't dump the user into the context-blind deterministic fallback.
-        sys = (_QA_SYSTEM + _persona(asker) + f"\n\nToday is {today}. When you mean today, say "
+        from arvisx.checklist_intel import shift_synonyms
+        smap = shift_synonyms(building)          # per-building shift day-part guide (config, not prompt)
+        sys = (_QA_SYSTEM + _persona(asker) + (("\n\n" + smap) if smap else "")
+               + f"\n\nToday is {today}. When you mean today, say "
                "\"today\" — NEVER state a specific calendar date unless a tool result contains it.")
+        llm_errored = False
+        parroted = False
+        prev_reply = _last_assistant(history)     # what we said last turn — must not just resend it
         for _attempt in range(2):
             try:
                 ctx = build_ctx(db, building, today, asker=asker)
-                out = await run_agent(llm, sys, question, ctx, history=history)
+                # Attempt 2 (or any retry after a parroted answer) carries an explicit corrective:
+                # the model's own last reply is the most likely continuation, so it has to be told
+                # to advance instead of restating.
+                sys_a = sys + (_NO_REPEAT_NUDGE if (parroted or _attempt) else "")
+                out = await run_agent(llm, sys_a, question, ctx, history=history,
+                                      temperature=_CHAT_TEMPERATURE)
                 text = _crisp(out.get("text") or "")
                 ev = out.get("evidence")
                 if (text and len(text) <= 800 and not _looks_like_reasoning(text)
                         and verify_grounded(text, ev, extra=hist_ctx)["grounded"]):
+                    if _is_repeat(text, prev_reply):
+                        parroted = True     # a restatement is a FAILED answer — retry, don't ship it
+                        continue
                     return {"text": text, "source": "agent"}
-            except Exception:
-                pass
+            except Exception as e:
+                # An actual call failure (rate limit / timeout / provider down), not just an
+                # ungrounded answer — remember it so we can acknowledge instead of redirecting.
+                # LOG it: a silently-swallowed exception here is indistinguishable from a model
+                # that simply had nothing to say, and that made a live outage undiagnosable.
+                logger.warning("[qa] agent attempt %d failed: %s: %s",
+                               _attempt + 1, type(e).__name__, e)
+                llm_errored = True
+        soc = _social_reply(question)
+        if soc:
+            return {"text": soc, "source": "social"}
+        # Still restating after the corrective retry → say so and move the conversation on, rather
+        # than sending the same summary a third time.
+        if parroted:
+            return {"text": _REPEAT_FALLBACK, "source": "repeat_guard"}
+        det = building_qa_deterministic(db, building, today, question)
+        # LLM was needed but is unreachable and we have nothing grounded (the generic redirect) —
+        # tell them we're swamped rather than dumping the capability list as if we understood.
+        if llm_errored and det == _REDIRECT_MSG:
+            return {"text": _LLM_BUSY_MSG, "source": "llm_busy"}
+        return {"text": det, "source": "deterministic"}
     soc = _social_reply(question)
     if soc:
         return {"text": soc, "source": "social"}

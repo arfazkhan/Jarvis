@@ -334,6 +334,11 @@ def create_app():
         _emb.set_config_db(state.db)
     except Exception:
         pass
+    try:                                    # speech-to-text (WhatsApp voice notes) — same contract
+        from arvisx import stt as _stt
+        _stt.set_config_db(state.db)
+    except Exception:
+        pass
 
     # Background-task keeper: asyncio GCs tasks with no strong reference mid-run, so hold
     # them until done (used for fire-and-forget LLM work like manual-distil + learn-from-fix).
@@ -1053,7 +1058,8 @@ def create_app():
                         res["text"] = m
                         res["source"] = "meta"
             except Exception:
-                pass
+                # Never swallow silently — this hid a live conversational outage once already.
+                logger.warning("[wa_ask] checklist Q&A path failed", exc_info=True)
         _record_turn(building, sender.get("name") or role, role, q, res.get("text", ""))
         return {"intent": res.get("intent", "qa"), "text": res["text"], "source": res.get("source", "")}
 
@@ -1280,36 +1286,87 @@ def create_app():
         _notify_issue_event(state.db.get_issue(iid), f"⚠️ Auto-detected reading anomaly — {detail}", by="AllGud")
         _spawn(_learn_from_anomaly(building, item, finding))
 
-    def _remind_technician(building: str, name: str) -> str:
-        """Manager-triggered nudge: DM `name` their still-open assigned round(s) for today with
-        the pending count + a deep-link. Returns a manager-facing summary string."""
+    def _match_person(building: str, q: str):
+        """Resolve a name to someone on the roster we can DM — a technician OR an owner/manager.
+        Reminders used to look only at the technicians table, so 'remind the manager to sign off'
+        silently found nobody even though managers are on the roster with numbers."""
+        q = (q or "").strip().lower().lstrip("@")
+        for pre in ("the ", "our "):
+            if q.startswith(pre):
+                q = q[len(pre):]
+        if not q:
+            return None
+        people: List[Dict[str, Any]] = []
+        for t in state.db.list_technicians(building, active_only=True):
+            people.append({"name": t["name"], "phone": _norm_phone(t.get("phone", "")),
+                           "kind": "technician"})
+        try:
+            for u in state.db.list_users():
+                if not u.get("active"):
+                    continue
+                role = (u.get("role") or "").lower()
+                if role not in ("owner", "fm"):
+                    continue
+                people.append({"name": u["username"], "phone": _norm_phone(u.get("phone", "")),
+                               "kind": "owner" if role == "owner" else "manager"})
+        except Exception:
+            pass
+        for p in people:                                  # exact name
+            if p["name"].lower() == q:
+                return p
+        for p in people:                                  # prefix / contains
+            if p["name"].lower().startswith(q) or q in p["name"].lower():
+                return p
+        if q in ("manager", "owner", "fm", "supervisor"):  # by ROLE, not name
+            want = ("owner",) if q == "owner" else ("manager", "owner")
+            for p in people:
+                if p["kind"] in want:
+                    return p
+        return None
+
+    def _remind_person(building: str, who: Dict[str, Any], note: str = "",
+                       asked_by: str = "") -> str:
+        """DM someone on the roster. `note` = the manager's OWN words, passed through VERBATIM
+        (never LLM-reworded) with attribution — the recipient must know a person asked this, not
+        that a bot decided it. A technician also gets their still-open round + deep-link.
+        Returns a manager-facing summary."""
         from arvisx.checklist_forms import get_template, run_summary
-        tech = state.db.get_technician(building, name)
-        phone = _norm_phone((tech or {}).get("phone", ""))
-        pend = []
-        for run in state.db.checklist_runs_for(building, _today_str()):
-            if (run.get("assignee") or "").lower() != name.lower() or run["status"] != "open":
-                continue
-            tmpl = get_template(run["template_id"], building)
-            if not tmpl:
-                continue
-            summ = run_summary(tmpl, state.db.checklist_entries(run["id"]))
-            openn = summ["total"] - summ["done"]
-            if openn > 0:
-                pend.append((run, tmpl, summ, openn))
-        if not pend:
-            return f"{name} has nothing pending on today's assigned rounds — nothing to remind."
-        total = sum(o for *_, o in pend)
+        name, phone = who["name"], who.get("phone", "")
         if not phone:
-            return (f"{name} has {total} pending item(s), but no WhatsApp number on file — "
-                    f"add their number in Setup to remind them here.")
+            return (f"{name} has no WhatsApp number on file — add it in Setup so I can reach them.")
+        lines: List[str] = []
+        if note:
+            lines.append(f"📌 *{asked_by or 'The manager'}* asked: {note.strip()}")
+        pend = []
+        if who.get("kind") == "technician":
+            for run in state.db.checklist_runs_for(building, _today_str()):
+                if (run.get("assignee") or "").lower() != name.lower() or run["status"] != "open":
+                    continue
+                tmpl = get_template(run["template_id"], building)
+                if not tmpl:
+                    continue
+                summ = run_summary(tmpl, state.db.checklist_entries(run["id"]))
+                openn = summ["total"] - summ["done"]
+                if openn > 0:
+                    pend.append((run, tmpl, summ, openn))
         for run, tmpl, summ, openn in pend:
             link = _field_deeplink(run["id"], building, name)
-            state.db.enqueue_notification(
-                building, f"⏰ Reminder: *{tmpl.name}* — {openn} item(s) still pending "
-                f"({summ['completion_pct']:.0f}% done). Please finish before shift end.{link}",
-                to_number=phone, kind="round_reminder")
-        return f"✅ Reminded {name} — {total} pending item(s) across {len(pend)} round(s)."
+            lines.append(f"⏰ *{tmpl.name}* — {openn} item(s) still pending "
+                         f"({summ['completion_pct']:.0f}% done). Please finish before shift end.{link}")
+        if not lines:
+            # Nothing pending AND nothing asked → there is genuinely nothing to say. Don't send
+            # an empty ping; tell the manager how to say what they actually want.
+            return (f"{name} has nothing pending, and you didn't say what to remind them about — "
+                    f"try \"remind {name} to <what>\".")
+        state.db.enqueue_notification(building, "\n\n".join(lines), to_number=phone,
+                                      kind="round_reminder")
+        bits = []
+        if note:
+            bits.append("passed on your message")
+        total = sum(o for *_, o in pend)
+        if total:
+            bits.append(f"{total} pending item(s)")
+        return f"✅ DM'd {name} — " + " + ".join(bits) + "."
 
     # ── A0: WhatsApp sender identity & role map ──────────────────────────
     def _norm_phone(num: str) -> str:
@@ -1360,7 +1417,18 @@ def create_app():
         if not num:
             return {"role": "viewer", "kind": "unknown", "name": "", "number": ""}
         if num in _manager_numbers():
-            return {"role": "owner", "kind": "manager", "name": "Manager", "number": num}
+            # Use their REAL name when the roster has it — a reminder DM is attributed to whoever
+            # asked for it, and "Manager asked: ..." tells the recipient nothing about who that is.
+            # (It also means the bot greets them by name instead of "Manager".)
+            name = "Manager"
+            try:
+                for u in state.db.list_users():
+                    if u.get("active") and _norm_phone(u.get("phone", "")) == num:
+                        name = u.get("username") or name
+                        break
+            except Exception:
+                pass
+            return {"role": "owner", "kind": "manager", "name": name, "number": num}
         for t in state.db.list_technicians(building, active_only=True):
             if _norm_phone(t.get("phone", "")) == num:
                 return {"role": "technician", "kind": "technician", "name": t["name"],
@@ -1465,8 +1533,11 @@ def create_app():
             return
         llm = _phrasing_llm()
         if llm is not None:
-            from arvisx.checklist_skills import phrase_line
-            msg = await phrase_line(llm, msg, facts)
+            from arvisx.checklist_skills import render_message
+            # who = the technician being recognised — lock the name so a warmed line can't drop
+            # or swap who gets the credit.
+            locks = [who] if who else None
+            msg = await render_message(llm, msg, facts=facts, locks=locks)
         state.db.enqueue_notification(run["building_id"], msg, to_number="", kind="round_done")
 
     async def _learn_from_resolved_issue(issue_id: int) -> None:
@@ -1680,10 +1751,18 @@ def create_app():
                 return _do_signoff(rid, ac)
             return _arm(_do, f"Sign off {_run_name(run)}?")
         if act == "remind":
-            name = _match_technician(building, a["technician"])
-            if not name:
+            who = _match_person(building, a.get("technician", ""))
+            if not who:
                 return None
-            return _remind_technician(building, name)      # non-destructive → do it directly
+            note = (a.get("note") or "").strip()
+            asked_by = sender.get("name") or "The manager"
+            if note:
+                # An outbound message to a real person, and the MODEL inferred the wording from
+                # free text → confirm it first. The note itself is the manager's own words.
+                def _do(w=who, n=note, ab=asked_by):
+                    return _remind_person(building, w, n, ab)
+                return _arm(_do, f"Send {who['name']}: \"{note}\"?")
+            return _remind_person(building, who, "", asked_by)   # pending nudge → non-destructive
         if act == "open_today":
             from arvisx import checklist_intel as ci
             opened = ci.ensure_daily_runs(state.db, building, _today_str(), min_hour=0)
@@ -1730,12 +1809,17 @@ def create_app():
             opened = ci.ensure_daily_runs(state.db, building, _today_str())
             return f"✅ Today's rounds are open ({len(opened)} created). Assign in the app or here."
 
-        m = _re.match(r"remind\s+(.+)$", low)
+        # "remind Rohit" (pending nudge) OR "remind Rohit to check the DG oil" (carry the ask).
+        # Match on the ORIGINAL text, not `low`, so the note keeps its capitalisation.
+        m = _re.match(r"remind\s+(.+?)(?:\s+(?:to|about|that|regarding)\s+(.+))?$",
+                      text.strip(), _re.I)
         if m:
-            name = _match_technician(building, m.group(1))
-            if not name:
-                return f"No active technician matches '{m.group(1).strip()}'."
-            return _remind_technician(building, name)
+            who = _match_person(building, m.group(1))
+            if not who:
+                return f"Nobody on the roster matches '{m.group(1).strip()}'."
+            # Typed verbatim by the manager → explicit intent, no confirm step needed.
+            return _remind_person(building, who, (m.group(2) or "").strip(),
+                                  sender.get("name") or "The manager")
 
         # Weekly / monthly report → summary text + a tappable PDF link.
         m = _re.match(r"(weekly|monthly|month|week)\s*(report|summary)?\s*$", low)
@@ -2471,16 +2555,58 @@ def create_app():
         The API key is never returned in full — only whether one is set + its last 4."""
         if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
             raise HTTPException(403, "admin only")
-        from arvisx.llm_client import PROVIDER_CATALOG, _PROVIDERS
-        key = state.db.get_setting("_llm", "api_key", "")
+        from arvisx.llm_client import PROVIDER_CATALOG, _PROVIDERS, db_llm_keys, key_pool_status
+        keys = db_llm_keys()
+        pool = key_pool_status(keys)
         return {
             "provider": state.db.get_setting("_llm", "provider", ""),
             "model": state.db.get_setting("_llm", "model", ""),
             "base_url": state.db.get_setting("_llm", "base_url", ""),
-            "api_key_set": bool(key), "api_key_last4": key[-4:] if key else "",
+            "api_key_set": bool(keys), "api_key_last4": keys[0][-4:] if keys else "",
+            # The key POOL: a rate-limited key is parked and the next one used, so one exhausted
+            # quota doesn't take the bot down. Keys are never returned — only last4 + health.
+            "keys": pool,
+            "key_count": len(keys),
+            "keys_available": sum(1 for k in pool if not k["cooling"]),
             "providers": sorted(_PROVIDERS.keys()), "catalog": PROVIDER_CATALOG,
             "defaults": {p: {"base_url": v[1], "model": v[2]} for p, v in _PROVIDERS.items()},
         }
+
+    @app.post("/api/v1/admin/llm/keys")
+    async def admin_llm_key_add(payload: Dict[str, Any] = Body(...),
+                                authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        """Add an API key to the rotation pool. When the provider rate-limits one key it is parked
+        for as long as the provider says and the next key serves the request."""
+        if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
+            raise HTTPException(403, "admin only")
+        import json as _js
+        from arvisx.llm_client import db_llm_keys
+        new_key = str((payload or {}).get("api_key", "")).strip()
+        if not new_key:
+            raise HTTPException(400, "provide 'api_key'")
+        keys = db_llm_keys()
+        if new_key in keys:
+            return {"added": False, "reason": "already in the pool", "key_count": len(keys)}
+        keys.append(new_key)
+        state.db.set_setting("_llm", "api_keys", _js.dumps(keys))
+        state.db.set_setting("_llm", "api_key", keys[0])      # keep the legacy single in sync
+        return {"added": True, "last4": new_key[-4:], "key_count": len(keys)}
+
+    @app.delete("/api/v1/admin/llm/keys/{last4}")
+    async def admin_llm_key_remove(last4: str, authorization: str = Header(default=""),
+                                   x_api_key: str = Header(default="")):
+        """Remove a key from the pool by its last 4 (the UI never holds the full key)."""
+        if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
+            raise HTTPException(403, "admin only")
+        import json as _js
+        from arvisx.llm_client import db_llm_keys
+        keys = db_llm_keys()
+        keep = [k for k in keys if k[-4:] != last4]
+        if len(keep) == len(keys):
+            raise HTTPException(404, f"no key ending {last4}")
+        state.db.set_setting("_llm", "api_keys", _js.dumps(keep))
+        state.db.set_setting("_llm", "api_key", keep[0] if keep else "")
+        return {"removed": True, "key_count": len(keep)}
 
     @app.post("/api/v1/admin/llm/config")
     async def admin_llm_config_set(payload: Dict[str, Any] = Body(...),
@@ -2494,12 +2620,18 @@ def create_app():
         from arvisx.llm_client import _PROVIDERS
         if provider not in _PROVIDERS:
             raise HTTPException(400, f"unknown provider — pick one of {sorted(_PROVIDERS)}")
+        import json as _js
+        from arvisx.llm_client import db_llm_keys
         state.db.set_setting("_llm", "provider", provider)
         state.db.set_setting("_llm", "model", str(p.get("model", "")).strip())
         state.db.set_setting("_llm", "base_url", str(p.get("base_url", "")).strip())
         new_key = str(p.get("api_key", "")).strip()
-        if new_key:                                     # blank = keep the existing key
-            state.db.set_setting("_llm", "api_key", new_key)
+        if new_key:                                     # blank = keep the existing key(s)
+            keys = db_llm_keys()
+            if new_key not in keys:                     # ADD to the pool, don't clobber it
+                keys.insert(0, new_key)
+            state.db.set_setting("_llm", "api_keys", _js.dumps(keys))
+            state.db.set_setting("_llm", "api_key", keys[0])
         os.environ["ARVIS_X_LLM"] = "1"                 # enable the LLM layer once a provider is set
         return {"saved": True, "provider": provider, "model": str(p.get("model", "")).strip()}
 
@@ -2537,6 +2669,44 @@ def create_app():
         new_key = str(p.get("api_key", "")).strip()
         if new_key:
             state.db.set_setting("_embed", "api_key", new_key)
+        return {"saved": True, "provider": provider, "model": str(p.get("model", "")).strip()}
+
+    @app.get("/api/v1/admin/stt/config")
+    async def admin_stt_config_get(authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        """Current speech-to-text config (WhatsApp voice notes) + catalog. Key never returned in full."""
+        if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
+            raise HTTPException(403, "admin only")
+        from arvisx.stt import STT_PROVIDERS, STT_CATALOG, _TRANSLATE_CAPABLE, stt_available
+        key = state.db.get_setting("_stt", "api_key", "")
+        return {
+            "provider": state.db.get_setting("_stt", "provider", ""),
+            "model": state.db.get_setting("_stt", "model", ""),
+            "base_url": state.db.get_setting("_stt", "base_url", ""),
+            "api_key_set": bool(key), "api_key_last4": key[-4:] if key else "",
+            "available": stt_available(),
+            "providers": sorted(STT_PROVIDERS.keys()), "catalog": STT_CATALOG,
+            "translate_capable": list(_TRANSLATE_CAPABLE),
+            "defaults": {p: {"base_url": v[1], "model": v[2]} for p, v in STT_PROVIDERS.items()},
+        }
+
+    @app.post("/api/v1/admin/stt/config")
+    async def admin_stt_config_set(payload: Dict[str, Any] = Body(...),
+                                   authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        """Save the speech-to-text provider/model/API key from the admin panel (overrides env).
+        Blank api_key keeps the existing one. Enables WhatsApp voice notes."""
+        if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
+            raise HTTPException(403, "admin only")
+        p = payload or {}
+        provider = str(p.get("provider", "")).strip().lower()
+        from arvisx.stt import STT_PROVIDERS
+        if provider not in STT_PROVIDERS:
+            raise HTTPException(400, f"unknown provider — pick one of {sorted(STT_PROVIDERS)}")
+        state.db.set_setting("_stt", "provider", provider)
+        state.db.set_setting("_stt", "model", str(p.get("model", "")).strip())
+        state.db.set_setting("_stt", "base_url", str(p.get("base_url", "")).strip())
+        new_key = str(p.get("api_key", "")).strip()
+        if new_key:
+            state.db.set_setting("_stt", "api_key", new_key)
         return {"saved": True, "provider": provider, "model": str(p.get("model", "")).strip()}
 
     @app.get("/api/v1/admin/llm/test")
@@ -2755,9 +2925,12 @@ def create_app():
         # defer the send, reword each grounded notice, then enqueue (baseline on any failure).
         lapsed = ci.lapse_stale_rounds(state.db, building, enqueue=(llm is None))
         if llm is not None:
-            from arvisx.checklist_skills import phrase_line
+            from arvisx.checklist_skills import render_message
             for f in lapsed:
-                line = await phrase_line(llm, f.get("msg", ""), f.get("facts", ""))
+                # Lock the shift name + who's on the hook so a warmed line can't reword away
+                # the accountability. Skip 'unassigned' (generic, not a name to protect).
+                locks = [f.get("shift", "")] + ([f["who"]] if f.get("who") not in ("", "unassigned") else [])
+                line = await render_message(llm, f.get("msg", ""), facts=f.get("facts", ""), locks=locks)
                 if line:
                     state.db.enqueue_notification(building, line, to_number="", kind="round_lapsed")
         fired = ci.round_reminders(state.db, building, remind_after_h=remind_h, escalate_after_h=esc_h)
@@ -2795,6 +2968,46 @@ def create_app():
         name, _mt = await _save_photo_body(request, filename)
         state.db.set_issue_photo(issue_id, name)
         return {"saved": True, "issue_id": issue_id, "photo": name}
+
+    # ── Voice notes: audio → text, then the SAME pipeline as a typed message ──
+    @app.post("/api/v1/voice/transcribe")
+    async def voice_transcribe(request: Request, filename: str = "voice.ogg",
+                               seconds: float = 0.0, translate: int = 1,
+                               building: str = "one-anthem"):
+        """Raw audio bytes in the body (WhatsApp voice notes are OGG/Opus — Whisper takes them
+        natively, no transcode). `translate=1` returns ENGLISH whatever was spoken, because the
+        agent prompts + grounding guard are English. Returns {} text when STT isn't configured —
+        the caller must say it couldn't hear, never guess."""
+        audio = await request.body()
+        if not audio:
+            raise HTTPException(400, "empty audio body")
+        if len(audio) > 20 * 1024 * 1024:
+            raise HTTPException(413, "voice note too large")
+        from arvisx.stt import transcribe
+        out = await asyncio.to_thread(transcribe, audio, filename, bool(translate),
+                                      float(seconds or 0.0), building)
+        if not out:
+            return {"text": "", "available": False}
+        return {"text": out["text"], "available": True, "model": out["model"],
+                "translated": out["translated"], "seconds": out.get("seconds", 0.0)}
+
+    @app.post("/api/v1/whatsapp/observe")
+    async def wa_observe(payload: Dict[str, Any] = Body(...)):
+        """Passive capture: log what was said WITHOUT replying. Group voice notes are all
+        transcribed so recall / decision-capture / issue-detection can see them, but the bot only
+        SPEAKS when addressed — same rule as group text. No reply is generated here."""
+        p = payload or {}
+        text = str(p.get("text", "")).strip()
+        if not text:
+            return {"logged": False}
+        building = str(p.get("building", "one-anthem")).strip() or "one-anthem"
+        by = str(p.get("by", "")).strip()
+        by_lid = str(p.get("by_lid", "")).strip()
+        sender = _resolve_sender(by, building, by_lid=by_lid) if (by or by_lid) else {}
+        name = sender.get("name") or str(p.get("name", "")).strip() or (by or "unknown")
+        role = sender.get("role", "viewer")
+        _record_turn(building, name, role, text, "")     # reply="" → observed, not answered
+        return {"logged": True, "sender": name, "role": role}
 
     @app.get("/api/v1/photos/{name}")
     async def photo_get(name: str):

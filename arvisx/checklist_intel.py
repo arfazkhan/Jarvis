@@ -143,6 +143,25 @@ def parse_shift_window(timing: str, shift_date: str):
         return None
 
 
+def shift_synonyms(building: str) -> str:
+    """Per-building shift day-part guide, derived from each shift template's REAL clock window
+    — not a hardcoded 'morning = Shift I' rule (brittle the moment a building names or times its
+    shifts differently). Lists every clock-based shift with its hours and tells the model to map
+    everyday words (morning/afternoon/evening/night) to the shift whose window covers that time.
+    Returns '' when the building has no clock-based shifts."""
+    from arvisx.checklist_forms import templates_for
+    rows = []
+    for t in templates_for(building):
+        timing = (getattr(t, "timing", "") or "").strip()
+        if parse_shift_window(timing, "2000-01-01"):        # a real clock window, not 'Every 3 months'
+            rows.append(f"{t.name} ({timing})")
+    if not rows:
+        return ""
+    return ("This building's shifts and their hours: " + "; ".join(rows) +
+            ". Map everyday words (morning/afternoon/evening/night) to the shift whose clock "
+            "window covers that time.")
+
+
 def _template_due_today(tmpl, now, min_hour: int) -> bool:
     """Is this template's cadence schedule due to OPEN now? daily → every day; weekly → its
     day-of-week; monthly → its day-of-month; quarterly → its anchor day, every 3rd month from
@@ -435,7 +454,8 @@ def lapse_stale_rounds(db, building: str, now=None, enqueue: bool = True) -> Lis
             if enqueue:
                 db.enqueue_notification(building, msg, to_number="", kind="round_lapsed")
             fired.append({"run_id": run["id"], "shift_date": run["shift_date"],
-                          "completion_pct": pct, "streak": streak, "msg": msg, "facts": facts})
+                          "completion_pct": pct, "streak": streak, "msg": msg, "facts": facts,
+                          "shift": name, "who": who})
     return fired
 
 

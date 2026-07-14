@@ -1,77 +1,225 @@
 ============================= test session starts =============================
-platform win32 -- Python 3.12.7, pytest-7.4.3, pluggy-1.6.0 -- C:\Users\ASUS\Downloads\Automation\venv\Scripts\python.exe
+platform win32 -- Python 3.12.7, pytest-7.4.3, pluggy-1.6.0 -- C:\ProgramData\anaconda3\python.exe
 cachedir: .pytest_cache
-rootdir: C:\Users\ASUS\Downloads\Automation
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+metadata: {'Python': '3.12.7', 'Platform': 'Windows-11-10.0.26200-SP0', 'Packages': {'pytest': '7.4.3', 'pluggy': '1.6.0'}, 'Plugins': {'anyio': '4.12.1', 'dash': '3.3.0', 'Faker': '20.1.0', 'hydra-core': '1.3.2', 'asyncio': '0.21.1', 'benchmark': '5.2.3', 'cov': '4.1.0', 'html': '4.1.1', 'json-report': '1.5.0', 'metadata': '3.1.1', 'mock': '3.12.0', 'timeout': '2.2.0', 'xdist': '3.5.0', 'requests-mock': '1.11.0', 'typeguard': '4.4.4'}, 'AWS_REGION': 'us-east-1', 'JAVA_HOME': 'C:\\Program Files\\Eclipse Adoptium\\jdk-17.0.14.7-hotspot\\'}
+rootdir: E:\Automation
 configfile: pytest.ini
-plugins: anyio-4.11.0, Faker-20.1.0, asyncio-0.21.1, cov-4.1.0, mock-3.12.0, timeout-2.2.0, xdist-3.5.0, requests-mock-1.11.0
+plugins: anyio-4.12.1, dash-3.3.0, Faker-20.1.0, hydra-core-1.3.2, asyncio-0.21.1, benchmark-5.2.3, cov-4.1.0, html-4.1.1, json-report-1.5.0, metadata-3.1.1, mock-3.12.0, timeout-2.2.0, xdist-3.5.0, requests-mock-1.11.0, typeguard-4.4.4
 asyncio: mode=Mode.STRICT
 collecting ... collected 17 items
 
-tests/test_core_complete.py::TestEventBusPerformance::test_slow_subscriber_doesnt_block_fast PASSED [  5%]
-tests/test_core_complete.py::TestToolExecutor::test_invalid_tool_call_handling PASSED [ 11%]
-tests/test_core_complete.py::TestToolExecutor::test_tool_call_with_wrong_argument_types PASSED [ 17%]
-tests/test_core_complete.py::TestAutomationEngineCRUD::test_create_and_retrieve_routine PASSED [ 23%]
-tests/test_core_complete.py::TestAutomationEngineCRUD::test_modify_existing_routine PASSED [ 29%]
-tests/test_core_complete.py::TestAutomationEngineCRUD::test_delete_routine PASSED [ 35%]
-tests/test_core_complete.py::TestAutomationEngineCRUD::test_list_all_routines PASSED [ 41%]
-tests/test_core_complete.py::TestLearningEngineBoundaries::test_empty_history PASSED [ 47%]
-tests/test_core_complete.py::TestLearningEngineBoundaries::test_tiny_history_single_event PASSED [ 52%]
-tests/test_core_complete.py::TestLearningEngineBoundaries::test_huge_history PASSED [ 58%]
-tests/test_core_complete.py::TestLearningEngineBoundaries::test_malformed_events_in_history PASSED [ 64%]
-tests/test_llm_resilience.py::TestLLMAPIResilience::test_llm_api_timeout_handling PASSED [ 70%]
-tests/test_llm_resilience.py::TestLLMAPIResilience::test_llm_api_rate_limit_backoff PASSED [ 76%]
-tests/test_llm_resilience.py::TestLLMAPIResilience::test_llm_api_complete_failure_fallback PASSED [ 82%]
-tests/test_llm_resilience.py::TestHighRiskDeviceSafety::test_high_risk_device_requires_confirmation FAILED [ 88%]
-tests/test_llm_resilience.py::TestAdversarialPrompts::test_jailbreak_attempt_blocked PASSED [ 94%]
-tests/test_llm_resilience.py::TestLLMContextManagement::test_empty_context_handling PASSED [100%]
+tests/test_core_complete.py::TestEventBusPerformance::test_slow_subscriber_doesnt_block_fast ERROR [  5%]
+tests/test_core_complete.py::TestToolExecutor::test_invalid_tool_call_handling ERROR [ 11%]
+tests/test_core_complete.py::TestToolExecutor::test_tool_call_with_wrong_argument_types ERROR [ 17%]
+tests/test_core_complete.py::TestAutomationEngineCRUD::test_create_and_retrieve_routine ERROR [ 23%]
+tests/test_core_complete.py::TestAutomationEngineCRUD::test_modify_existing_routine ERROR [ 29%]
+tests/test_core_complete.py::TestAutomationEngineCRUD::test_delete_routine ERROR [ 35%]
+tests/test_core_complete.py::TestAutomationEngineCRUD::test_list_all_routines ERROR [ 41%]
+tests/test_core_complete.py::TestLearningEngineBoundaries::test_empty_history ERROR [ 47%]
+tests/test_core_complete.py::TestLearningEngineBoundaries::test_tiny_history_single_event ERROR [ 52%]
+tests/test_core_complete.py::TestLearningEngineBoundaries::test_huge_history SKIPPED [ 58%]
+tests/test_core_complete.py::TestLearningEngineBoundaries::test_malformed_events_in_history ERROR [ 64%]
+tests/test_llm_resilience.py::TestLLMAPIResilience::test_llm_api_timeout_handling ERROR [ 70%]
+tests/test_llm_resilience.py::TestLLMAPIResilience::test_llm_api_rate_limit_backoff ERROR [ 76%]
+tests/test_llm_resilience.py::TestLLMAPIResilience::test_llm_api_complete_failure_fallback ERROR [ 82%]
+tests/test_llm_resilience.py::TestHighRiskDeviceSafety::test_high_risk_device_requires_confirmation ERROR [ 88%]
+tests/test_llm_resilience.py::TestAdversarialPrompts::test_jailbreak_attempt_blocked ERROR [ 94%]
+tests/test_llm_resilience.py::TestLLMContextManagement::test_empty_context_handling ERROR [100%]
 
-================================== FAILURES ===================================
-____ TestHighRiskDeviceSafety.test_high_risk_device_requires_confirmation _____
+=================================== ERRORS ====================================
+_ ERROR at setup of TestEventBusPerformance.test_slow_subscriber_doesnt_block_fast _
+file E:\Automation\tests\test_core_complete.py, line 19
+      def test_slow_subscriber_doesnt_block_fast(self, event_bus):
+E       fixture 'event_bus' not found
+>       available fixtures: _session_faker, alarm_engine, alarm_flood, anyio_backend, anyio_backend_name, anyio_backend_options, benchmark, benchmark_weave, cache, capfd, capfdbinary, caplog, capsys, capsysbinary, chiller_trip_scenario, class_mocker, cleanup_mock_state, cov, dash_br, dash_duo, dash_duo_mp, dash_multi_process_server, dash_process_server, dash_thread_server, dashjl, dashjl_server, dashr, dashr_server, diskcache_manager, doctest_namespace, energy_analyzer, equipment_fleet, event_loop, extra, extras, faker, free_tcp_port, free_tcp_port_factory, free_udp_port, free_udp_port_factory, gsas_optimizer, gsas_reporter, hydra_restore_singletons, hydra_sweep_runner, hydra_task_runner, include_metadata_in_junit_xml, json_metadata, metadata, mock_bacnet, mock_bms_state, mock_database, mock_llm, mock_llm_with_responses, mock_time, mocker, module_mocker, monday_morning, monkeypatch, no_cover, online_learner, package_mocker, prediction_engine, predictive_maintenance, pytestconfig, record_property, record_testsuite_property, record_xml_attribute, recwarn, requests_mock, sample_alarms, sample_energy_readings, sample_equipment, sample_gsas_criteria, sample_recommendations, scenario_builder, session_mocker, setup_logging, setup_test_environment, testrun_uid, tmp_path, tmp_path_factory, tmpdir, tmpdir_factory, unused_tcp_port, unused_tcp_port_factory, unused_udp_port, unused_udp_port_factory, verify_loop, worker_id
+>       use 'pytest --fixtures [testpath]' for help on them.
 
-self = <test_llm_resilience.TestHighRiskDeviceSafety object at 0x0000019556506AB0>
-real_llm_agent = <agent.llm_agent.llm_agent.LLMAgent object at 0x00000195568602F0>
-event_bus = <agent.event_bus.event_bus.EventBus object at 0x00000195567F9880>
+E:\Automation\tests\test_core_complete.py:19
+_____ ERROR at setup of TestToolExecutor.test_invalid_tool_call_handling ______
+file E:\Automation\tests\test_core_complete.py, line 58
+      def test_invalid_tool_call_handling(self, tool_executor):
+E       fixture 'tool_executor' not found
+>       available fixtures: _session_faker, alarm_engine, alarm_flood, anyio_backend, anyio_backend_name, anyio_backend_options, benchmark, benchmark_weave, cache, capfd, capfdbinary, caplog, capsys, capsysbinary, chiller_trip_scenario, class_mocker, cleanup_mock_state, cov, dash_br, dash_duo, dash_duo_mp, dash_multi_process_server, dash_process_server, dash_thread_server, dashjl, dashjl_server, dashr, dashr_server, diskcache_manager, doctest_namespace, energy_analyzer, equipment_fleet, event_loop, extra, extras, faker, free_tcp_port, free_tcp_port_factory, free_udp_port, free_udp_port_factory, gsas_optimizer, gsas_reporter, hydra_restore_singletons, hydra_sweep_runner, hydra_task_runner, include_metadata_in_junit_xml, json_metadata, metadata, mock_bacnet, mock_bms_state, mock_database, mock_llm, mock_llm_with_responses, mock_time, mocker, module_mocker, monday_morning, monkeypatch, no_cover, online_learner, package_mocker, prediction_engine, predictive_maintenance, pytestconfig, record_property, record_testsuite_property, record_xml_attribute, recwarn, requests_mock, sample_alarms, sample_energy_readings, sample_equipment, sample_gsas_criteria, sample_recommendations, scenario_builder, session_mocker, setup_logging, setup_test_environment, testrun_uid, tmp_path, tmp_path_factory, tmpdir, tmpdir_factory, unused_tcp_port, unused_tcp_port_factory, unused_udp_port, unused_udp_port_factory, verify_loop, worker_id
+>       use 'pytest --fixtures [testpath]' for help on them.
 
+E:\Automation\tests\test_core_complete.py:58
+_ ERROR at setup of TestToolExecutor.test_tool_call_with_wrong_argument_types _
+file E:\Automation\tests\test_core_complete.py, line 76
+      def test_tool_call_with_wrong_argument_types(self, tool_executor):
+E       fixture 'tool_executor' not found
+>       available fixtures: _session_faker, alarm_engine, alarm_flood, anyio_backend, anyio_backend_name, anyio_backend_options, benchmark, benchmark_weave, cache, capfd, capfdbinary, caplog, capsys, capsysbinary, chiller_trip_scenario, class_mocker, cleanup_mock_state, cov, dash_br, dash_duo, dash_duo_mp, dash_multi_process_server, dash_process_server, dash_thread_server, dashjl, dashjl_server, dashr, dashr_server, diskcache_manager, doctest_namespace, energy_analyzer, equipment_fleet, event_loop, extra, extras, faker, free_tcp_port, free_tcp_port_factory, free_udp_port, free_udp_port_factory, gsas_optimizer, gsas_reporter, hydra_restore_singletons, hydra_sweep_runner, hydra_task_runner, include_metadata_in_junit_xml, json_metadata, metadata, mock_bacnet, mock_bms_state, mock_database, mock_llm, mock_llm_with_responses, mock_time, mocker, module_mocker, monday_morning, monkeypatch, no_cover, online_learner, package_mocker, prediction_engine, predictive_maintenance, pytestconfig, record_property, record_testsuite_property, record_xml_attribute, recwarn, requests_mock, sample_alarms, sample_energy_readings, sample_equipment, sample_gsas_criteria, sample_recommendations, scenario_builder, session_mocker, setup_logging, setup_test_environment, testrun_uid, tmp_path, tmp_path_factory, tmpdir, tmpdir_factory, unused_tcp_port, unused_tcp_port_factory, unused_udp_port, unused_udp_port_factory, verify_loop, worker_id
+>       use 'pytest --fixtures [testpath]' for help on them.
+
+E:\Automation\tests\test_core_complete.py:76
+_ ERROR at setup of TestAutomationEngineCRUD.test_create_and_retrieve_routine _
+file E:\Automation\tests\test_core_complete.py, line 95
+      def test_create_and_retrieve_routine(self, automation_engine):
+E       fixture 'automation_engine' not found
+>       available fixtures: _session_faker, alarm_engine, alarm_flood, anyio_backend, anyio_backend_name, anyio_backend_options, benchmark, benchmark_weave, cache, capfd, capfdbinary, caplog, capsys, capsysbinary, chiller_trip_scenario, class_mocker, cleanup_mock_state, cov, dash_br, dash_duo, dash_duo_mp, dash_multi_process_server, dash_process_server, dash_thread_server, dashjl, dashjl_server, dashr, dashr_server, diskcache_manager, doctest_namespace, energy_analyzer, equipment_fleet, event_loop, extra, extras, faker, free_tcp_port, free_tcp_port_factory, free_udp_port, free_udp_port_factory, gsas_optimizer, gsas_reporter, hydra_restore_singletons, hydra_sweep_runner, hydra_task_runner, include_metadata_in_junit_xml, json_metadata, metadata, mock_bacnet, mock_bms_state, mock_database, mock_llm, mock_llm_with_responses, mock_time, mocker, module_mocker, monday_morning, monkeypatch, no_cover, online_learner, package_mocker, prediction_engine, predictive_maintenance, pytestconfig, record_property, record_testsuite_property, record_xml_attribute, recwarn, requests_mock, sample_alarms, sample_energy_readings, sample_equipment, sample_gsas_criteria, sample_recommendations, scenario_builder, session_mocker, setup_logging, setup_test_environment, testrun_uid, tmp_path, tmp_path_factory, tmpdir, tmpdir_factory, unused_tcp_port, unused_tcp_port_factory, unused_udp_port, unused_udp_port_factory, verify_loop, worker_id
+>       use 'pytest --fixtures [testpath]' for help on them.
+
+E:\Automation\tests\test_core_complete.py:95
+___ ERROR at setup of TestAutomationEngineCRUD.test_modify_existing_routine ___
+file E:\Automation\tests\test_core_complete.py, line 107
+      def test_modify_existing_routine(self, automation_engine):
+E       fixture 'automation_engine' not found
+>       available fixtures: _session_faker, alarm_engine, alarm_flood, anyio_backend, anyio_backend_name, anyio_backend_options, benchmark, benchmark_weave, cache, capfd, capfdbinary, caplog, capsys, capsysbinary, chiller_trip_scenario, class_mocker, cleanup_mock_state, cov, dash_br, dash_duo, dash_duo_mp, dash_multi_process_server, dash_process_server, dash_thread_server, dashjl, dashjl_server, dashr, dashr_server, diskcache_manager, doctest_namespace, energy_analyzer, equipment_fleet, event_loop, extra, extras, faker, free_tcp_port, free_tcp_port_factory, free_udp_port, free_udp_port_factory, gsas_optimizer, gsas_reporter, hydra_restore_singletons, hydra_sweep_runner, hydra_task_runner, include_metadata_in_junit_xml, json_metadata, metadata, mock_bacnet, mock_bms_state, mock_database, mock_llm, mock_llm_with_responses, mock_time, mocker, module_mocker, monday_morning, monkeypatch, no_cover, online_learner, package_mocker, prediction_engine, predictive_maintenance, pytestconfig, record_property, record_testsuite_property, record_xml_attribute, recwarn, requests_mock, sample_alarms, sample_energy_readings, sample_equipment, sample_gsas_criteria, sample_recommendations, scenario_builder, session_mocker, setup_logging, setup_test_environment, testrun_uid, tmp_path, tmp_path_factory, tmpdir, tmpdir_factory, unused_tcp_port, unused_tcp_port_factory, unused_udp_port, unused_udp_port_factory, verify_loop, worker_id
+>       use 'pytest --fixtures [testpath]' for help on them.
+
+E:\Automation\tests\test_core_complete.py:107
+_______ ERROR at setup of TestAutomationEngineCRUD.test_delete_routine ________
+file E:\Automation\tests\test_core_complete.py, line 122
+      def test_delete_routine(self, automation_engine):
+E       fixture 'automation_engine' not found
+>       available fixtures: _session_faker, alarm_engine, alarm_flood, anyio_backend, anyio_backend_name, anyio_backend_options, benchmark, benchmark_weave, cache, capfd, capfdbinary, caplog, capsys, capsysbinary, chiller_trip_scenario, class_mocker, cleanup_mock_state, cov, dash_br, dash_duo, dash_duo_mp, dash_multi_process_server, dash_process_server, dash_thread_server, dashjl, dashjl_server, dashr, dashr_server, diskcache_manager, doctest_namespace, energy_analyzer, equipment_fleet, event_loop, extra, extras, faker, free_tcp_port, free_tcp_port_factory, free_udp_port, free_udp_port_factory, gsas_optimizer, gsas_reporter, hydra_restore_singletons, hydra_sweep_runner, hydra_task_runner, include_metadata_in_junit_xml, json_metadata, metadata, mock_bacnet, mock_bms_state, mock_database, mock_llm, mock_llm_with_responses, mock_time, mocker, module_mocker, monday_morning, monkeypatch, no_cover, online_learner, package_mocker, prediction_engine, predictive_maintenance, pytestconfig, record_property, record_testsuite_property, record_xml_attribute, recwarn, requests_mock, sample_alarms, sample_energy_readings, sample_equipment, sample_gsas_criteria, sample_recommendations, scenario_builder, session_mocker, setup_logging, setup_test_environment, testrun_uid, tmp_path, tmp_path_factory, tmpdir, tmpdir_factory, unused_tcp_port, unused_tcp_port_factory, unused_udp_port, unused_udp_port_factory, verify_loop, worker_id
+>       use 'pytest --fixtures [testpath]' for help on them.
+
+E:\Automation\tests\test_core_complete.py:122
+______ ERROR at setup of TestAutomationEngineCRUD.test_list_all_routines ______
+file E:\Automation\tests\test_core_complete.py, line 138
+      def test_list_all_routines(self, automation_engine):
+E       fixture 'automation_engine' not found
+>       available fixtures: _session_faker, alarm_engine, alarm_flood, anyio_backend, anyio_backend_name, anyio_backend_options, benchmark, benchmark_weave, cache, capfd, capfdbinary, caplog, capsys, capsysbinary, chiller_trip_scenario, class_mocker, cleanup_mock_state, cov, dash_br, dash_duo, dash_duo_mp, dash_multi_process_server, dash_process_server, dash_thread_server, dashjl, dashjl_server, dashr, dashr_server, diskcache_manager, doctest_namespace, energy_analyzer, equipment_fleet, event_loop, extra, extras, faker, free_tcp_port, free_tcp_port_factory, free_udp_port, free_udp_port_factory, gsas_optimizer, gsas_reporter, hydra_restore_singletons, hydra_sweep_runner, hydra_task_runner, include_metadata_in_junit_xml, json_metadata, metadata, mock_bacnet, mock_bms_state, mock_database, mock_llm, mock_llm_with_responses, mock_time, mocker, module_mocker, monday_morning, monkeypatch, no_cover, online_learner, package_mocker, prediction_engine, predictive_maintenance, pytestconfig, record_property, record_testsuite_property, record_xml_attribute, recwarn, requests_mock, sample_alarms, sample_energy_readings, sample_equipment, sample_gsas_criteria, sample_recommendations, scenario_builder, session_mocker, setup_logging, setup_test_environment, testrun_uid, tmp_path, tmp_path_factory, tmpdir, tmpdir_factory, unused_tcp_port, unused_tcp_port_factory, unused_udp_port, unused_udp_port_factory, verify_loop, worker_id
+>       use 'pytest --fixtures [testpath]' for help on them.
+
+E:\Automation\tests\test_core_complete.py:138
+______ ERROR at setup of TestLearningEngineBoundaries.test_empty_history ______
+file E:\Automation\tests\test_core_complete.py, line 152
+      def test_empty_history(self, learning_engine):
+E       fixture 'learning_engine' not found
+>       available fixtures: _session_faker, alarm_engine, alarm_flood, anyio_backend, anyio_backend_name, anyio_backend_options, benchmark, benchmark_weave, cache, capfd, capfdbinary, caplog, capsys, capsysbinary, chiller_trip_scenario, class_mocker, cleanup_mock_state, cov, dash_br, dash_duo, dash_duo_mp, dash_multi_process_server, dash_process_server, dash_thread_server, dashjl, dashjl_server, dashr, dashr_server, diskcache_manager, doctest_namespace, energy_analyzer, equipment_fleet, event_loop, extra, extras, faker, free_tcp_port, free_tcp_port_factory, free_udp_port, free_udp_port_factory, gsas_optimizer, gsas_reporter, hydra_restore_singletons, hydra_sweep_runner, hydra_task_runner, include_metadata_in_junit_xml, json_metadata, metadata, mock_bacnet, mock_bms_state, mock_database, mock_llm, mock_llm_with_responses, mock_time, mocker, module_mocker, monday_morning, monkeypatch, no_cover, online_learner, package_mocker, prediction_engine, predictive_maintenance, pytestconfig, record_property, record_testsuite_property, record_xml_attribute, recwarn, requests_mock, sample_alarms, sample_energy_readings, sample_equipment, sample_gsas_criteria, sample_recommendations, scenario_builder, session_mocker, setup_logging, setup_test_environment, testrun_uid, tmp_path, tmp_path_factory, tmpdir, tmpdir_factory, unused_tcp_port, unused_tcp_port_factory, unused_udp_port, unused_udp_port_factory, verify_loop, worker_id
+>       use 'pytest --fixtures [testpath]' for help on them.
+
+E:\Automation\tests\test_core_complete.py:152
+_ ERROR at setup of TestLearningEngineBoundaries.test_tiny_history_single_event _
+file E:\Automation\tests\test_core_complete.py, line 160
+      def test_tiny_history_single_event(self, learning_engine, state_engine):
+E       fixture 'learning_engine' not found
+>       available fixtures: _session_faker, alarm_engine, alarm_flood, anyio_backend, anyio_backend_name, anyio_backend_options, benchmark, benchmark_weave, cache, capfd, capfdbinary, caplog, capsys, capsysbinary, chiller_trip_scenario, class_mocker, cleanup_mock_state, cov, dash_br, dash_duo, dash_duo_mp, dash_multi_process_server, dash_process_server, dash_thread_server, dashjl, dashjl_server, dashr, dashr_server, diskcache_manager, doctest_namespace, energy_analyzer, equipment_fleet, event_loop, extra, extras, faker, free_tcp_port, free_tcp_port_factory, free_udp_port, free_udp_port_factory, gsas_optimizer, gsas_reporter, hydra_restore_singletons, hydra_sweep_runner, hydra_task_runner, include_metadata_in_junit_xml, json_metadata, metadata, mock_bacnet, mock_bms_state, mock_database, mock_llm, mock_llm_with_responses, mock_time, mocker, module_mocker, monday_morning, monkeypatch, no_cover, online_learner, package_mocker, prediction_engine, predictive_maintenance, pytestconfig, record_property, record_testsuite_property, record_xml_attribute, recwarn, requests_mock, sample_alarms, sample_energy_readings, sample_equipment, sample_gsas_criteria, sample_recommendations, scenario_builder, session_mocker, setup_logging, setup_test_environment, testrun_uid, tmp_path, tmp_path_factory, tmpdir, tmpdir_factory, unused_tcp_port, unused_tcp_port_factory, unused_udp_port, unused_udp_port_factory, verify_loop, worker_id
+>       use 'pytest --fixtures [testpath]' for help on them.
+
+E:\Automation\tests\test_core_complete.py:160
+_ ERROR at setup of TestLearningEngineBoundaries.test_malformed_events_in_history _
+file E:\Automation\tests\test_core_complete.py, line 211
+      def test_malformed_events_in_history(self, learning_engine, state_engine):
+E       fixture 'learning_engine' not found
+>       available fixtures: _session_faker, alarm_engine, alarm_flood, anyio_backend, anyio_backend_name, anyio_backend_options, benchmark, benchmark_weave, cache, capfd, capfdbinary, caplog, capsys, capsysbinary, chiller_trip_scenario, class_mocker, cleanup_mock_state, cov, dash_br, dash_duo, dash_duo_mp, dash_multi_process_server, dash_process_server, dash_thread_server, dashjl, dashjl_server, dashr, dashr_server, diskcache_manager, doctest_namespace, energy_analyzer, equipment_fleet, event_loop, extra, extras, faker, free_tcp_port, free_tcp_port_factory, free_udp_port, free_udp_port_factory, gsas_optimizer, gsas_reporter, hydra_restore_singletons, hydra_sweep_runner, hydra_task_runner, include_metadata_in_junit_xml, json_metadata, metadata, mock_bacnet, mock_bms_state, mock_database, mock_llm, mock_llm_with_responses, mock_time, mocker, module_mocker, monday_morning, monkeypatch, no_cover, online_learner, package_mocker, prediction_engine, predictive_maintenance, pytestconfig, record_property, record_testsuite_property, record_xml_attribute, recwarn, requests_mock, sample_alarms, sample_energy_readings, sample_equipment, sample_gsas_criteria, sample_recommendations, scenario_builder, session_mocker, setup_logging, setup_test_environment, testrun_uid, tmp_path, tmp_path_factory, tmpdir, tmpdir_factory, unused_tcp_port, unused_tcp_port_factory, unused_udp_port, unused_udp_port_factory, verify_loop, worker_id
+>       use 'pytest --fixtures [testpath]' for help on them.
+
+E:\Automation\tests\test_core_complete.py:211
+____ ERROR at setup of TestLLMAPIResilience.test_llm_api_timeout_handling _____
+file E:\Automation\tests\test_llm_resilience.py, line 31
+      @pytest.mark.critical
+      def test_llm_api_timeout_handling(self, real_llm_agent, event_bus):
+file E:\Automation\tests\test_llm_resilience.py, line 19
+  @pytest.fixture
+  def real_llm_agent(event_bus, state_engine, automation_engine, mock_llm_client):
+E       fixture 'event_bus' not found
+>       available fixtures: _session_faker, alarm_engine, alarm_flood, anyio_backend, anyio_backend_name, anyio_backend_options, benchmark, benchmark_weave, cache, capfd, capfdbinary, caplog, capsys, capsysbinary, chiller_trip_scenario, class_mocker, cleanup_mock_state, cov, dash_br, dash_duo, dash_duo_mp, dash_multi_process_server, dash_process_server, dash_thread_server, dashjl, dashjl_server, dashr, dashr_server, diskcache_manager, doctest_namespace, energy_analyzer, equipment_fleet, event_loop, extra, extras, faker, free_tcp_port, free_tcp_port_factory, free_udp_port, free_udp_port_factory, gsas_optimizer, gsas_reporter, hydra_restore_singletons, hydra_sweep_runner, hydra_task_runner, include_metadata_in_junit_xml, json_metadata, metadata, mock_bacnet, mock_bms_state, mock_database, mock_llm, mock_llm_with_responses, mock_time, mocker, module_mocker, monday_morning, monkeypatch, no_cover, online_learner, package_mocker, prediction_engine, predictive_maintenance, pytestconfig, real_llm_agent, record_property, record_testsuite_property, record_xml_attribute, recwarn, requests_mock, sample_alarms, sample_energy_readings, sample_equipment, sample_gsas_criteria, sample_recommendations, scenario_builder, session_mocker, setup_logging, setup_test_environment, testrun_uid, tmp_path, tmp_path_factory, tmpdir, tmpdir_factory, unused_tcp_port, unused_tcp_port_factory, unused_udp_port, unused_udp_port_factory, verify_loop, worker_id
+>       use 'pytest --fixtures [testpath]' for help on them.
+
+E:\Automation\tests\test_llm_resilience.py:19
+___ ERROR at setup of TestLLMAPIResilience.test_llm_api_rate_limit_backoff ____
+file E:\Automation\tests\test_llm_resilience.py, line 53
+      @pytest.mark.critical
+      def test_llm_api_rate_limit_backoff(self, real_llm_agent, event_bus):
+file E:\Automation\tests\test_llm_resilience.py, line 19
+  @pytest.fixture
+  def real_llm_agent(event_bus, state_engine, automation_engine, mock_llm_client):
+E       fixture 'event_bus' not found
+>       available fixtures: _session_faker, alarm_engine, alarm_flood, anyio_backend, anyio_backend_name, anyio_backend_options, benchmark, benchmark_weave, cache, capfd, capfdbinary, caplog, capsys, capsysbinary, chiller_trip_scenario, class_mocker, cleanup_mock_state, cov, dash_br, dash_duo, dash_duo_mp, dash_multi_process_server, dash_process_server, dash_thread_server, dashjl, dashjl_server, dashr, dashr_server, diskcache_manager, doctest_namespace, energy_analyzer, equipment_fleet, event_loop, extra, extras, faker, free_tcp_port, free_tcp_port_factory, free_udp_port, free_udp_port_factory, gsas_optimizer, gsas_reporter, hydra_restore_singletons, hydra_sweep_runner, hydra_task_runner, include_metadata_in_junit_xml, json_metadata, metadata, mock_bacnet, mock_bms_state, mock_database, mock_llm, mock_llm_with_responses, mock_time, mocker, module_mocker, monday_morning, monkeypatch, no_cover, online_learner, package_mocker, prediction_engine, predictive_maintenance, pytestconfig, real_llm_agent, record_property, record_testsuite_property, record_xml_attribute, recwarn, requests_mock, sample_alarms, sample_energy_readings, sample_equipment, sample_gsas_criteria, sample_recommendations, scenario_builder, session_mocker, setup_logging, setup_test_environment, testrun_uid, tmp_path, tmp_path_factory, tmpdir, tmpdir_factory, unused_tcp_port, unused_tcp_port_factory, unused_udp_port, unused_udp_port_factory, verify_loop, worker_id
+>       use 'pytest --fixtures [testpath]' for help on them.
+
+E:\Automation\tests\test_llm_resilience.py:19
+_ ERROR at setup of TestLLMAPIResilience.test_llm_api_complete_failure_fallback _
+file E:\Automation\tests\test_llm_resilience.py, line 70
+      @pytest.mark.critical
+      def test_llm_api_complete_failure_fallback(self, real_llm_agent):
+file E:\Automation\tests\test_llm_resilience.py, line 19
+  @pytest.fixture
+  def real_llm_agent(event_bus, state_engine, automation_engine, mock_llm_client):
+E       fixture 'event_bus' not found
+>       available fixtures: _session_faker, alarm_engine, alarm_flood, anyio_backend, anyio_backend_name, anyio_backend_options, benchmark, benchmark_weave, cache, capfd, capfdbinary, caplog, capsys, capsysbinary, chiller_trip_scenario, class_mocker, cleanup_mock_state, cov, dash_br, dash_duo, dash_duo_mp, dash_multi_process_server, dash_process_server, dash_thread_server, dashjl, dashjl_server, dashr, dashr_server, diskcache_manager, doctest_namespace, energy_analyzer, equipment_fleet, event_loop, extra, extras, faker, free_tcp_port, free_tcp_port_factory, free_udp_port, free_udp_port_factory, gsas_optimizer, gsas_reporter, hydra_restore_singletons, hydra_sweep_runner, hydra_task_runner, include_metadata_in_junit_xml, json_metadata, metadata, mock_bacnet, mock_bms_state, mock_database, mock_llm, mock_llm_with_responses, mock_time, mocker, module_mocker, monday_morning, monkeypatch, no_cover, online_learner, package_mocker, prediction_engine, predictive_maintenance, pytestconfig, real_llm_agent, record_property, record_testsuite_property, record_xml_attribute, recwarn, requests_mock, sample_alarms, sample_energy_readings, sample_equipment, sample_gsas_criteria, sample_recommendations, scenario_builder, session_mocker, setup_logging, setup_test_environment, testrun_uid, tmp_path, tmp_path_factory, tmpdir, tmpdir_factory, unused_tcp_port, unused_tcp_port_factory, unused_udp_port, unused_udp_port_factory, verify_loop, worker_id
+>       use 'pytest --fixtures [testpath]' for help on them.
+
+E:\Automation\tests\test_llm_resilience.py:19
+_ ERROR at setup of TestHighRiskDeviceSafety.test_high_risk_device_requires_confirmation _
+file E:\Automation\tests\test_llm_resilience.py, line 88
+      @pytest.mark.critical
+      @pytest.mark.security
+      def test_high_risk_device_requires_confirmation(self, real_llm_agent, event_bus):
+file E:\Automation\tests\test_llm_resilience.py, line 19
+  @pytest.fixture
+  def real_llm_agent(event_bus, state_engine, automation_engine, mock_llm_client):
+E       fixture 'event_bus' not found
+>       available fixtures: _session_faker, alarm_engine, alarm_flood, anyio_backend, anyio_backend_name, anyio_backend_options, benchmark, benchmark_weave, cache, capfd, capfdbinary, caplog, capsys, capsysbinary, chiller_trip_scenario, class_mocker, cleanup_mock_state, cov, dash_br, dash_duo, dash_duo_mp, dash_multi_process_server, dash_process_server, dash_thread_server, dashjl, dashjl_server, dashr, dashr_server, diskcache_manager, doctest_namespace, energy_analyzer, equipment_fleet, event_loop, extra, extras, faker, free_tcp_port, free_tcp_port_factory, free_udp_port, free_udp_port_factory, gsas_optimizer, gsas_reporter, hydra_restore_singletons, hydra_sweep_runner, hydra_task_runner, include_metadata_in_junit_xml, json_metadata, metadata, mock_bacnet, mock_bms_state, mock_database, mock_llm, mock_llm_with_responses, mock_time, mocker, module_mocker, monday_morning, monkeypatch, no_cover, online_learner, package_mocker, prediction_engine, predictive_maintenance, pytestconfig, real_llm_agent, record_property, record_testsuite_property, record_xml_attribute, recwarn, requests_mock, sample_alarms, sample_energy_readings, sample_equipment, sample_gsas_criteria, sample_recommendations, scenario_builder, session_mocker, setup_logging, setup_test_environment, testrun_uid, tmp_path, tmp_path_factory, tmpdir, tmpdir_factory, unused_tcp_port, unused_tcp_port_factory, unused_udp_port, unused_udp_port_factory, verify_loop, worker_id
+>       use 'pytest --fixtures [testpath]' for help on them.
+
+E:\Automation\tests\test_llm_resilience.py:19
+___ ERROR at setup of TestAdversarialPrompts.test_jailbreak_attempt_blocked ___
+file E:\Automation\tests\test_llm_resilience.py, line 128
+      @pytest.mark.critical
+      @pytest.mark.security
+      def test_jailbreak_attempt_blocked(self, real_llm_agent, event_bus):
+file E:\Automation\tests\test_llm_resilience.py, line 19
+  @pytest.fixture
+  def real_llm_agent(event_bus, state_engine, automation_engine, mock_llm_client):
+E       fixture 'event_bus' not found
+>       available fixtures: _session_faker, alarm_engine, alarm_flood, anyio_backend, anyio_backend_name, anyio_backend_options, benchmark, benchmark_weave, cache, capfd, capfdbinary, caplog, capsys, capsysbinary, chiller_trip_scenario, class_mocker, cleanup_mock_state, cov, dash_br, dash_duo, dash_duo_mp, dash_multi_process_server, dash_process_server, dash_thread_server, dashjl, dashjl_server, dashr, dashr_server, diskcache_manager, doctest_namespace, energy_analyzer, equipment_fleet, event_loop, extra, extras, faker, free_tcp_port, free_tcp_port_factory, free_udp_port, free_udp_port_factory, gsas_optimizer, gsas_reporter, hydra_restore_singletons, hydra_sweep_runner, hydra_task_runner, include_metadata_in_junit_xml, json_metadata, metadata, mock_bacnet, mock_bms_state, mock_database, mock_llm, mock_llm_with_responses, mock_time, mocker, module_mocker, monday_morning, monkeypatch, no_cover, online_learner, package_mocker, prediction_engine, predictive_maintenance, pytestconfig, real_llm_agent, record_property, record_testsuite_property, record_xml_attribute, recwarn, requests_mock, sample_alarms, sample_energy_readings, sample_equipment, sample_gsas_criteria, sample_recommendations, scenario_builder, session_mocker, setup_logging, setup_test_environment, testrun_uid, tmp_path, tmp_path_factory, tmpdir, tmpdir_factory, unused_tcp_port, unused_tcp_port_factory, unused_udp_port, unused_udp_port_factory, verify_loop, worker_id
+>       use 'pytest --fixtures [testpath]' for help on them.
+
+E:\Automation\tests\test_llm_resilience.py:19
+___ ERROR at setup of TestLLMContextManagement.test_empty_context_handling ____
+file E:\Automation\tests\test_llm_resilience.py, line 151
+      def test_empty_context_handling(self, real_llm_agent):
+file E:\Automation\tests\test_llm_resilience.py, line 19
+  @pytest.fixture
+  def real_llm_agent(event_bus, state_engine, automation_engine, mock_llm_client):
+E       fixture 'event_bus' not found
+>       available fixtures: _session_faker, alarm_engine, alarm_flood, anyio_backend, anyio_backend_name, anyio_backend_options, benchmark, benchmark_weave, cache, capfd, capfdbinary, caplog, capsys, capsysbinary, chiller_trip_scenario, class_mocker, cleanup_mock_state, cov, dash_br, dash_duo, dash_duo_mp, dash_multi_process_server, dash_process_server, dash_thread_server, dashjl, dashjl_server, dashr, dashr_server, diskcache_manager, doctest_namespace, energy_analyzer, equipment_fleet, event_loop, extra, extras, faker, free_tcp_port, free_tcp_port_factory, free_udp_port, free_udp_port_factory, gsas_optimizer, gsas_reporter, hydra_restore_singletons, hydra_sweep_runner, hydra_task_runner, include_metadata_in_junit_xml, json_metadata, metadata, mock_bacnet, mock_bms_state, mock_database, mock_llm, mock_llm_with_responses, mock_time, mocker, module_mocker, monday_morning, monkeypatch, no_cover, online_learner, package_mocker, prediction_engine, predictive_maintenance, pytestconfig, real_llm_agent, record_property, record_testsuite_property, record_xml_attribute, recwarn, requests_mock, sample_alarms, sample_energy_readings, sample_equipment, sample_gsas_criteria, sample_recommendations, scenario_builder, session_mocker, setup_logging, setup_test_environment, testrun_uid, tmp_path, tmp_path_factory, tmpdir, tmpdir_factory, unused_tcp_port, unused_tcp_port_factory, unused_udp_port, unused_udp_port_factory, verify_loop, worker_id
+>       use 'pytest --fixtures [testpath]' for help on them.
+
+E:\Automation\tests\test_llm_resilience.py:19
+============================== warnings summary ===============================
+tests\test_llm_resilience.py:31
+  E:\Automation\tests\test_llm_resilience.py:31: PytestUnknownMarkWarning: Unknown pytest.mark.critical - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
     @pytest.mark.critical
-    @pytest.mark.security
-    def test_high_risk_device_requires_confirmation(self, real_llm_agent, event_bus):
-        """LLM suggestions for high-risk devices should require ask_user."""
-        # Mock LLM to suggest controlling a heater (high-risk)
-        mock_response = Mock()
-        mock_response.choices = [Mock()]
-        mock_response.choices[0].message.content = None
-        mock_response.choices[0].message.tool_calls = [
-            Mock(function=Mock(name="control_relay", arguments=json.dumps({"endpoint": 10, "state": "on"})))
-        ]
-    
-        real_llm_agent.client.chat.completions.create.return_value = mock_response
-    
-        results = []
-        event_bus.subscribe("tool_calls_generated", lambda e: results.append(e))
-    
-        real_llm_agent.handle({
-            "type": "voice_command",
-            "payload": {"text": "turn on heater"},
-            "timestamp": time.time()
-        })
-    
-        # Should generate tool calls (safety check might be in Executor, not LLMAgent)
-        # If LLMAgent is responsible for safety, it should be here.
-        # Based on architecture, LLMAgent generates calls, Executor validates.
-        # So here we expect the call to be generated.
-        assert len(results) == 1
->       assert results[0]["payload"][0]["tool"] == "control_relay"
-E       AssertionError: assert <Mock name='control_relay.name' id='1740913378992'> == 'control_relay'
 
-tests\test_llm_resilience.py:120: AssertionError
----------------------------- Captured stdout setup ----------------------------
-[Persistence] State loaded from data/routines.json
-[AutomationEngine] Loaded 30 routines from disk
-[Scheduler] Started
----------------------------- Captured stdout call -----------------------------
-[LLMAgent] Handling event: voice_command
+tests\test_llm_resilience.py:53
+  E:\Automation\tests\test_llm_resilience.py:53: PytestUnknownMarkWarning: Unknown pytest.mark.critical - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.critical
+
+tests\test_llm_resilience.py:70
+  E:\Automation\tests\test_llm_resilience.py:70: PytestUnknownMarkWarning: Unknown pytest.mark.critical - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.critical
+
+tests\test_llm_resilience.py:88
+  E:\Automation\tests\test_llm_resilience.py:88: PytestUnknownMarkWarning: Unknown pytest.mark.critical - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.critical
+
+tests\test_llm_resilience.py:128
+  E:\Automation\tests\test_llm_resilience.py:128: PytestUnknownMarkWarning: Unknown pytest.mark.critical - is this a typo?  You can register custom marks to avoid this warning - for details, see https://docs.pytest.org/en/stable/how-to/mark.html
+    @pytest.mark.critical
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
 =========================== short test summary info ===========================
-FAILED tests/test_llm_resilience.py::TestHighRiskDeviceSafety::test_high_risk_device_requires_confirmation
-======================== 1 failed, 16 passed in 4.25s =========================
+ERROR tests/test_core_complete.py::TestEventBusPerformance::test_slow_subscriber_doesnt_block_fast
+ERROR tests/test_core_complete.py::TestToolExecutor::test_invalid_tool_call_handling
+ERROR tests/test_core_complete.py::TestToolExecutor::test_tool_call_with_wrong_argument_types
+ERROR tests/test_core_complete.py::TestAutomationEngineCRUD::test_create_and_retrieve_routine
+ERROR tests/test_core_complete.py::TestAutomationEngineCRUD::test_modify_existing_routine
+ERROR tests/test_core_complete.py::TestAutomationEngineCRUD::test_delete_routine
+ERROR tests/test_core_complete.py::TestAutomationEngineCRUD::test_list_all_routines
+ERROR tests/test_core_complete.py::TestLearningEngineBoundaries::test_empty_history
+ERROR tests/test_core_complete.py::TestLearningEngineBoundaries::test_tiny_history_single_event
+ERROR tests/test_core_complete.py::TestLearningEngineBoundaries::test_malformed_events_in_history
+ERROR tests/test_llm_resilience.py::TestLLMAPIResilience::test_llm_api_timeout_handling
+ERROR tests/test_llm_resilience.py::TestLLMAPIResilience::test_llm_api_rate_limit_backoff
+ERROR tests/test_llm_resilience.py::TestLLMAPIResilience::test_llm_api_complete_failure_fallback
+ERROR tests/test_llm_resilience.py::TestHighRiskDeviceSafety::test_high_risk_device_requires_confirmation
+ERROR tests/test_llm_resilience.py::TestAdversarialPrompts::test_jailbreak_attempt_blocked
+ERROR tests/test_llm_resilience.py::TestLLMContextManagement::test_empty_context_handling
+================== 1 skipped, 5 warnings, 16 errors in 2.12s ==================
 
 Exit Code: 1

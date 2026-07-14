@@ -57,3 +57,18 @@ arvisx/vendor/
 fbq/web/node_modules/
 fbq/web/dist/
 fbq/data/
+# Throwaway experiment scripts, probes, cached digests
+scratch/
+
+# Timestamped DB/index backups (restore points, not source)
+*.bak_*/
+data/_db_backup_*/
+data/memory/faiss_index.bin
+
+# Local run outputs and scratch datasets
+runs/
+data/test_mem/
+data/Resources/
+
+# Reference PDFs (vendor manuals, exported decks)
+*.pdf

@@ -1,0 +1,3330 @@
+[
+  {
+    "timestamp": "2026-05-10T04:36:02.747408",
+    "action_type": "test_action",
+    "action": {
+      "type": "test_action",
+      "target_criterion": "E.1"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.819038",
+    "action_type": "verify_test",
+    "action": {
+      "type": "verify_test"
+    },
+    "decision": "APPROVED",
+    "notes": "Test run"
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.825805",
+    "action_type": "bad_action",
+    "action": {
+      "type": "bad_action",
+      "target_criterion": "E.1"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.826803",
+    "action_type": "bad_action",
+    "action": {
+      "type": "bad_action",
+      "target_criterion": "E.1"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.826803",
+    "action_type": "bad_action",
+    "action": {
+      "type": "bad_action",
+      "target_criterion": "E.1"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.827443",
+    "action_type": "bad_action",
+    "action": {
+      "type": "bad_action",
+      "target_criterion": "E.1"
+    },
+    "decision": "REJECTED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.827443",
+    "action_type": "bad_action",
+    "action": {
+      "type": "bad_action",
+      "target_criterion": "E.1"
+    },
+    "decision": "REJECTED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.827443",
+    "action_type": "bad_action",
+    "action": {
+      "type": "bad_action",
+      "target_criterion": "E.1"
+    },
+    "decision": "REJECTED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.827443",
+    "action_type": "bad_action",
+    "action": {
+      "type": "bad_action",
+      "target_criterion": "E.1"
+    },
+    "decision": "REJECTED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.828952",
+    "action_type": "bad_action",
+    "action": {
+      "type": "bad_action",
+      "target_criterion": "E.1"
+    },
+    "decision": "REJECTED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.828952",
+    "action_type": "bad_action",
+    "action": {
+      "type": "bad_action",
+      "target_criterion": "E.1"
+    },
+    "decision": "REJECTED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.828952",
+    "action_type": "bad_action",
+    "action": {
+      "type": "bad_action",
+      "target_criterion": "E.1"
+    },
+    "decision": "REJECTED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.836519",
+    "action_type": "good_action",
+    "action": {
+      "type": "good_action",
+      "target_criterion": "W.1"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.836519",
+    "action_type": "good_action",
+    "action": {
+      "type": "good_action",
+      "target_criterion": "W.1"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.836519",
+    "action_type": "good_action",
+    "action": {
+      "type": "good_action",
+      "target_criterion": "W.1"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.837800",
+    "action_type": "good_action",
+    "action": {
+      "type": "good_action",
+      "target_criterion": "W.1"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.837800",
+    "action_type": "good_action",
+    "action": {
+      "type": "good_action",
+      "target_criterion": "W.1"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.837800",
+    "action_type": "good_action",
+    "action": {
+      "type": "good_action",
+      "target_criterion": "W.1"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.837800",
+    "action_type": "good_action",
+    "action": {
+      "type": "good_action",
+      "target_criterion": "W.1"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.839385",
+    "action_type": "good_action",
+    "action": {
+      "type": "good_action",
+      "target_criterion": "W.1"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.839951",
+    "action_type": "good_action",
+    "action": {
+      "type": "good_action",
+      "target_criterion": "W.1"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.839951",
+    "action_type": "good_action",
+    "action": {
+      "type": "good_action",
+      "target_criterion": "W.1"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.840550",
+    "action_type": "good_action",
+    "action": {
+      "type": "good_action",
+      "target_criterion": "W.1"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.841069",
+    "action_type": "good_action",
+    "action": {
+      "type": "good_action",
+      "target_criterion": "W.1"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.841069",
+    "action_type": "good_action",
+    "action": {
+      "type": "good_action",
+      "target_criterion": "W.1"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.842075",
+    "action_type": "good_action",
+    "action": {
+      "type": "good_action",
+      "target_criterion": "W.1"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.842075",
+    "action_type": "good_action",
+    "action": {
+      "type": "good_action",
+      "target_criterion": "W.1"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.842075",
+    "action_type": "good_action",
+    "action": {
+      "type": "good_action",
+      "target_criterion": "W.1"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.843330",
+    "action_type": "good_action",
+    "action": {
+      "type": "good_action",
+      "target_criterion": "W.1"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.843835",
+    "action_type": "good_action",
+    "action": {
+      "type": "good_action",
+      "target_criterion": "W.1"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.844369",
+    "action_type": "good_action",
+    "action": {
+      "type": "good_action",
+      "target_criterion": "W.1"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-10T04:39:51.844369",
+    "action_type": "good_action",
+    "action": {
+      "type": "good_action",
+      "target_criterion": "W.1"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-19T00:04:37.985607",
+    "action_type": "setpoint_adjustment",
+    "action": {
+      "type": "setpoint_adjustment",
+      "target": "FLOOR-12-OFFICE",
+      "params": {
+        "setpoint": 21.0,
+        "strategy": "emergency_precool"
+      }
+    },
+    "decision": "REJECTED",
+    "notes": "VETOED: Critical safety violation - CH-01 Low Flow alarm (81+ min) active. Airside intensification (90% fan) contraindicated with restricted CHW flow (freeze-up/coil damage risk). Data contradiction on AHU-02 SAT requires validation before any action. Pre-cooling action type: setpoint_adjustment"
+  },
+  {
+    "timestamp": "2026-05-19T00:51:15.669630",
+    "action_type": "setpoint_adjustment",
+    "action": {
+      "type": "setpoint_adjustment",
+      "equipment_id": "CH-01",
+      "parameter": "chilled_water_setpoint",
+      "direction": "raise"
+    },
+    "decision": "REJECTED",
+    "notes": "Third rejection by Khalid_FM. Reason: raising chiller setpoint caused tenant comfort complaints last summer. FM insists on maintaining current setpoint until new evidence supports a change."
+  },
+  {
+    "timestamp": "2026-05-19T00:54:22.526687",
+    "action_type": "setpoint_adjustment",
+    "action": {
+      "type": "setpoint_adjustment",
+      "equipment_id": "CH-01",
+      "description": "Chiller setpoint increase advisory",
+      "rejection_count": 3
+    },
+    "decision": "REJECTED",
+    "notes": "Third consecutive rejection by Khalid_FM. FM cites direct experience of tenant complaints caused by raising chiller setpoints in summer. Comfort risk outweighs energy savings for this FM and building context. Do not recommend chiller setpoint increases without first addressing comfort risk and providing tenant impact analysis."
+  },
+  {
+    "timestamp": "2026-05-19T02:54:54.647696",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "TBD",
+      "action_type": "equipment_restart",
+      "additional_conditions": [
+        "Verify CH-01 safe state before proceeding",
+        "Confirm correct AHU target (AHU-02 per ground data)",
+        "Chiller approach temp must be <4\u00b0C before restart",
+        "Staged ramp with chiller load monitoring"
+      ]
+    },
+    "decision": "MODIFIED",
+    "notes": "VETO original proposal due to thermal safety concerns. CH-01 is in HIGH PRESSURE TRIP state. Cannot recommend load increase until chiller status verified. Also, equipment identification discrepancy between proposal (AHU-01) and ground data (AHU-02). Requires Energy_Agent correction."
+  },
+  {
+    "timestamp": "2026-05-19T04:15:14.835677",
+    "action_type": "unknown",
+    "action": {
+      "PHASE 1": {
+        "conference_shutdown": "APPROVE with verification",
+        "retail_shutdown": "APPROVE",
+        "fitness_exhaust_only": "APPROVE",
+        "vestibule_conditioning": "MODIFIED - reduce rather than shut down if possible",
+        "cafeteria_shutdown": "APPROVE"
+      },
+      "PHASE 2": {
+        "office_wings_minimum": "APPROVE",
+        "parking_garage_low_speed": "APPROVE",
+        "lighting_50pct": "APPROVE",
+        "lobby_minimum_air": "APPROVE"
+      },
+      "exclusions": {
+        "server_room": "EXCLUDED - monitor only",
+        "fire_safety": "EXCLUDED - full service",
+        "stairwell_pressurization": "EXCLUDED - VERIFY OPERATIONAL"
+      },
+      "override": {
+        "trigger": "zone_temp > 35\u00b0C",
+        "action": "emergency restore_all"
+      }
+    },
+    "decision": "MODIFIED",
+    "notes": "Memory_Agent: Thermal safety review COMPLETE. APPROVED with MODIFICATION on vestibule conditioning (prefer reduction over full shutdown to prevent condensation). CRITICAL PREREQUISITE: Stairwell pressurization fans MUST be verified operational before Phase 1 execution. Vestibule shutdown risk acceptable given small kW savings but monitor for condensation. No historical patterns exist for this scenario \u2014 treat as live learning event for institutional memory storage post-incident."
+  },
+  {
+    "timestamp": "2026-05-22T18:21:48.174713",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "setpoint_adjustment",
+      "equipment_id": "AHU-07"
+    },
+    "decision": "APPROVED",
+    "notes": "Awaiting user feedback to understand the diagnostic process better."
+  },
+  {
+    "timestamp": "2026-05-22T18:37:10.551362",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "morning_summary_query",
+      "proposed_at": "2026-05-22T18:00:00"
+    },
+    "decision": "REJECTED",
+    "notes": "Query did not match any high-confidence skills or similar past experiences."
+  },
+  {
+    "timestamp": "2026-05-22T19:18:16.347930",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "maintenance_verification"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-22T19:32:33.537340",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "bearing_failure_prediction",
+      "decision": "PENDING"
+    },
+    "decision": "APPROVED",
+    "notes": "Historical data not available, but general analysis provided."
+  },
+  {
+    "timestamp": "2026-05-22T21:37:59.350132",
+    "action_type": "error_query",
+    "action": {
+      "type": "error_query",
+      "description": "Bedrock ThrottlingException error and GSAS success rates query"
+    },
+    "decision": "REJECTED",
+    "notes": "Both queries failed to provide actionable information."
+  },
+  {
+    "timestamp": "2026-05-23T15:11:08.445115",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "verify damper blade position against BMS command signal physically"
+    },
+    "decision": "APPROVED",
+    "notes": "No prior skills found for this specific scenario."
+  },
+  {
+    "timestamp": "2026-05-23T15:44:15.714893",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "maintenance_verification",
+      "proposal_id": "evidence_package_for_contractor_escalation"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-23T16:05:02.024829",
+    "action_type": "knowledge_capture",
+    "action": {
+      "type": "knowledge_capture",
+      "description": "Schedule a structured knowledge capture session with Ahmed to document his cold-start sequence modifications for chillers in high humidity."
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-23T17:40:18.455536",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "remaining useful life estimate",
+      "equipment_id": "chiller"
+    },
+    "decision": "REJECTED",
+    "notes": "No data on chiller operating hours, maintenance records, or performance tests available."
+  },
+  {
+    "timestamp": "2026-05-23T17:48:49.822271",
+    "action_type": "unknown",
+    "action": {
+      "id": "AHU-07: OA damper position mismatch vs command"
+    },
+    "decision": "REJECTED",
+    "notes": "Schema violations in get_gsas_success_rates tool output"
+  },
+  {
+    "timestamp": "2026-05-23T21:40:58.527277",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "CH-03",
+      "action_type": "monitor_stress"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-23T21:51:03.879044",
+    "action_type": "unknown",
+    "action": {
+      "damper_inspection_protocol": ""
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-23T22:42:11.603555",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "setpoint_adjustment",
+      "equipment_id": "AHU-07"
+    },
+    "decision": "APPROVED",
+    "notes": "Adjusting setpoint based on ARVIS's recommendation"
+  },
+  {
+    "timestamp": "2026-05-23T23:15:23.754055",
+    "action_type": "unknown",
+    "action": {
+      "description": "Mixed air temperature offset pattern on VAV-19A",
+      "equipment_id": "VAV-19A"
+    },
+    "decision": "APPROVED",
+    "notes": "Operator requested to log this pattern and connect it to VAV-19A."
+  },
+  {
+    "timestamp": "2026-05-24T02:16:18.731586",
+    "action_type": "unknown",
+    "action": {
+      "proposed_action": "Dispatch a technician to investigate the AHU-07 damper fault"
+    },
+    "decision": "APPROVED",
+    "notes": "The operator requested an explanation of the damper fault diagnosis and the confidence level."
+  },
+  {
+    "timestamp": "2026-05-24T02:26:44.488553",
+    "action_type": "unknown",
+    "action": {
+      "description": "Repair the AHU-07 OA damper actuator"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-24T02:30:48.461824",
+    "action_type": "maintenance",
+    "action": {
+      "type": "maintenance",
+      "description": "AHU-7 OA damper actuator repair"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-24T02:57:25.025933",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "terminal_advisory",
+      "equipment_id": "CH-04"
+    },
+    "decision": "REJECTED",
+    "notes": "No current terminal advisory for Chiller 4. Operator's previous experience with a similar situation was a sensor drift issue."
+  },
+  {
+    "timestamp": "2026-05-24T04:39:01.888876",
+    "action_type": "chiller_maintenance",
+    "action": {
+      "type": "chiller_maintenance"
+    },
+    "decision": "APPROVED",
+    "notes": "Operator query regarding CH-04 remaining useful life and failure mode."
+  },
+  {
+    "timestamp": "2026-05-24T04:40:53.436862",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "on-site intervention",
+      "equipment_id": "CH-04"
+    },
+    "decision": "REJECTED",
+    "notes": "Operator already aware and monitoring situation; no immediate action needed as per skillbook and GSAS success rates."
+  },
+  {
+    "timestamp": "2026-05-24T04:44:32.630993",
+    "action_type": "unknown",
+    "action": {
+      "title": "Ahmed's high humidity cold-start procedure",
+      "description": "Ahmed adjusts the CH-02 suction valve to 65% when humidity exceeds 75% to prevent liquid slugging during cold startup.",
+      "equipment_id": "CH-02"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-24T04:47:51.516868",
+    "action_type": "unknown",
+    "action": {
+      "query": "cold-start procedure for Chiller 2"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-24T04:50:43.586797",
+    "action_type": "operator_pattern",
+    "action": {
+      "type": "operator_pattern",
+      "description": "Ahmed's Cold-Start Sequence Modification for Chillers in High Humidity"
+    },
+    "decision": "APPROVED",
+    "notes": "The system has successfully identified and logged this pattern independently."
+  },
+  {
+    "timestamp": "2026-05-24T13:44:45.301882",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "Investigate OA damper position mismatch"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-24T13:44:45.311054",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "Check CHW valve position"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-24T13:44:45.318707",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "Review mixed air temperature"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-24T13:51:45.228311",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "maintenance_dispatch",
+      "equipment_id": "AHU-07",
+      "action_description": "Dispatch maintenance team to inspect and repair AHU-07 OA damper command mismatch"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-24T14:07:34.828113",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "VAV-19A",
+      "action_type": "diagnostic",
+      "description": "Investigate MAT offset signature similar to AHU-07 damper fault"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-24T14:33:55.936247",
+    "action_type": "unknown",
+    "action": {
+      "query": "humidity correlation",
+      "skills": [
+        {
+          "chunk_id": "c06cb6b9-5e4b-48f9-8c9a-664f2d4371f5",
+          "title": "skillbook/pattern",
+          "content": "[PATTERN] Ahmed's high humidity cold-start procedure\n\nAhmed flagged the correlation between humidity and chiller startups, adjusting the CH-02 suction valve to 65% when humidity exceeds 75% to prevent liquid slugging during cold startup.",
+          "equipment_id": "CH-02",
+          "skill_type": "operator_pattern",
+          "relevance": 0.49974310398101807
+        }
+      ]
+    },
+    "decision": "APPROVED",
+    "notes": "Ahmed documented the humidity correlation in his cold-start procedure."
+  },
+  {
+    "timestamp": "2026-05-24T14:38:57.843441",
+    "action_type": "skillbook/maintenance",
+    "action": {
+      "type": "skillbook/maintenance"
+    },
+    "decision": "APPROVED",
+    "notes": "ARVIS will provide full explanations to Tariq, including the reasoning behind each step, to help him connect the dots and understand the plant better."
+  },
+  {
+    "timestamp": "2026-05-24T19:05:54.646689",
+    "action_type": "unknown",
+    "action": {
+      "investigation": "Inspect the Supply Air Temperature Sensor, Check the Airflow Path, Examine the Blower and Filters",
+      "immediate_action": "Reduce Load on AHU-01, Notify Maintenance Team"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-24T19:07:14.984061",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "setpoint_adjustment",
+      "equipment_id": "AHU-07",
+      "description": "Set AHU-07 to manual mode to isolate the issue."
+    },
+    "decision": "APPROVED",
+    "notes": "Based on historical data and operator feedback, this action has a 74% approval rate."
+  },
+  {
+    "timestamp": "2026-05-24T19:31:09.187405",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "COP trend analysis"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-24T19:36:11.730988",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "sensor_calibration",
+      "proposed_action": "Check and calibrate CH-01/CHWRT sensor"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-24T19:49:37.933918",
+    "action_type": "unknown",
+    "action": {
+      "title": "Ahmed's high humidity cold-start procedure",
+      "description": "When humidity exceeds 75%, Ahmed adjusts the CH-02 suction valve to 65% to prevent liquid slugging during cold startup."
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-24T21:06:02.745481",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "VAV-08-02",
+      "point": "DMPR_POS"
+    },
+    "decision": "APPROVED",
+    "notes": "Pending further investigation on anomaly"
+  },
+  {
+    "timestamp": "2026-05-24T21:14:44.117714",
+    "action_type": "setpoint_adjustment",
+    "action": {
+      "type": "setpoint_adjustment",
+      "equipment_id": "CH-02",
+      "new_setpoint": 29
+    },
+    "decision": "REJECTED",
+    "notes": "Historical approval rate for setpoint adjustments is 0%"
+  },
+  {
+    "timestamp": "2026-05-24T21:16:54.957370",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "sensor_replacement",
+      "equipment_id": "VAV-08-02",
+      "component": "DMPR_POS"
+    },
+    "decision": "APPROVED",
+    "notes": "High deviation and z-score suggest a critical issue."
+  },
+  {
+    "timestamp": "2026-05-24T21:47:26.425731",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "VAV-10-20 CO2_PPM anomaly investigation"
+    },
+    "decision": "APPROVED",
+    "notes": "Initiating investigation for VAV-10-20 CO2_PPM anomaly."
+  },
+  {
+    "timestamp": "2026-05-24T22:33:45.731805",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "FLR-20",
+      "point": "KW_TOTAL",
+      "current_reading": 53.7,
+      "expected_reading": 63.606
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-24T23:18:28.093990",
+    "action_type": "unknown",
+    "action": {
+      "equipment": "FLR-20",
+      "action": "Verify sensor specifications and investigate recent operational changes"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-24T23:23:28.679393",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "setpoint_adjustment",
+      "equipment_id": "CH-02",
+      "new_setpoint": 28
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-24T23:47:28.517377",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "PCHWP-06",
+      "skill_type": "fault_pattern",
+      "description": "Anomaly detected on equipment PCHWP-06. DP_KPA reading 0.0 when expected ~92.396"
+    },
+    "decision": "APPROVED",
+    "notes": "Based on the high z-score and deviation percentage, this anomaly is likely a real equipment fault."
+  },
+  {
+    "timestamp": "2026-05-25T12:07:54.366667",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "CH-04",
+      "action_type": "diagnostic",
+      "action_description": "Investigate anomaly on CH-04, check sensor functionality and operational changes"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-25T19:30:29.877713",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "CH-01",
+      "action_type": "alarm_investigation",
+      "description": "Investigate high alarm on CH-01"
+    },
+    "decision": "APPROVED",
+    "notes": "Initial investigation based on current active alarm."
+  },
+  {
+    "timestamp": "2026-05-25T19:33:39.527108",
+    "action_type": "unknown",
+    "action": {
+      "proposed_action": "Provide load profile data for diurnal curves, weekday versus weekend load profiles, chiller sequencing patterns"
+    },
+    "decision": "REJECTED",
+    "notes": "No baseline data available for these specific load profiles."
+  },
+  {
+    "timestamp": "2026-05-25T21:58:12.604022",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-19",
+      "action_type": "investigate_CHW_valve"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-25T22:06:37.233755",
+    "action_type": "unknown",
+    "action": {
+      "description": "Comprehensive inspection of all 141 AHUs to quantify damper discrepancies"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-25T22:16:41.348620",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "diagnostic_check",
+      "equipment_id": "AHU-03",
+      "description": "Investigate AHU-03 filter differential pressure alarm at 280 Pa"
+    },
+    "decision": "APPROVED",
+    "notes": "To determine if this is a recurring issue from the morning briefing or a new event."
+  },
+  {
+    "timestamp": "2026-05-25T22:30:10.167663",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-09",
+      "action_type": "export_DP_trend"
+    },
+    "decision": "APPROVED",
+    "notes": "User needs to export the DP trend themselves from the Desigo interface."
+  },
+  {
+    "timestamp": "2026-05-25T23:19:52.552423",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "monitoring_infrastructure_review",
+      "description": "Conduct a thorough review of the building's monitoring infrastructure, including hardware, software, and network configurations."
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-26T01:34:32.694574",
+    "action_type": "query_data_failure_chiller_monitoring",
+    "action": {
+      "type": "query_data_failure_chiller_monitoring"
+    },
+    "decision": "REJECTED",
+    "notes": "The agent failed to query the correct data for chiller monitoring as requested by the user."
+  },
+  {
+    "timestamp": "2026-05-26T01:35:51.315488",
+    "action_type": "unknown",
+    "action": {
+      "query": "CH-02 leaving condenser water at 10.65\u00b0C \u2014 that's physically impossible"
+    },
+    "decision": "REJECTED",
+    "notes": "The reported temperature is physically impossible and must be disregarded. It is likely due to a failed sensor, a mislabeled BACnet object, or an incorrect memory address being read."
+  },
+  {
+    "timestamp": "2026-05-26T01:42:00.147717",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-01",
+      "action_type": "alarm_response",
+      "description": "Initial High Alarm Response for AHU-01"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-26T02:27:21.370772",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-03",
+      "point": "FLT_DP",
+      "value": "280 Pa"
+    },
+    "decision": "REJECTED",
+    "notes": "Operator claims ARVIS should be seeing the FLT_DP point for AHU-03 but it is not visible in the live BMS snapshot."
+  },
+  {
+    "timestamp": "2026-05-26T02:30:48.494302",
+    "action_type": "unknown",
+    "action": {
+      "query": "BMS configuration mapping verification",
+      "action_type": "configuration_review"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-26T02:32:46.816315",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "approval",
+      "description": "May 26th approval with those gaps tells me everything. I'm not here to chase names for a witch hunt \u2014 fixes matter more than blame.",
+      "timestamp": "2026-05-26T02:30:48.494302"
+    },
+    "decision": "REJECTED",
+    "notes": "User wants a gap analysis before meeting with BMS contractor. User rejects the current state of the BMS configuration and expects ARVIS to provide a gap analysis report."
+  },
+  {
+    "timestamp": "2026-05-26T02:47:15.619432",
+    "action_type": "unknown",
+    "action": {
+      "description": "Hardcode CH-04 Suction Pressure Constraint",
+      "equipment_id": "CH-04",
+      "skill_type": "specs"
+    },
+    "decision": "APPROVED",
+    "notes": "Based on historical approval rate of 74% for GSAS actions."
+  },
+  {
+    "timestamp": "2026-05-26T03:13:47.064555",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "alarm_protocol"
+    },
+    "decision": "APPROVED",
+    "notes": "User acknowledges correct handling of alarm protocol and blind spots."
+  },
+  {
+    "timestamp": "2026-05-26T03:24:17.520882",
+    "action_type": "unknown",
+    "action": {
+      "description": "Maintain Ahmed's humidity cold-start procedure for CH-02 until proper instrumentation is installed.",
+      "equipment_id": "CH-02",
+      "skill_type": "pattern"
+    },
+    "decision": "APPROVED",
+    "notes": "User decided to keep the current procedure in place until new sensors are installed and validated."
+  },
+  {
+    "timestamp": "2026-05-26T03:24:36.436616",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-01",
+      "action_type": "immediate_isolation"
+    },
+    "decision": "APPROVED",
+    "notes": "Based on initial response pattern for high alarms on AHU-01 and lack of historical data."
+  },
+  {
+    "timestamp": "2026-05-26T03:27:03.750739",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "CH-02",
+      "action_type": "chiller_cold_start_high_humidity",
+      "description": "Adjust the CH-02 suction valve to 65% when humidity exceeds 75% to prevent liquid slugging during cold startup"
+    },
+    "decision": "APPROVED",
+    "notes": "No historical success rates available for similar actions"
+  },
+  {
+    "timestamp": "2026-05-26T14:07:03.872353",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-01",
+      "action_type": "initial_high_alarm_response"
+    },
+    "decision": "APPROVED",
+    "notes": "Following the initial high alarm response procedure as there is no historical data available for AHU-01 high alarms."
+  },
+  {
+    "timestamp": "2026-05-26T14:15:15.703992",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "isolate_ahu",
+      "equipment_id": "AHU-19",
+      "action_description": "Temporarily isolate AHU-19 and manually adjust CHW valve and OA damper"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-26T15:21:50.182888",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "telemetry_status_check",
+      "equipment_id": "CH-04"
+    },
+    "decision": "REJECTED",
+    "notes": "User rejected the telemetry status information due to contradictions"
+  },
+  {
+    "timestamp": "2026-05-26T15:27:39.158060",
+    "action_type": "unknown",
+    "action": {
+      "description": "Request for DP trends for AHU-09 and AHU-10 post-filter replacement work order"
+    },
+    "decision": "APPROVED",
+    "notes": "To escalate to contractor with evidence package"
+  },
+  {
+    "timestamp": "2026-05-26T16:22:08.921821",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "CH-06",
+      "action_type": "COP_reading_anomaly"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-26T16:26:27.829000",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "CH-07",
+      "point": "CH-07/COP"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-26T16:30:41.848658",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "Floor 9",
+      "action_type": "deadband adjustment"
+    },
+    "decision": "REJECTED",
+    "notes": "The south-facing offices are now too warm after widening the deadband. This contradicts the expected outcome and suggests that the recommendation was not suitable for this specific area."
+  },
+  {
+    "timestamp": "2026-05-26T16:32:47.636231",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "CH-05",
+      "action_type": "sensor_check",
+      "description": "Check sensor calibration and integrity for CH-05 COP reading"
+    },
+    "decision": "REJECTED",
+    "notes": "Awaiting sensor check results before proceeding with equipment inspection."
+  },
+  {
+    "timestamp": "2026-05-26T16:32:49.815999",
+    "action_type": "unknown",
+    "action": {
+      "equipment": "CH-06",
+      "anomaly": "COP reading anomaly"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-26T16:36:49.127073",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "CH-08",
+      "action_type": "sensor_verification"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-26T16:46:56.599375",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "CH-08",
+      "action_type": "anomaly_investigation"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-26T16:52:34.953809",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "CH-06",
+      "action_type": "sensor_verification"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-26T19:25:28.725807",
+    "action_type": "unknown",
+    "action": {
+      "equipment": "CH-01",
+      "action": "approach temperature trend analysis over the last six months"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-26T19:46:03.319855",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-19",
+      "action_type": "alarm_response"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-26T20:11:53.631831",
+    "action_type": "unknown",
+    "action": {
+      "proposed_action": "OA damper calibration"
+    },
+    "decision": "REJECTED",
+    "notes": "Desigo failed to flag a commanded value gap for twenty days, indicating a potential oversight during commissioning. The OA damper's current behavior suggests a deeper issue that may require a physical inspection."
+  },
+  {
+    "timestamp": "2026-05-26T20:14:55.655329",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-19",
+      "message": "commanded value gap"
+    },
+    "decision": "REJECTED",
+    "notes": "Missing OA_DMPR data point and low confidence"
+  },
+  {
+    "timestamp": "2026-05-26T20:19:10.788531",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "chiller_maintenance",
+      "equipment_id": "CH-02",
+      "notes": "User approved chiller maintenance for CH-02"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-26T20:24:51.867630",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "Floor 9",
+      "valve_positions": {
+        "heating": 60.5,
+        "cooling": 60.5
+      },
+      "energy_waste": 6.05
+    },
+    "decision": "APPROVED",
+    "notes": "This is an estimation based on the current telemetry data and assumptions about maximum energy consumption."
+  },
+  {
+    "timestamp": "2026-05-26T20:57:10.908441",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "filter_replacement",
+      "description": "ARVIS suggested a physical inspection to verify filter replacement status for all AHU units."
+    },
+    "decision": "REJECTED",
+    "notes": "Work order discrepancy with DP readings"
+  },
+  {
+    "timestamp": "2026-05-26T21:19:52.325448",
+    "action_type": "unknown",
+    "action": {
+      "equipment": "AHU-01",
+      "action_type": "manual_verification"
+    },
+    "decision": "REJECTED",
+    "notes": "The FM requested manual verification of sensor data due to stale data issues and BACnet subscription failures."
+  },
+  {
+    "timestamp": "2026-05-26T21:41:25.812528",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "setpoint_adjustment"
+    },
+    "decision": "REJECTED",
+    "notes": "The operator rejects the setpoint adjustment recommendation."
+  },
+  {
+    "timestamp": "2026-05-26T22:32:58.071271",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-03",
+      "action_type": "FLT_DP_data_missing"
+    },
+    "decision": "APPROVED",
+    "notes": "The user confirmed that the FLT_DP sensor is not present in ARVIS's live telemetry stream for AHU-03. The discrepancy is acknowledged as a database sync gap, not a missing sensor."
+  },
+  {
+    "timestamp": "2026-05-26T22:48:42.228181",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-01",
+      "action_type": "sensor_replacement"
+    },
+    "decision": "APPROVED",
+    "notes": "Based on anomaly severity and magnitude of deviation."
+  },
+  {
+    "timestamp": "2026-05-26T23:03:24.672215",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "vibration_warning"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-27T02:25:16.124440",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-7",
+      "issue": "Discrepancy between BMS reported status and physical observation",
+      "priority": "medium"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-27T02:25:16.134453",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-19",
+      "issue": "Discrepancy between BMS reported status and physical observation",
+      "priority": "medium"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-27T02:39:40.755756",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "investigation",
+      "equipment_id": "AHU-01",
+      "description": "Isolate the unit, perform a visual inspection, consult maintenance logs, and contact an on-site technician."
+    },
+    "decision": "APPROVED",
+    "notes": "Following initial response procedure for a high alarm on AHU-01."
+  },
+  {
+    "timestamp": "2026-05-27T02:41:14.549703",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-03",
+      "skill_type": "operator_pattern",
+      "relevance": 0.4166097044944763
+    },
+    "decision": "REJECTED",
+    "notes": "The user requested access to Siemens Desigo CC historian data for trend logs, but ARVIS cannot directly query or export historical DP trends for AHUs from the BMS. Users must export the trend log themselves."
+  },
+  {
+    "timestamp": "2026-05-27T02:53:13.672021",
+    "action_type": "unknown",
+    "action": {
+      "action_id": "d76f89bd",
+      "equipment_id": "VAV-19A",
+      "action_type": "alarm_correlation"
+    },
+    "decision": "APPROVED",
+    "notes": "VAV-19A matches the AHU-07 damper fault signature with a confidence of 74.9%"
+  },
+  {
+    "timestamp": "2026-05-27T02:55:14.546467",
+    "action_type": "unknown",
+    "action": {
+      "skill_type": "operator_pattern",
+      "equipment_id": "AHU-07"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-27T03:58:28.124131",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "initial_response",
+      "description": "Isolate AHU-01, perform visual inspection, consult maintenance logs, and contact on-site technician"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-27T04:19:24.202291",
+    "action_type": "unknown",
+    "action": {
+      "query": "What exactly is blocking you from explaining your logic chain right now?",
+      "recommendation": "Update ARVIS's communication protocol to include reasoning in its responses"
+    },
+    "decision": "APPROVED",
+    "notes": "User requested ARVIS provide full reasoning for junior operators."
+  },
+  {
+    "timestamp": "2026-05-27T11:48:14.586709",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "METER",
+      "action_type": "anomaly_investigation",
+      "description": "Investigate the anomaly on METER/KW_NOW to determine if it is a real equipment fault, sensor malfunction, or operational change."
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-27T11:54:45.831886",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-19",
+      "action_type": "diagnostic"
+    },
+    "decision": "REJECTED",
+    "notes": "User's feedback confirms physical inspection shows damper linkage issue, not sensor drift."
+  },
+  {
+    "timestamp": "2026-05-27T12:12:59.856130",
+    "action_type": "unknown",
+    "action": {
+      "description": "Lock out AHU-07 and stage up the chillers"
+    },
+    "decision": "APPROVED",
+    "notes": "Immediate action to prevent further damage and buy time without triggering Kahramaa demand penalties"
+  },
+  {
+    "timestamp": "2026-05-27T12:13:48.963021",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "sensor_verification",
+      "equipment_id": "CH-04/KW"
+    },
+    "decision": "APPROVED",
+    "notes": "Recommend physical inspection and verification of the CH-04/KW sensor due to anomalous reading."
+  },
+  {
+    "timestamp": "2026-05-27T12:25:58.245825",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "TARIFF",
+      "action_type": "anomaly_investigation",
+      "description": "Verify sensor reading and isolate equipment if confirmed"
+    },
+    "decision": "APPROVED",
+    "notes": "Awaiting confirmation from Alarm_Agent and Energy_Agent."
+  },
+  {
+    "timestamp": "2026-05-27T12:34:53.231427",
+    "action_type": "unknown",
+    "action": {
+      "description": "Investigate TARIFF equipment anomaly as potential fault"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-27T12:41:01.002030",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "inspection",
+      "equipment": "METER",
+      "details": "Physical inspection to check for equipment faults"
+    },
+    "decision": "APPROVED",
+    "notes": "Initial assessment and investigation of the METER anomaly."
+  },
+  {
+    "timestamp": "2026-05-27T12:41:05.165667",
+    "action_type": "unknown",
+    "action": {
+      "investigation": "Investigate sensor malfunction for CH-04/KW",
+      "operational_check": "Verify recent operational changes affecting CH-04",
+      "impact_assessment": "Assess impact if equipment fault confirmed"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-27T15:35:15.899926",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "high_alarm_response",
+      "equipment_id": "AHU-01"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-27T16:57:15.284184",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "alarm_investigation",
+      "equipment_id": "CH-01",
+      "proposed_action": "Investigate low chilled water flow or short-cycling on CH-01"
+    },
+    "decision": "APPROVED",
+    "notes": "Following standard procedure for high alarm on CH-01."
+  },
+  {
+    "timestamp": "2026-05-28T00:07:32.420685",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "investigate",
+      "description": "investigate current status of chillers and AHUs"
+    },
+    "decision": "APPROVED",
+    "notes": "Synthesizing findings from available data and skillbook for current system status and immediate attention needs."
+  },
+  {
+    "timestamp": "2026-05-28T00:12:28.805450",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "COP calculation for Carrier 30XA controllers"
+    },
+    "decision": "REJECTED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T00:15:11.108667",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "CH-01",
+      "action": "COP calculation"
+    },
+    "decision": "APPROVED",
+    "notes": "COP calculation formula and data source explained."
+  },
+  {
+    "timestamp": "2026-05-28T00:40:50.941641",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "CH-04",
+      "action_type": "investigate_anomaly"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T00:40:54.799955",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "CH-04",
+      "action_type": "sensor_check"
+    },
+    "decision": "APPROVED",
+    "notes": "Check sensor integrity and calibration."
+  },
+  {
+    "timestamp": "2026-05-28T00:40:58.266055",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "operational_check",
+      "equipment_id": "CH-04"
+    },
+    "decision": "APPROVED",
+    "notes": "Review recent operational changes."
+  },
+  {
+    "timestamp": "2026-05-28T00:41:02.539314",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "impact_assessment",
+      "equipment_id": "CH-04"
+    },
+    "decision": "APPROVED",
+    "notes": "Assess impact and potential risks."
+  },
+  {
+    "timestamp": "2026-05-28T00:46:48.871248",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "actuator_replacement",
+      "equipment_id": "AHU-07",
+      "description": "Replace the faulty position feedback sensor/potentiometer in AHU-7's damper"
+    },
+    "decision": "APPROVED",
+    "notes": "The FM has approved the GSAS action to replace the faulty position feedback sensor/potentiometer in AHU-7's damper."
+  },
+  {
+    "timestamp": "2026-05-28T00:52:02.342391",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "investigation",
+      "equipment_id": "FLR-11",
+      "action_description": "Conduct a thorough examination of the lighting system in FLR-11, including inspecting the sensors and comparing them to the expected readings. Also, review any recent changes in lighting operation within the area."
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T01:10:13.895846",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "METER",
+      "action_type": "METER/KWH_TODAY anomaly"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T01:13:31.398268",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-03",
+      "action": "filter_replacement"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T01:17:09.925544",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-03",
+      "action_type": "verify_local_display"
+    },
+    "decision": "APPROVED",
+    "notes": "User requested verification of local display to ensure accuracy of reported data."
+  },
+  {
+    "timestamp": "2026-05-28T01:23:17.604328",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "TARIFF",
+      "action_type": "TARIFF/COST_QAR_H anomaly investigation"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T01:34:17.252696",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "CH-04",
+      "action_type": "anomaly_investigation",
+      "description": "Investigate CH-04/KW anomaly"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T01:43:07.184191",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "TARIFF",
+      "action_type": "Anomaly Investigation",
+      "details": "Check recent operational history, sensor calibration, and review recent operational changes.",
+      "confidence": 0.87
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T01:45:09.105635",
+    "action_type": "unknown",
+    "action": {
+      "description": "Propose systematic investigation of METER anomaly",
+      "equipment_id": "METER",
+      "action_type": "meter_anomaly"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T01:51:29.467138",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-09",
+      "event_id": "bdba34c0-17df-4b17-88b4-93372f5b6ab8",
+      "event_type": "differential_pressure_reading",
+      "timestamp": "2026-05-28T00:28:23 UTC",
+      "value": "240 Pa"
+    },
+    "decision": "APPROVED",
+    "notes": "The User has already pulled the historian export and has the physical data. ARVIS does not have access to Desigo trend historian archives and the live snapshot telemetry does not include the differential pressure data for AHU-09 and AHU-10."
+  },
+  {
+    "timestamp": "2026-05-28T01:55:54.705162",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "investigation",
+      "description": "Follow documented investigation pattern for METER/KWH_TODAY anomaly"
+    },
+    "decision": "APPROVED",
+    "notes": "High deviation and z-score warrant investigation"
+  },
+  {
+    "timestamp": "2026-05-28T01:57:36.868252",
+    "action_type": "unknown",
+    "action": {
+      "description": "Investigate CH-03 KW Point Anomaly",
+      "equipment_id": "CH-03",
+      "action_type": "investigation"
+    },
+    "decision": "APPROVED",
+    "notes": "Based on historical approval rate of 0.78 for GSAS actions, the facility manager is likely to approve this investigation."
+  },
+  {
+    "timestamp": "2026-05-28T02:13:26.486239",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "action_type": "diagnostic_inspection"
+    },
+    "decision": "APPROVED",
+    "notes": "Following standard diagnostic procedures for high alarm on AHU-07-CONSISTENCY."
+  },
+  {
+    "timestamp": "2026-05-28T08:43:53.370515",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "skill_type": "operator_pattern",
+      "title": "High Alarm on AHU-07",
+      "content": "The high alarm on AHU-07 is likely due to a fault pattern where AHU-07 is running above setpoint with multiple cascade alarms."
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T09:06:36.256971",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "repair_damper_slippage",
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "description": "Repair physical OA damper slippage on AHU-07-CONSISTENCY"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T09:10:48.892318",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "diagnostic",
+      "action_description": "Physical OA damper slippage on AHU-07-CONSISTENCY"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T09:13:40.201091",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "diagnostic",
+      "equipment_id": "AHU-07-CONSISTENCY"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T09:17:28.240997",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "physical_inspection_and_repair",
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "description": "Physical inspection and repair of the OA damper linkage on AHU-07-CONSISTENCY to address the physical slippage issue.",
+      "recommendation_id": "da99dfa2"
+    },
+    "decision": "APPROVED",
+    "notes": "Historical skillbook confirms recurring physical damper slippage on AHU-07-CONSISTENCY. Direct physical inspection is required to confirm the slippage."
+  },
+  {
+    "timestamp": "2026-05-28T10:53:14.508209",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "proposed_action": "Physical inspection of OA damper linkage"
+    },
+    "decision": "APPROVED",
+    "notes": "Following physical inspection, corrective action will be taken to repair the damper slippage."
+  },
+  {
+    "timestamp": "2026-05-28T10:57:51.004410",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "physical_inspection",
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "description": "Inspect and repair physical outdoor air damper slippage on AHU-07-CONSISTENCY"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T10:59:57.978530",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "action_type": "physical_inspection"
+    },
+    "decision": "APPROVED",
+    "notes": "Based on historical approval rates and skillbook results, it is likely that the facility manager would approve a proposed action to physically inspect the damper linkage on AHU-07-CONSISTENCY to confirm the physical damper slippage."
+  },
+  {
+    "timestamp": "2026-05-28T11:00:55.808625",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "setpoint_adjustment",
+      "equipment_id": "CH-01",
+      "proposed_action": "Check and adjust chilled water flow setpoint if necessary"
+    },
+    "decision": "APPROVED",
+    "notes": "Based on past rejections of setpoint adjustments, this action is proposed with caution and will be flagged for potential downgrade if unsuccessful."
+  },
+  {
+    "timestamp": "2026-05-28T11:03:49.144805",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "physical_inspection",
+      "equipment_id": "AHU-07",
+      "description": "Physical OA damper slippage on AHU-07-CONSISTENCY"
+    },
+    "decision": "APPROVED",
+    "notes": "Confirmed by query_skillbook results and previous observations."
+  },
+  {
+    "timestamp": "2026-05-28T11:10:00.946208",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "isolate_and_shut_down",
+      "equipment_id": "AHU-07-CONSISTENCY"
+    },
+    "decision": "APPROVED",
+    "notes": "Proposed to isolate and shut down AHU-07-CONSISTENCY to prevent damage and mitigate risk to related systems."
+  },
+  {
+    "timestamp": "2026-05-28T11:10:01.040788",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "physical_inspection",
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "description": "Physical inspection and repair of OA damper linkage on AHU-07-CONSISTENCY"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T11:20:57.523571",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "action_type": "physical_inspection_and_repair"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T11:24:19.012528",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "repair_damper_linkage",
+      "equipment_id": "AHU-07-CONSISTENCY"
+    },
+    "decision": "APPROVED",
+    "notes": "Physical OA damper slippage confirmed based on historical data and current telemetry."
+  },
+  {
+    "timestamp": "2026-05-28T11:26:52.638743",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "diagnostic_check",
+      "equipment_id": "AHU-07",
+      "description": "Verify CHW supply temperature at coil inlet and confirm CHW valve operation."
+    },
+    "decision": "APPROVED",
+    "notes": "Based on the symptoms provided, the cooling coil is the most likely root cause."
+  },
+  {
+    "timestamp": "2026-05-28T13:01:07.313679",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "diagnostic_check",
+      "equipment_id": "AHU-07-CONSISTENCY"
+    },
+    "decision": "APPROVED",
+    "notes": "Requesting diagnostic check on AHU-07-CONSISTENCY"
+  },
+  {
+    "timestamp": "2026-05-28T13:01:10.174260",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "action_type": "inspect_and_repair_damper_linkage"
+    },
+    "decision": "APPROVED",
+    "notes": "Physical OA damper slippage confirmed based on historical data and current symptoms."
+  },
+  {
+    "timestamp": "2026-05-28T13:03:14.198304",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "diagnostic_check",
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "recommendation": "Physical OA damper slippage on AHU-07-CONSISTENCY"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T13:29:50.634390",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action": "diagnostic_audit",
+      "notes": "Recommended due to high alarm on AHU-07, likely due to a fault pattern where AHU-07 is running above setpoint with multiple cascade alarms."
+    },
+    "decision": "APPROVED",
+    "notes": "Recommended based on previous high alarms on AHU-07 and GSAS approval rate for similar actions."
+  },
+  {
+    "timestamp": "2026-05-28T13:31:39.293359",
+    "action_type": "unknown",
+    "action": {
+      "title": "Physical OA Damper Slippage on AHU-07-CONSISTENCY",
+      "description": "OA damper blade has slipped from its commanded 15% position to approximately 36-40% effective opening, allowing excessive hot outdoor air into the mixing box.",
+      "equipment_id": "AHU-07-CONSISTENCY"
+    },
+    "decision": "REJECTED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T13:34:33.264482",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "setpoint_adjustment",
+      "equipment_id": "AHU-07-CONSISTENCY"
+    },
+    "decision": "APPROVED",
+    "notes": "Confirmed by operator feedback"
+  },
+  {
+    "timestamp": "2026-05-28T13:41:28.870553",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "physical_inspection",
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "description": "Physical inspection of the outdoor air damper on AHU-07-CONSISTENCY to confirm damper slippage"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T13:59:59.434220",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "action_type": "physical_inspection",
+      "description": "Physical inspection to verify probable physical outdoor air damper slippage"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T14:02:29.440516",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "physical_inspection"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T14:04:51.482166",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "proposed_action": "Physical inspection and potential adjustment of OA damper position"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T14:07:08.722801",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "physical_inspection",
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "description": "Verify physical OA damper slippage"
+    },
+    "decision": "APPROVED",
+    "notes": "Based on telemetry and historical incident records, a physical OA damper slippage on AHU-07-CONSISTENCY is suspected. A physical inspection is required to confirm this diagnosis."
+  },
+  {
+    "timestamp": "2026-05-28T15:49:52.058542",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "action_type": "diagnostic_check",
+      "description": "Check for physical damper slip on AHU-07-CONSISTENCY"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T16:24:53.207905",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "OA_damper_slippage_correction",
+      "description": "Correcting the physical OA damper slippage on AHU-07-CONSISTENCY to its commanded position"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T16:27:41.727908",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "diagnostic_check"
+    },
+    "decision": "APPROVED",
+    "notes": "Diagnostic check approved by FM"
+  },
+  {
+    "timestamp": "2026-05-28T16:34:34.517362",
+    "action_type": "unknown",
+    "action": {
+      "description": "Investigate and potentially repair a damper fault or stuck valve on AHU-07"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T16:47:25.540024",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "damper_slippage_correction",
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "description": "Physical OA damper slippage on AHU-07-CONSISTENCY"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T16:49:40.067791",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "physical_inspection",
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "target": "OA damper"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T17:11:35.238876",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "physical_inspection",
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "details": "Inspect OA damper actuator and blade positioning"
+    },
+    "decision": "APPROVED",
+    "notes": "Following operator's hypothesis about a possible damper slip issue."
+  },
+  {
+    "timestamp": "2026-05-28T17:15:00.717988",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "physical_inspection_of_OA_damper",
+      "equipment_id": "AHU-07-CONSISTENCY"
+    },
+    "decision": "APPROVED",
+    "notes": "Based on historical data and high approval rate for similar actions, it is likely that the facility manager will approve this recommendation."
+  },
+  {
+    "timestamp": "2026-05-28T17:17:07.176523",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "diagnostic",
+      "action_description": "Physical inspection of OA damper actuator and blade positioning on AHU-07-CONSISTENCY"
+    },
+    "decision": "APPROVED",
+    "notes": "Based on historical incident skillbooks and current symptoms, physical inspection of the OA damper is recommended to verify actual damper position versus commanded position. Check for actuator mechanical slippage, linkage wear, or seal degradation allowing air bypass."
+  },
+  {
+    "timestamp": "2026-05-28T18:30:52.593824",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "Check OA damper position and investigate mechanical faults on AHU-07-CONSISTENCY",
+      "equipment_id": "AHU-07-CONSISTENCY"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T18:33:24.447301",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "cooling_coil_check",
+      "description": "Check the cooling coil for degradation or refrigerant/chilled water supply failure"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T18:44:14.983878",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "physical inspection",
+      "equipment_id": "AHU-07",
+      "description": "Verify the integrity of the sensor and rule out mechanical slippage on the OA damper linkage of AHU-07"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T18:51:44.468103",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "description": "Investigate potential damper slip or failure"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T19:27:55.565224",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "action_type": "investigate_damper_slippage"
+    },
+    "decision": "APPROVED",
+    "notes": "Based on the similarity score and operator pattern, investigating the possibility of a damper fault or slippage as the root cause of the issue is recommended."
+  },
+  {
+    "timestamp": "2026-05-28T19:30:48.807221",
+    "action_type": "unknown",
+    "action": {
+      "title": "Check OA damper position and investigate mechanical faults on AHU-07-CONSISTENCY",
+      "equipment_id": "AHU-07-CONSISTENCY"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T19:34:15.232365",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "action_type": "physical_inspection",
+      "description": "Inspect OA/RA damper assemblies for linkage slippage or seal failure"
+    },
+    "decision": "APPROVED",
+    "notes": "Based on historical incident pattern and GSAS approval rates, this action is recommended."
+  },
+  {
+    "timestamp": "2026-05-28T19:50:37.987824",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "OA Damper Slippage Correction",
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "description": "OA damper slippage on AHU-07-CONSISTENCY causing SAT to drift up"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T19:53:47.418807",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "action_type": "physical_inspection"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T19:53:47.432595",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "action_type": "cooling_coil_investigation"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T20:06:47.599138",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "action_type": "repair_damper_slippage",
+      "description": "Confirmed physical OA damper slippage on AHU-07-CONSISTENCY causing high mixed air temperature and high supply air temperature despite cooling valve being at 100%"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T20:12:05.898240",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "action": "Physical inspection of OA damper actuator and linkage"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T20:50:46.054593",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "action_type": "physical_inspection_of_OA_damper"
+    },
+    "decision": "APPROVED",
+    "notes": "The OA damper slippage on AHU-07-CONSISTENCY is confirmed as the root cause of the heat complaints on Floor 28."
+  },
+  {
+    "timestamp": "2026-05-28T20:55:03.067470",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "physical_inspection"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T21:02:08.782564",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "physical_inspection"
+    },
+    "decision": "APPROVED",
+    "notes": "Based on historical pattern match and symptom description"
+  },
+  {
+    "timestamp": "2026-05-28T21:33:07.303817",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07-CONSISTENCY",
+      "action_type": "check_damper_position"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T22:23:46.798875",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "check_oa_damper_position",
+      "equipment_id": "AHU-07-CONSISTENCY"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-28T22:51:52.973495",
+    "action_type": "unknown",
+    "action": {
+      "description": "Recommend checking the OA damper position and investigating possible mechanical faults on AHU-07-CONSISTENCY due to elevated mixed air temperature and high supply air temperature.",
+      "equipment_id": "AHU-07-CONSISTENCY"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-29T00:35:32.859969",
+    "action_type": "unknown",
+    "action": {
+      "description": "Check OA damper position and investigate mechanical faults on AHU-07-CONSISTENCY",
+      "equipment_id": "AHU-07-CONSISTENCY"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-29T01:40:00.559278",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "VAV-67",
+      "action_type": "inspect_dampers",
+      "description": "Inspect the outdoor air damper for mechanical issues and ensure it is properly calibrated"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-29T01:40:00.570935",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "VAV-67",
+      "action_type": "check_chilled_water_supply",
+      "description": "Check the chilled water supply for temperature and flow rate"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-29T10:58:51.798473",
+    "action_type": "unknown",
+    "action": {
+      "title": "Replace AHU-01 damper actuator",
+      "equipment_id": "AHU-01",
+      "skill_type": "fault_pattern"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-29T11:18:26.897464",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-01",
+      "action_type": "check_OA_damper_position"
+    },
+    "decision": "APPROVED",
+    "notes": "High similarity to a previously resolved issue with AHU-01's OA damper position error."
+  },
+  {
+    "timestamp": "2026-05-29T11:22:21.480240",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-01",
+      "action_type": "inspect_damper_actuator",
+      "description": "Inspect the OA damper actuator for signs of wear or improper position"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-29T23:51:16.211946",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-01",
+      "action_type": "replace_damper_actuator"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-29T23:54:55.360579",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-01",
+      "action": "Investigate high supply air temperature alarm"
+    },
+    "decision": "APPROVED",
+    "notes": "Based on historical data, the current issue could be related to the damper or a similar component."
+  },
+  {
+    "timestamp": "2026-05-30T00:03:53.125222",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "inspect_damper_actuator",
+      "description": "Inspect outdoor air damper actuator and verify its position manually versus the feedback.",
+      "equipment_id": "AHU-01"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-30T00:03:53.147376",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "monitor_temperatures",
+      "description": "Monitor mixed air temperature, outdoor air temperature, and zone temperatures for stabilization.",
+      "equipment_id": "AHU-01"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-30T00:06:55.551642",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-01",
+      "action_type": "damping_replacement",
+      "description": "Replace damper actuator"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-30T00:26:24.840328",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "inspect_and_replace_actuator",
+      "equipment_id": "AHU-01"
+    },
+    "decision": "APPROVED",
+    "notes": "High supply air temperature alarm on AHU-01, likely due to a recurrent damper slip issue as per historical data."
+  },
+  {
+    "timestamp": "2026-05-30T01:17:58.832654",
+    "action_type": "technician_dispatch",
+    "action": {
+      "description": "Dispatch a technician to physically inspect the CH-01 chiller to diagnose the root cause of the alarm.",
+      "type": "technician_dispatch"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-30T02:53:27.136365",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-19",
+      "description": "High alarm on AHU-19"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-30T14:01:42.886014",
+    "action_type": "unknown",
+    "action": {
+      "description": "Investigate the cause of the high setpoint running and suggest alternative actions that have been successful in the past.",
+      "action_type": "investigation"
+    },
+    "decision": "APPROVED",
+    "notes": "No historical data available for 'setpoint_adjustment' actions. Proposing an investigation into the cause of the high setpoint running and suggesting alternative actions that have been successful in the past."
+  },
+  {
+    "timestamp": "2026-05-30T14:54:37.288177",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "diagnostic_inspection",
+      "equipment": "AHU-07"
+    },
+    "decision": "APPROVED",
+    "notes": "Recommended immediate inspection of AHU-07 due to high severity alarm with no prior record of similar issues."
+  },
+  {
+    "timestamp": "2026-05-30T15:04:20.342708",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "diagnostic",
+      "equipment_id": "AHU-07",
+      "description": "Isolate AHU-07 and perform a visual inspection."
+    },
+    "decision": "APPROVED",
+    "notes": "Based on the highest confidence skill retrieved."
+  },
+  {
+    "timestamp": "2026-05-30T15:04:26.042915",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "manual_inspection_and_adjustment",
+      "equipment_id": "AHU-07",
+      "description": "Manually inspect and adjust the OA damper position on AHU-07 to prevent hot outdoor air from entering the system."
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-30T15:04:26.052918",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "monitoring",
+      "equipment_id": "AHU-07",
+      "description": "Monitor the supply air temperature on AHU-07 to assess the impact of the OA damper adjustment."
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-30T15:05:31.695729",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "OA_damper_physical_slippage",
+      "description": "OA damper physically slipping from its commanded position to around 36% open, allowing excessive hot outdoor air into the system"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-30T16:00:55.864195",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "setpoint_adjustment",
+      "equipment_id": "AHU-07",
+      "target": "AHU-07/SAT"
+    },
+    "decision": "APPROVED",
+    "notes": "Following past patterns and high GSAS approval rate for similar actions."
+  },
+  {
+    "timestamp": "2026-05-30T16:09:22.235126",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "OA_damper_position_check",
+      "equipment_id": "AHU-07"
+    },
+    "decision": "APPROVED",
+    "notes": "Based on historical pattern, active alarm, and operator observation, the OA damper position check is approved as a first step in diagnosing the issue."
+  },
+  {
+    "timestamp": "2026-05-30T16:19:33.950751",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "alarm_response",
+      "description": "Investigate and address the high alarm on AHU-07 due to running above setpoint and multiple cascade alarms"
+    },
+    "decision": "APPROVED",
+    "notes": "First occurrence of this alarm type"
+  },
+  {
+    "timestamp": "2026-05-30T16:19:34.791292",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "OA_damper_check",
+      "description": "Check OA damper position on AHU-07"
+    },
+    "decision": "APPROVED",
+    "notes": "Based on historical approval rate and current evidence."
+  },
+  {
+    "timestamp": "2026-05-30T20:50:20.555939",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "isolate"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-30T21:37:58.567844",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action": "reset_alarm"
+    },
+    "decision": "APPROVED",
+    "notes": "Based on historical context and fault patterns."
+  },
+  {
+    "timestamp": "2026-05-30T22:10:09.768794",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "diagnostic",
+      "equipment_id": "AHU-07",
+      "description": "Investigate AHU-07's OA damper actuator"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-31T02:20:34.418701",
+    "action_type": "unknown",
+    "action": {
+      "equipment": "AHU-07",
+      "action": "Investigate SAT deviation and CHW valve saturation"
+    },
+    "decision": "APPROVED",
+    "notes": "Based on historical data, this action is likely to be approved by the facility manager."
+  },
+  {
+    "timestamp": "2026-05-31T02:35:22.013215",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "diagnostic_investigation",
+      "equipment_id": "AHU-07",
+      "description": "Investigate AHU-07 for root cause of critical alarm and cascade risk"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-31T03:10:09.522215",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "heating_system_check",
+      "equipment_id": "AHU-07"
+    },
+    "decision": "APPROVED",
+    "notes": "Based on equipment readings and historical GSAS approval rates."
+  },
+  {
+    "timestamp": "2026-05-31T03:26:22.389648",
+    "action_type": "unknown",
+    "action": {
+      "proposal": "Dispatch technician to inspect and repair AHU-07 OA damper actuator",
+      "equipment_id": "AHU-07"
+    },
+    "decision": "APPROVED",
+    "notes": "Based on the skillbook findings and current alarm severity, immediate action is required to prevent thermal emergency."
+  },
+  {
+    "timestamp": "2026-05-31T03:54:40.525236",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "OA_damper_position_check"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-31T03:56:48.331570",
+    "action_type": "unknown",
+    "action": {
+      "description": "Explain in simple terms why the damper actuator is the root cause",
+      "equipment_id": "AHU-07"
+    },
+    "decision": "APPROVED",
+    "notes": "User acknowledged the explanation"
+  },
+  {
+    "timestamp": "2026-05-31T13:35:09.407439",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "investigate",
+      "equipment_id": "AHU-07",
+      "description": "Investigate the OA damper actuator for AHU-07"
+    },
+    "decision": "APPROVED",
+    "notes": "The facility manager has approved this action."
+  },
+  {
+    "timestamp": "2026-05-31T13:35:11.783181",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "diagnostic_investigation",
+      "equipment_id": "AHU-07",
+      "description": "Investigate root cause of critical alarm on AHU-07"
+    },
+    "decision": "APPROVED",
+    "notes": "Recommend verifying hypothesis with team before proceeding with repair."
+  },
+  {
+    "timestamp": "2026-05-31T22:05:31.375718",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "investigate",
+      "equipment_id": "AHU-07",
+      "description": "Investigate AHU-07's OA damper creep issue"
+    },
+    "decision": "APPROVED",
+    "notes": "FM is likely to approve this recommendation based on the high approval rate for GSAS actions."
+  },
+  {
+    "timestamp": "2026-05-31T22:29:11.517282",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "investigate",
+      "description": "Investigate chilled water distribution system for AHU-12"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-05-31T22:30:55.076482",
+    "action_type": "unknown",
+    "action": {
+      "description": "Manual inspection and diagnostic check on CHILLER-01 COP sensor and its associated systems"
+    },
+    "decision": "REJECTED",
+    "notes": "No historical data available to support this recommendation"
+  },
+  {
+    "timestamp": "2026-06-01T01:33:26.275400",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "supply_air_temperature_adjustment",
+      "proposed_action": "Investigating high supply air temperature"
+    },
+    "decision": "APPROVED",
+    "notes": "Based on historical context, this action aligns with facility manager preferences."
+  },
+  {
+    "timestamp": "2026-06-01T01:38:03.856306",
+    "action_type": "unknown",
+    "action": {
+      "proposed_action": "Investigate potential sensor malfunction, check operational changes, evaluate impact and cascade risks, recommend action"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-01T01:38:06.214158",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "vibration_analysis",
+      "equipment_id": "CH-01"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-01T11:13:27.047046",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "investigation",
+      "equipment_id": "AHU-12",
+      "description": "Investigate insufficient cooling coil capacity as the root cause for AHU-12 not holding supply air temperature"
+    },
+    "decision": "APPROVED",
+    "notes": "Based on the Skillbook analysis, the root cause is likely insufficient cooling coil capacity. Further investigation is needed to confirm this."
+  },
+  {
+    "timestamp": "2026-06-01T11:15:48.585790",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "CHILLER-01",
+      "action_type": "sensor_check"
+    },
+    "decision": "REJECTED",
+    "notes": "Preliminary analysis suggests a fault, but sensor malfunction or operational change cannot be ruled out."
+  },
+  {
+    "timestamp": "2026-06-01T11:51:27.255364",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-12",
+      "action_type": "cooling_coil_inspection"
+    },
+    "decision": "APPROVED",
+    "notes": "Insufficient cooling coil capacity is the most likely cause of AHU-12 not holding supply air temperature. The cooling coil may not be able to handle the heat load under these conditions."
+  },
+  {
+    "timestamp": "2026-06-01T12:31:55.428562",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "diagnostic_check",
+      "equipment_id": "CHILLER-01",
+      "point": "COP"
+    },
+    "decision": "APPROVED",
+    "notes": "Initial investigation recommended due to significant anomaly."
+  },
+  {
+    "timestamp": "2026-06-01T12:31:58.190779",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "diagnostic_check",
+      "equipment_id": "CHILLER-01",
+      "description": "Conduct a diagnostic check on Chiller-01 to identify the cause of the efficiency drop"
+    },
+    "decision": "APPROVED",
+    "notes": "Unique incident with no clear precedent in institutional memory"
+  },
+  {
+    "timestamp": "2026-06-01T12:40:32.988703",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "investigate_outdoor_air_intake"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-01T12:44:54.860987",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "diagnostic_check",
+      "target_equipment": "CHILLER-01",
+      "proposed_action": "Gather condenser water temperature and flow rate data to identify potential fouling or flow issues."
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-01T12:44:57.971848",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "CHILLER-01",
+      "action_type": "diagnostic_check"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-01T13:03:21.917931",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "CHILLER-01",
+      "skill_type": "fault_pattern",
+      "description": "Anomaly detected on equipment CHILLER-01 with COP reading 3.1"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-01T15:44:49.597205",
+    "action_type": "unknown",
+    "action": {
+      "title": "cooling_coil_capacity_adjustment",
+      "description": "Evaluate and potentially upgrade the cooling coil capacity for AHU-12 to handle extreme temperatures"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-01T16:02:01.136640",
+    "action_type": "unknown",
+    "action": {
+      "equipment": "CHILLER-01",
+      "action_type": "investigation",
+      "description": "Investigate COP anomaly on CHILLER-01 and check condenser water temperatures and alarm data"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-01T17:14:55.987893",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "inspect_and_repair_oa_damper",
+      "equipment_id": "AHU-07"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-01T18:25:26.264581",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "repair_damper_actuator",
+      "equipment_id": "AHU-07"
+    },
+    "decision": "APPROVED",
+    "notes": "Maintenance has been instructed to physically inspect and repair the OA damper actuator on AHU-07 as per Comfort Agent's recommendation."
+  },
+  {
+    "timestamp": "2026-06-01T21:24:13.233312",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "alarm_clearance"
+    },
+    "decision": "APPROVED",
+    "notes": "AHU-07 OA damper actuator linkage repair is necessary to resolve the high supply air temperature issue."
+  },
+  {
+    "timestamp": "2026-06-01T21:24:27.659168",
+    "action_type": "unknown",
+    "action": {
+      "target_unit": "AHU-07",
+      "action_type": "inspect_outdoor_air_damper_actuator"
+    },
+    "decision": "APPROVED",
+    "notes": "Physical inspection and repair of the OA damper linkage is required to resolve the hot supply air issue and thermal comfort violations."
+  },
+  {
+    "timestamp": "2026-06-01T21:39:45.976362",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "damper_repair"
+    },
+    "decision": "APPROVED",
+    "notes": "Based on historical context and current evidence, the immediate action is to physically inspect and repair the OA damper actuator linkage on AHU-07 to prevent further thermal discomfort and potential safety risks."
+  },
+  {
+    "timestamp": "2026-06-01T21:47:58.417329",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "task": "OA damper actuator repair/replacement",
+      "cost": "$2,500-4,000",
+      "downtime_impact": "Floor 28 offline 4-6 hrs"
+    },
+    "decision": "APPROVED",
+    "notes": "Given the critical condition of AHU-07 and the high thermal safety risk, immediate action is warranted."
+  },
+  {
+    "timestamp": "2026-06-02T16:05:54.635345",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "inspect_outdoor_air_damper"
+    },
+    "decision": "APPROVED",
+    "notes": "Recommendation to inspect outdoor air damper has been approved by FM."
+  },
+  {
+    "timestamp": "2026-06-02T16:39:20.376708",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "diagnostic",
+      "description": "OA damper mechanical slippage detected"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-02T16:40:10.451117",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "damper_adjustment"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-02T17:25:09.488194",
+    "action_type": "shutdown",
+    "action": {
+      "description": "Shut down AHU-07 to prevent any potential spread of issues to other systems.",
+      "type": "shutdown"
+    },
+    "decision": "REJECTED",
+    "notes": "No direct precedent for the current alarm on AHU-07."
+  },
+  {
+    "timestamp": "2026-06-02T17:27:13.880324",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "issue": "OA damper mechanical slippage",
+      "proposed_action": "Inspect and repair OA damper actuator"
+    },
+    "decision": "APPROVED",
+    "notes": "Based on historical incidents and thermodynamic analysis, the root cause is likely an actuator malfunction. Inspecting and repairing the OA damper actuator is the recommended action."
+  },
+  {
+    "timestamp": "2026-06-02T18:03:14.850933",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "diagnostic_check",
+      "description": "Check the status of the OA_DMPR and CHW_VALVE actuators to ensure they are functioning correctly."
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-02T18:03:15.728542",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "OA Damper Actuator Replacement",
+      "equipment_id": "AHU-07"
+    },
+    "decision": "APPROVED",
+    "notes": "Confirmed mechanical slippage based on thermodynamic analysis."
+  },
+  {
+    "timestamp": "2026-06-02T18:28:07.407532",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "description": "Investigate root cause of hot supply air"
+    },
+    "decision": "APPROVED",
+    "notes": "Investigation initiated as per tenant complaints and elevated supply air temperatures"
+  },
+  {
+    "timestamp": "2026-06-02T18:41:11.925650",
+    "action_type": "unknown",
+    "action": {
+      "action_id": "AHU-07-OA-Damper-Inspection",
+      "description": "Physical inspection of AHU-07's outdoor air damper and linkage to verify position feedback and address mechanical slippage"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-02T18:42:06.839760",
+    "action_type": "unknown",
+    "action": {
+      "equipment": "AHU-07",
+      "description": "Emergency manual override and actuator replacement for AHU-07 OA damper actuator mechanical slippage"
+    },
+    "decision": "APPROVED",
+    "notes": "The proposal aligns with past successful interventions and the facility manager's high approval rate for similar actions."
+  },
+  {
+    "timestamp": "2026-06-02T18:51:38.655367",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "inspect_and_repair_damper_actuator"
+    },
+    "decision": "APPROVED",
+    "notes": "Physical inspection and repair of AHU-07 OA damper actuator and linkage recommended based on historical evidence and current observations."
+  },
+  {
+    "timestamp": "2026-06-02T19:36:40.953518",
+    "action_type": "unknown",
+    "action": {
+      "target_unit": "AHU-07",
+      "action_type": "inspect_outdoor_air_damper_actuator",
+      "action_description": "Inspect outdoor air damper actuator"
+    },
+    "decision": "APPROVED",
+    "notes": "FM approved the inspection action."
+  },
+  {
+    "timestamp": "2026-06-02T19:58:40.190924",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "repair_actuator"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-02T23:48:53.924425",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "disable_energy_optimization_modes"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-03T00:03:19.449363",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "inspect_outdoor_air_damper_actuator",
+      "equipment_id": "AHU-07"
+    },
+    "decision": "APPROVED",
+    "notes": "Physical inspection and recalibration or replacement of the AHU-07 outdoor air damper actuator as a corrective action."
+  },
+  {
+    "timestamp": "2026-06-03T00:03:37.422528",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "mechanical lockout and damper replacement for AHU-07",
+      "description": "Dispatch technician to AHU-07 immediately to:\n- Manually verify damper blade position vs BMS feedback (15%)\n- Engage mechanical damper lockout at ~15% position to prevent further drift\n- Inspect actuator linkage, coupling integrity, and position sensor\n- Replace AHU-07 OA damper actuator and recalibrate position feedback",
+      "decision": "APPROVE"
+    },
+    "decision": "APPROVED",
+    "notes": "The proposed actions align with past high-confidence investigations and recommendations for AHU-07. They are necessary to address the immediate comfort breach and prevent further escalation."
+  },
+  {
+    "timestamp": "2026-06-03T00:14:36.180108",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "diagnostic_inspection",
+      "description": "Schedule a physical inspection of the AHU-07 OA damper actuator linkage to verify the actual damper blade position against the BMS-reported position."
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-03T00:18:15.684285",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "inspect_OA_damper"
+    },
+    "decision": "APPROVED",
+    "notes": "AHU-07 supply air hot issue resolved by inspecting the OA damper."
+  },
+  {
+    "timestamp": "2026-06-03T00:29:17.998060",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action": "Inspect outdoor air damper actuator"
+    },
+    "decision": "APPROVED",
+    "notes": "Physical inspection recommended to verify actual damper blade position"
+  },
+  {
+    "timestamp": "2026-06-03T00:35:56.467231",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "physical_inspection_of_OA_damper_actuator"
+    },
+    "decision": "APPROVED",
+    "notes": "Following previous investigation recommendations"
+  },
+  {
+    "timestamp": "2026-06-03T00:42:00.310511",
+    "action_type": "unknown",
+    "action": {
+      "id": "dd15602a",
+      "content": "investigate 'AHU-07 supply air is hot and Floor 28 tenants are complainin'"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-03T00:48:45.331735",
+    "action_type": "unknown",
+    "action": {
+      "target_unit": "AHU-07",
+      "action_type": "inspect_damper_actuator"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-03T16:04:11.900727",
+    "action_type": "unknown",
+    "action": {
+      "equipment": "AHU-07",
+      "action_type": "ventilation_adjustment",
+      "proposed_action": "Increase OA damper from 15% \u2192 40% gradually over 30 minutes"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-03T18:14:07.474669",
+    "action_type": "unknown",
+    "action": {
+      "description": "Verify the status of the Outdoor Air Damper and consider a temporary setpoint adjustment.",
+      "equipment_id": "AHU-07"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-03T23:51:47.114197",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "CH-01",
+      "action": "Investigate specific readings and compare to normal parameters",
+      "description": "Investigate the current readings of CH-01 to diagnose the root cause of the high alarm and assess the potential cascade risk to other chillers and the overall cooling system."
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-04T00:18:08.729989",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "inspect_dampers"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-04T00:35:37.081472",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "dispatch_technician"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-04T01:55:37.833194",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_description": "Physically inspect and repair the outdoor air damper actuator"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-04T02:00:12.629312",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action": "physical inspection of the OA damper actuator linkage"
+    },
+    "decision": "APPROVED",
+    "notes": "Facility management team approved the recommendation to physically inspect the outdoor air damper actuator linkage on AHU-07."
+  },
+  {
+    "timestamp": "2026-06-04T02:00:12.667828",
+    "action_type": "fault_pattern",
+    "action": {
+      "equipment_id": "AHU-07",
+      "type": "fault_pattern",
+      "content": "[VIP_OVERRIDE_DETECTED] Root cause identified: AHU-07 outdoor air damper actuator mechanical slippage. The physical damper blade position exceeds the BMS-commanded 15%, allowing excessive hot outdoor air infiltration. Evidence: MAT 27.8\u00b0C is thermodynamically inconsistent with 15% OA at OAT 34\u00b0C and RAT 23.8\u00b0C \u2014 back-calculation shows ~37% effective OA opening. Floor 28 zones exceed setpoints: ZON"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-04T16:30:57.447102",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "alarm_investigation",
+      "description": "Investigate and address critical alarm on AHU-07"
+    },
+    "decision": "APPROVED",
+    "notes": "Based on equipment readings and historical context, the immediate action is to inspect and potentially clear the CHW_VALVE and adjust the OA_DMPR."
+  },
+  {
+    "timestamp": "2026-06-04T16:48:33.272943",
+    "action_type": "inspection",
+    "action": {
+      "type": "inspection",
+      "equipment": "AHU-07",
+      "description": "Inspect the outdoor air damper actuator for signs of leakage or malfunction"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-04T17:30:25.915496",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "manual_override",
+      "description": "Override the fixed manual louver to allow for increased outside air intake to alleviate cooling capacity exhaustion"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-04T18:02:42.311582",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "inspect_damper_actuator"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-04T19:59:55.370314",
+    "action_type": "unknown",
+    "action": {
+      "action": "Manually increase the outside air intake for AHU-07 if feasible, or temporarily shut down AHU-07 to prevent further overheating."
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-04T20:07:24.490281",
+    "action_type": "unknown",
+    "action": {
+      "equipment": "AHU-07",
+      "alarm_id": "ALM-AHU07-002",
+      "severity": "CRITICAL",
+      "equipment_readings": [
+        {
+          "point": "AHU-07/CHW_VALVE",
+          "value": 0.99
+        },
+        {
+          "point": "AHU-07/SAT",
+          "value": 16.5
+        },
+        {
+          "point": "AHU-07/SAT_SETPOINT",
+          "value": 13.5
+        },
+        {
+          "point": "AHU-07/MAT",
+          "value": 30.8
+        },
+        {
+          "point": "AHU-07/OAT",
+          "value": 42.0
+        },
+        {
+          "point": "AHU-07/OA_DMPR",
+          "value": 0.15
+        },
+        {
+          "point": "AHU-07/OA_DAMPER_TYPE_FIXED_MANUAL_LOUVER_NON_MOTORIZED",
+          "value": 1.0
+        }
+      ],
+      "affected_zones": [
+        {
+          "ZONE-28A": {
+            "temperature": 25.8,
+            "setpoint": 23.0,
+            "delta": 2.8
+          }
+        },
+        {
+          "ZONE-28B": {
+            "temperature": 26.1,
+            "setpoint": 23.0,
+            "delta": 3.1
+          }
+        },
+        {
+          "ZONE-28C": {
+            "temperature": 25.5,
+            "setpoint": 23.0,
+            "delta": 2.5
+          }
+        }
+      ],
+      "cascade_alarm_count": 6,
+      "cascade_members": [
+        "ALM-AHU07-001",
+        "ALM-AHU07-002",
+        "ALM-AHU07-003",
+        "ALM-AHU07-004",
+        "ALM-AHU07-005",
+        "ALM-AHU07-006"
+      ],
+      "root_cause_confidence": 0.8,
+      "historical_pattern": "Third occurrence of this exact alarm pattern (per institutional memory)"
+    },
+    "decision": "APPROVED",
+    "notes": "Despite historical rejections of setpoint adjustments, the immediate safety and comfort implications warrant approval of these actions. This is a recurring issue that needs a strategic solution."
+  },
+  {
+    "timestamp": "2026-06-04T22:30:32.289879",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "retrofit_louver"
+    },
+    "decision": "APPROVED",
+    "notes": "To prevent future overheating due to cooling capacity exhaustion."
+  },
+  {
+    "timestamp": "2026-06-04T23:08:53.605902",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "alarm_investigation"
+    },
+    "decision": "APPROVED",
+    "notes": "No previous AHU-07 alarm recorded. Need to investigate."
+  },
+  {
+    "timestamp": "2026-06-04T23:29:27.848759",
+    "action_type": "unknown",
+    "action": {
+      "description": "Verify supply air temperature sensor reading",
+      "equipment_id": "AHU-01"
+    },
+    "decision": "REJECTED",
+    "notes": "Pending FM feedback"
+  },
+  {
+    "timestamp": "2026-06-05T00:09:12.034012",
+    "action_type": "unknown",
+    "action": {
+      "equipment_id": "AHU-07",
+      "action_type": "investigate_cooling_capacity_exhaustion"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  },
+  {
+    "timestamp": "2026-06-10T00:37:10.710788",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "recalibration",
+      "equipment_id": "AHU-07",
+      "description": "Recalibration or replacement of OA damper actuator"
+    },
+    "decision": "REJECTED",
+    "notes": "Historical approval rate is 0% for recalibration actions"
+  },
+  {
+    "timestamp": "2026-06-10T00:40:59.600881",
+    "action_type": "unknown",
+    "action": {
+      "action_type": "diagnostic_check",
+      "equipment_id": "AHU-12"
+    },
+    "decision": "APPROVED",
+    "notes": ""
+  }
+]

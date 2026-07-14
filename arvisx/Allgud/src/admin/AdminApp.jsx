@@ -52,7 +52,7 @@ export default function AdminApp() {
         {tab === 'analytics' && <Analytics />}
         {tab === 'usage' && <Usage />}
         {tab === 'team' && <Team />}
-        {tab === 'llm' && <div className="space-y-8"><LlmConfig /><EmbedConfig /><LlmTest /></div>}
+        {tab === 'llm' && <div className="space-y-8"><LlmConfig /><EmbedConfig /><SttConfig /><LlmTest /></div>}
         {tab === 'bot' && <BotPairing />}
       </main>
     </div>
@@ -486,7 +486,74 @@ function LlmConfig() {
           {saved ? <CheckCircle2 className="w-4 h-4" /> : null} {busy ? 'Saving…' : saved ? 'Saved — run the test below' : 'Save LLM config'}
         </button>
       </Card>
+      <KeyPool cfg={cfg} reload={load} />
     </div>
+  )
+}
+
+// ── API key pool: rotate off a rate-limited key instead of going dark ─────────
+function KeyPool({ cfg, reload }) {
+  const [newKey, setNewKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const keys = cfg?.keys || []
+  const avail = cfg?.keys_available ?? 0
+
+  async function add() {
+    if (!newKey.trim()) return
+    setBusy(true); setErr('')
+    try { await api.adminAddLlmKey(newKey.trim()); setNewKey(''); reload() }
+    catch (e) { setErr(e.message) } finally { setBusy(false) }
+  }
+  async function remove(last4) {
+    setBusy(true); setErr('')
+    try { await api.adminRemoveLlmKey(last4); reload() }
+    catch (e) { setErr(e.message) } finally { setBusy(false) }
+  }
+  const mins = (s) => (s >= 60 ? `${Math.ceil(s / 60)} min` : `${s}s`)
+
+  return (
+    <Card className="p-6 mt-4 space-y-4">
+      <div>
+        <div className="text-sm text-text-dim">API key pool</div>
+        <div className="text-xs text-text-faint mt-1">
+          Add more keys and AllGud rotates automatically: when the provider rate-limits one key it's
+          parked until the provider says it's free, and the next key answers. The bot only shows the
+          "busy" message once <b className="text-text-dim">every</b> key is exhausted.
+        </div>
+        {keys.length > 0 && (
+          <div className="text-xs mt-2">
+            <span className={avail > 0 ? 'text-green' : 'text-red'}>{avail} of {keys.length} available</span>
+          </div>
+        )}
+      </div>
+
+      {keys.length > 0 && (
+        <div className="space-y-2">
+          {keys.map((k) => (
+            <div key={k.last4} className="flex items-center justify-between bg-bg border border-border rounded-lg px-3 py-2">
+              <div className="flex items-center gap-3 text-sm">
+                <span className="font-mono text-text-dim">•••• {k.last4}</span>
+                {k.cooling
+                  ? <span className="text-xs text-amber">rate-limited · frees up in {mins(k.cooldown_s)}</span>
+                  : <span className="text-xs text-green">available</span>}
+              </div>
+              <button onClick={() => remove(k.last4)} disabled={busy}
+                className="text-xs text-text-faint hover:text-red disabled:opacity-50">Remove</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="flex gap-2">
+        <input type="password" value={newKey} onChange={(e) => setNewKey(e.target.value)}
+          placeholder="paste another API key" onKeyDown={(e) => e.key === 'Enter' && add()}
+          className="flex-1 bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text" />
+        <button onClick={add} disabled={busy || !newKey.trim()}
+          className="text-sm bg-primary text-white rounded-lg px-4 py-2 disabled:opacity-50">Add key</button>
+      </div>
+      {err && <div className="text-xs text-red">{err}</div>}
+    </Card>
   )
 }
 
@@ -540,6 +607,66 @@ function EmbedConfig() {
         {err && <div className="text-xs text-red">{err}</div>}
         <button onClick={save} disabled={busy} className="flex items-center gap-2 text-sm bg-primary text-white rounded-lg px-4 py-2 disabled:opacity-50">
           {saved ? <CheckCircle2 className="w-4 h-4" /> : null} {busy ? 'Saving…' : saved ? 'Saved' : 'Save embeddings config'}
+        </button>
+      </Card>
+    </div>
+  )
+}
+
+// ── Speech-to-text (WhatsApp voice notes) ────────────────────────────────────
+function SttConfig() {
+  const [cfg, setCfg] = useState(null)
+  const [form, setForm] = useState({ provider: '', model: '', api_key: '', base_url: '' })
+  const [busy, setBusy] = useState(false); const [saved, setSaved] = useState(false); const [err, setErr] = useState('')
+  const load = () => api.adminSttConfig().then((c) => {
+    setCfg(c); setForm({ provider: c.provider || '', model: c.model || '', api_key: '', base_url: c.base_url || '' })
+  }).catch((e) => setErr(e.message))
+  useEffect(() => { load() }, [])
+  const models = (cfg?.catalog && cfg.catalog[form.provider]) || []
+  const def = (cfg?.defaults && cfg.defaults[form.provider]) || {}
+  const setProvider = (p) => setForm((f) => ({ ...f, provider: p, model: (cfg?.catalog?.[p]?.[0]) || '' }))
+  // Only whisper-large-v3 / whisper-1 can translate to English; the turbo + distil models
+  // transcribe in the spoken language only. Warn instead of silently changing behaviour.
+  const canTranslate = !form.model || (cfg?.translate_capable || []).some((m) => form.model.startsWith(m))
+  async function save() {
+    if (!form.provider) { setErr('Pick a provider'); return }
+    setBusy(true); setErr(''); setSaved(false)
+    try {
+      await api.adminSetSttConfig({ provider: form.provider, model: form.model.trim(), api_key: form.api_key.trim(), base_url: form.base_url.trim() })
+      setSaved(true); setTimeout(() => setSaved(false), 2500); load()
+    } catch (e) { setErr(e.message) } finally { setBusy(false) }
+  }
+  if (!cfg) return null
+  return (
+    <div className="max-w-xl">
+      <div className="text-sm text-text-dim mb-1">Voice notes (speech-to-text)</div>
+      <div className="text-xs text-text-faint mb-4">
+        Lets people send WhatsApp voice notes instead of typing. Audio is transcribed to English, then answered exactly like a typed message.
+        {cfg.provider ? <> Current: <b className="text-text-dim">{cfg.provider}/{cfg.model}</b>{cfg.api_key_set ? ` · key •••${cfg.api_key_last4}` : ' · no key'}</> : ' Not configured — voice notes are ignored.'}
+      </div>
+      <Card className="p-6 space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          <label className="flex flex-col gap-1 text-xs text-text-faint">Provider
+            <select value={form.provider} onChange={(e) => setProvider(e.target.value)} className="bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text">
+              <option value="">Select…</option>
+              {(cfg.providers || []).map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-text-faint">Model
+            <input list="stt-models" value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} placeholder={def.model || 'model id'} className="bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text" />
+            <datalist id="stt-models">{models.map((m) => <option key={m} value={m} />)}</datalist>
+          </label>
+        </div>
+        {!canTranslate && <div className="text-xs text-amber">This model transcribes in the language spoken — it can't translate to English. Use whisper-large-v3 for mixed Hindi/Kannada/English speech.</div>}
+        <label className="flex flex-col gap-1 text-xs text-text-faint">API key
+          <input type="password" value={form.api_key} onChange={(e) => setForm({ ...form, api_key: e.target.value })} placeholder={cfg.api_key_set ? `keep existing (•••${cfg.api_key_last4})` : 'paste API key'} className="bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text" />
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-text-faint">Base URL (optional)
+          <input value={form.base_url} onChange={(e) => setForm({ ...form, base_url: e.target.value })} placeholder={def.base_url || 'https://…/v1'} className="bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text" />
+        </label>
+        {err && <div className="text-xs text-red">{err}</div>}
+        <button onClick={save} disabled={busy} className="flex items-center gap-2 text-sm bg-primary text-white rounded-lg px-4 py-2 disabled:opacity-50">
+          {saved ? <CheckCircle2 className="w-4 h-4" /> : null} {busy ? 'Saving…' : saved ? 'Saved' : 'Save voice config'}
         </button>
       </Card>
     </div>
