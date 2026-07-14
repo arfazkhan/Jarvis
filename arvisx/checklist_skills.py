@@ -13,8 +13,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+import logging
 import re
 from collections import Counter
+
+logger = logging.getLogger("arvisx.skills")
 
 from arvisx import checklist_intel as intel
 from arvisx.analyzers import reading_anomaly, trend_alert
@@ -388,6 +391,44 @@ async def summarize_chat(llm, turns, label: str) -> str:
     return f"🗒 Recap ({label}) — topics raised:\n" + "\n".join(lines[:12])
 
 
+# ── anti-repetition: a follow-up must ADVANCE, never restate the last answer ──
+_CHAT_TEMPERATURE = 0.4      # 0 makes the model replay its own last answer verbatim (see ask_tools)
+
+_NO_REPEAT_NUDGE = (
+    "\n\nCRITICAL: You ALREADY SENT your previous message (it's the last assistant turn above). "
+    "The user is FOLLOWING UP — they want something NEW, and repeating yourself makes you useless. "
+    "Do NOT restate your last answer. Answer what THEY actually asked:\n"
+    "- 'why is it like that' / 'explain' → give the CAUSE from the tool data (which shifts are "
+    "unassigned, which items are still pending, how long the PPM has been overdue).\n"
+    "- 'you didn't answer' / 'you're repeating' → acknowledge it briefly, then answer the ACTUAL "
+    "question with detail you have NOT already given."
+)
+
+# Both attempts came back as a restatement → don't ship a parrot. Move the conversation forward
+# by asking which thread they want, rather than dumping the same summary a third time.
+_REPEAT_FALLBACK = ("Sorry — I keep repeating myself there. Let me be specific instead: which do "
+                    "you want to dig into — the *open issues*, the *pending rounds*, or the "
+                    "*overdue PPM*?")
+
+
+def _last_assistant(history) -> str:
+    for h in reversed(history or []):
+        if h.get("role") == "assistant":
+            return str(h.get("content") or "")
+    return ""
+
+
+def _is_repeat(candidate: str, previous: str, threshold: float = 0.85) -> bool:
+    """Is this answer just the previous one again? Guards the degenerate loop where the model's
+    own last reply, fed back as history, becomes the most likely thing to say next — so it says
+    it again, every turn, no matter what was asked."""
+    import difflib
+    a, b = (candidate or "").strip().lower(), (previous or "").strip().lower()
+    if len(a) < 25 or len(b) < 25:          # short social replies legitimately look alike
+        return False
+    return difflib.SequenceMatcher(None, a, b).ratio() >= threshold
+
+
 # Catch-all when no keyword matched: a helpful nudge, not a stats dump.
 _REDIRECT_MSG = ("I can help with this building's rounds, issues, assets, PPM and reports. Try "
                  "\"what's pending?\", \"what's open?\", \"riskiest system?\", or \"weekly report\".")
@@ -482,6 +523,13 @@ _QA_SYSTEM = (
     "everything that is OPEN, INCOMPLETE, or OVERDUE — a pending checklist counts as something to "
     "worry about, not just PPM. Only say 'all clear' when all three are genuinely clean. Don't "
     "answer a worry/status question from a single tool.\n"
+    "FOLLOW-UPS — NEVER REPEAT YOURSELF. Your own previous replies are in the conversation above. "
+    "A follow-up must ADVANCE the conversation, never restate what you already said. If they ask "
+    "'why is it like that' / 'explain' → give the CAUSE from the data (which shifts are unassigned, "
+    "what's still pending, how long the PPM has been overdue) — do NOT re-list the same summary. If "
+    "they say 'you didn't answer' / 'you're repeating' → they are RIGHT: apologise in half a line, "
+    "then answer the actual question with detail you have NOT already given. Sending the same "
+    "message twice is a failure.\n"
     "TONE: warm and conversational, like a helpful colleague — NOT a rigid rule-bot. A greeting, "
     "a thanks, or a short/ambiguous reply (e.g. 'carry over', 'ok', 'and?') → reply briefly and "
     "naturally, and offer what you can help with. When a message refers to a round/issue/asset, "
@@ -847,22 +895,40 @@ async def run_building_qa(llm, db, building: str, question: str, today: str,
                + f"\n\nToday is {today}. When you mean today, say "
                "\"today\" — NEVER state a specific calendar date unless a tool result contains it.")
         llm_errored = False
+        parroted = False
+        prev_reply = _last_assistant(history)     # what we said last turn — must not just resend it
         for _attempt in range(2):
             try:
                 ctx = build_ctx(db, building, today, asker=asker)
-                out = await run_agent(llm, sys, question, ctx, history=history)
+                # Attempt 2 (or any retry after a parroted answer) carries an explicit corrective:
+                # the model's own last reply is the most likely continuation, so it has to be told
+                # to advance instead of restating.
+                sys_a = sys + (_NO_REPEAT_NUDGE if (parroted or _attempt) else "")
+                out = await run_agent(llm, sys_a, question, ctx, history=history,
+                                      temperature=_CHAT_TEMPERATURE)
                 text = _crisp(out.get("text") or "")
                 ev = out.get("evidence")
                 if (text and len(text) <= 800 and not _looks_like_reasoning(text)
                         and verify_grounded(text, ev, extra=hist_ctx)["grounded"]):
+                    if _is_repeat(text, prev_reply):
+                        parroted = True     # a restatement is a FAILED answer — retry, don't ship it
+                        continue
                     return {"text": text, "source": "agent"}
-            except Exception:
+            except Exception as e:
                 # An actual call failure (rate limit / timeout / provider down), not just an
                 # ungrounded answer — remember it so we can acknowledge instead of redirecting.
+                # LOG it: a silently-swallowed exception here is indistinguishable from a model
+                # that simply had nothing to say, and that made a live outage undiagnosable.
+                logger.warning("[qa] agent attempt %d failed: %s: %s",
+                               _attempt + 1, type(e).__name__, e)
                 llm_errored = True
         soc = _social_reply(question)
         if soc:
             return {"text": soc, "source": "social"}
+        # Still restating after the corrective retry → say so and move the conversation on, rather
+        # than sending the same summary a third time.
+        if parroted:
+            return {"text": _REPEAT_FALLBACK, "source": "repeat_guard"}
         det = building_qa_deterministic(db, building, today, question)
         # LLM was needed but is unreachable and we have nothing grounded (the generic redirect) —
         # tell them we're swamped rather than dumping the capability list as if we understood.

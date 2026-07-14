@@ -168,10 +168,17 @@ class ArvisxLLM:
     async def ask_tools(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]],
                         system_msgs: Optional[List[Dict[str, str]]] = None,
                         tool_choice: str = "auto", max_tokens: int = 2000,
+                        temperature: float = 0.0,
                         **_: Any) -> Dict[str, Any]:
         """Native function-calling turn. Returns:
         {"tool_calls": [{"id","name","args"}], "content": str, "finish": str,
-         "assistant_message": <openai msg dict for the follow-up>}."""
+         "assistant_message": <openai msg dict for the follow-up>}.
+
+        `temperature` defaults to 0 (extraction/classification want determinism). The CONVERSATIONAL
+        agent passes a non-zero value: at 0 the model re-walks the identical token path whenever the
+        tools and context repeat, so with its own last answer in history it parrots that answer back
+        verbatim, turn after turn. Sampling breaks that lock-in; it can't weaken grounding, because
+        every figure still has to come from a tool result and survive verify_grounded."""
         msgs: List[Dict[str, Any]] = []
         for s in (system_msgs or []):
             msgs.append({"role": s.get("role", "system"), "content": s.get("content", "")})
@@ -180,7 +187,7 @@ class ArvisxLLM:
         def _call():
             return self._client.chat.completions.create(
                 model=self.model, messages=msgs, tools=tools, tool_choice=tool_choice,
-                temperature=0, max_tokens=max_tokens)
+                temperature=temperature, max_tokens=max_tokens)
 
         resp = await asyncio.to_thread(_call)
         _record_usage(resp, "tool", self.model)

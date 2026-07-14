@@ -19,6 +19,7 @@ import pytest
 from arvisx.checklist_skills import (
     building_qa_deterministic, run_building_qa, _persona,
     _invariants_preserved, render_message, _LLM_BUSY_MSG, _REDIRECT_MSG,
+    _is_repeat, _REPEAT_FALLBACK,
 )
 from arvisx.persistence import ArvisxDb
 
@@ -121,6 +122,67 @@ def test_invariants_invented_number_fails():
 
 def test_render_message_no_llm_returns_template():
     assert asyncio.run(render_message(None, _TMPL, facts="")) == _TMPL
+
+
+# ── the repetition loop: a follow-up must ADVANCE, never restate the last answer ──
+_SWEEP = ("There are several open issues, including electrical room inspections and water treatment "
+          "plant issues, and some pending tasks from today's rounds, like diesel pump fuel level "
+          "checks. Also, some PPM tasks are overdue, like for DG-1 and DG-2.")
+
+
+class _ParrotLLM:
+    """Always re-emits its own previous answer — the exact degenerate loop seen in production,
+    where temperature=0 + its last reply in history made the model repeat forever."""
+
+    def __init__(self, line=_SWEEP):
+        self.line = line
+        self.calls = 0
+        self.temps = []
+
+    async def ask_tools(self, messages, schemas, system_msgs=None, temperature=0.0, **k):
+        self.calls += 1
+        self.temps.append(temperature)
+        return {"assistant_message": {"role": "assistant", "content": self.line},
+                "tool_calls": [], "content": self.line, "finish": "stop"}
+
+
+def test_is_repeat_detects_restatement():
+    assert _is_repeat(_SWEEP, _SWEEP)
+    assert _is_repeat(_SWEEP, _SWEEP.replace("several", "a few"))   # near-identical still a repeat
+    assert not _is_repeat("All shifts are unassigned — that's the cause.", _SWEEP)
+    assert not _is_repeat("hi", "hey")                              # short social replies are fine
+
+
+def test_parroted_answer_is_never_shipped(tmp_path):
+    db = _seed(tmp_path)
+    history = [{"role": "user", "content": "whats up with the building"},
+               {"role": "assistant", "content": _SWEEP}]
+    llm = _ParrotLLM()
+    res = asyncio.run(run_building_qa(llm, db, "one-anthem", "Why is it like that?", T,
+                                      history=history))
+    assert res["text"] != _SWEEP, "a restatement of the last answer must never be sent"
+    assert res["source"] == "repeat_guard"
+    assert res["text"] == _REPEAT_FALLBACK
+    assert llm.calls >= 2, "a parroted answer must trigger the corrective retry"
+
+
+def test_conversation_runs_at_nonzero_temperature(tmp_path):
+    # temperature=0 is what locks the model onto its own previous answer — the chat channel
+    # must sample. (Extraction/classification stay deterministic elsewhere.)
+    db = _seed(tmp_path)
+    llm = _ParrotLLM()
+    asyncio.run(run_building_qa(llm, db, "one-anthem", "what's pending?", T, history=[]))
+    assert llm.temps and all(t > 0 for t in llm.temps), f"chat ran at temp {llm.temps}"
+
+
+def test_non_repeating_answer_still_passes(tmp_path):
+    db = _seed(tmp_path)
+    history = [{"role": "user", "content": "whats up"},
+               {"role": "assistant", "content": _SWEEP}]
+    llm = _ParrotLLM("All three shifts are unassigned today, which is why nothing got done.")
+    res = asyncio.run(run_building_qa(llm, db, "one-anthem", "Why is it like that?", T,
+                                      history=history))
+    assert res["source"] == "agent" and "unassigned" in res["text"]
 
 
 # ── #3: shift day-parts come from real template windows, not a hardcoded rule ──

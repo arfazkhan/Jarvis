@@ -334,6 +334,11 @@ def create_app():
         _emb.set_config_db(state.db)
     except Exception:
         pass
+    try:                                    # speech-to-text (WhatsApp voice notes) — same contract
+        from arvisx import stt as _stt
+        _stt.set_config_db(state.db)
+    except Exception:
+        pass
 
     # Background-task keeper: asyncio GCs tasks with no strong reference mid-run, so hold
     # them until done (used for fire-and-forget LLM work like manual-distil + learn-from-fix).
@@ -1053,7 +1058,8 @@ def create_app():
                         res["text"] = m
                         res["source"] = "meta"
             except Exception:
-                pass
+                # Never swallow silently — this hid a live conversational outage once already.
+                logger.warning("[wa_ask] checklist Q&A path failed", exc_info=True)
         _record_turn(building, sender.get("name") or role, role, q, res.get("text", ""))
         return {"intent": res.get("intent", "qa"), "text": res["text"], "source": res.get("source", "")}
 
@@ -2542,6 +2548,44 @@ def create_app():
             state.db.set_setting("_embed", "api_key", new_key)
         return {"saved": True, "provider": provider, "model": str(p.get("model", "")).strip()}
 
+    @app.get("/api/v1/admin/stt/config")
+    async def admin_stt_config_get(authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        """Current speech-to-text config (WhatsApp voice notes) + catalog. Key never returned in full."""
+        if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
+            raise HTTPException(403, "admin only")
+        from arvisx.stt import STT_PROVIDERS, STT_CATALOG, _TRANSLATE_CAPABLE, stt_available
+        key = state.db.get_setting("_stt", "api_key", "")
+        return {
+            "provider": state.db.get_setting("_stt", "provider", ""),
+            "model": state.db.get_setting("_stt", "model", ""),
+            "base_url": state.db.get_setting("_stt", "base_url", ""),
+            "api_key_set": bool(key), "api_key_last4": key[-4:] if key else "",
+            "available": stt_available(),
+            "providers": sorted(STT_PROVIDERS.keys()), "catalog": STT_CATALOG,
+            "translate_capable": list(_TRANSLATE_CAPABLE),
+            "defaults": {p: {"base_url": v[1], "model": v[2]} for p, v in STT_PROVIDERS.items()},
+        }
+
+    @app.post("/api/v1/admin/stt/config")
+    async def admin_stt_config_set(payload: Dict[str, Any] = Body(...),
+                                   authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        """Save the speech-to-text provider/model/API key from the admin panel (overrides env).
+        Blank api_key keeps the existing one. Enables WhatsApp voice notes."""
+        if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
+            raise HTTPException(403, "admin only")
+        p = payload or {}
+        provider = str(p.get("provider", "")).strip().lower()
+        from arvisx.stt import STT_PROVIDERS
+        if provider not in STT_PROVIDERS:
+            raise HTTPException(400, f"unknown provider — pick one of {sorted(STT_PROVIDERS)}")
+        state.db.set_setting("_stt", "provider", provider)
+        state.db.set_setting("_stt", "model", str(p.get("model", "")).strip())
+        state.db.set_setting("_stt", "base_url", str(p.get("base_url", "")).strip())
+        new_key = str(p.get("api_key", "")).strip()
+        if new_key:
+            state.db.set_setting("_stt", "api_key", new_key)
+        return {"saved": True, "provider": provider, "model": str(p.get("model", "")).strip()}
+
     @app.get("/api/v1/admin/llm/test")
     async def admin_llm_test(authorization: str = Header(default=""), x_api_key: str = Header(default="")):
         """Smoke-test the LLM: one minimal round-trip. Returns ok + provider/model/latency."""
@@ -2801,6 +2845,46 @@ def create_app():
         name, _mt = await _save_photo_body(request, filename)
         state.db.set_issue_photo(issue_id, name)
         return {"saved": True, "issue_id": issue_id, "photo": name}
+
+    # ── Voice notes: audio → text, then the SAME pipeline as a typed message ──
+    @app.post("/api/v1/voice/transcribe")
+    async def voice_transcribe(request: Request, filename: str = "voice.ogg",
+                               seconds: float = 0.0, translate: int = 1,
+                               building: str = "one-anthem"):
+        """Raw audio bytes in the body (WhatsApp voice notes are OGG/Opus — Whisper takes them
+        natively, no transcode). `translate=1` returns ENGLISH whatever was spoken, because the
+        agent prompts + grounding guard are English. Returns {} text when STT isn't configured —
+        the caller must say it couldn't hear, never guess."""
+        audio = await request.body()
+        if not audio:
+            raise HTTPException(400, "empty audio body")
+        if len(audio) > 20 * 1024 * 1024:
+            raise HTTPException(413, "voice note too large")
+        from arvisx.stt import transcribe
+        out = await asyncio.to_thread(transcribe, audio, filename, bool(translate),
+                                      float(seconds or 0.0), building)
+        if not out:
+            return {"text": "", "available": False}
+        return {"text": out["text"], "available": True, "model": out["model"],
+                "translated": out["translated"], "seconds": out.get("seconds", 0.0)}
+
+    @app.post("/api/v1/whatsapp/observe")
+    async def wa_observe(payload: Dict[str, Any] = Body(...)):
+        """Passive capture: log what was said WITHOUT replying. Group voice notes are all
+        transcribed so recall / decision-capture / issue-detection can see them, but the bot only
+        SPEAKS when addressed — same rule as group text. No reply is generated here."""
+        p = payload or {}
+        text = str(p.get("text", "")).strip()
+        if not text:
+            return {"logged": False}
+        building = str(p.get("building", "one-anthem")).strip() or "one-anthem"
+        by = str(p.get("by", "")).strip()
+        by_lid = str(p.get("by_lid", "")).strip()
+        sender = _resolve_sender(by, building, by_lid=by_lid) if (by or by_lid) else {}
+        name = sender.get("name") or str(p.get("name", "")).strip() or (by or "unknown")
+        role = sender.get("role", "viewer")
+        _record_turn(building, name, role, text, "")     # reply="" → observed, not answered
+        return {"logged": True, "sender": name, "role": role}
 
     @app.get("/api/v1/photos/{name}")
     async def photo_get(name: str):

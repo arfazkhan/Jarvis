@@ -42,6 +42,22 @@ def embed_cost(tokens: int) -> float:
     return round((tokens or 0) / 1_000_000 * _f("ARVISX_EMBED_PRICE", 0.0), 6)
 
 
+def stt_cost(seconds: float) -> float:
+    """Cost of transcribing `seconds` of audio from a configurable per-audio-HOUR rate
+    (ARVISX_STT_PRICE). e.g. Groq whisper-large-v3 ≈ ₹9.5 per audio-hour — a 20-second voice
+    note is a rounding error, but it is metered so the admin panel can show it honestly."""
+    return round(max(0.0, seconds or 0.0) / 3600.0 * _f("ARVISX_STT_PRICE", 0.0), 6)
+
+
+def record_stt(model: str, seconds: float, building: str = "") -> None:
+    if _db is None:
+        return
+    try:
+        _db.log_usage(building, "stt", model=model, n=1, cost=stt_cost(seconds))
+    except Exception as e:
+        logger.warning(f"record_stt failed: {e}")
+
+
 def record_embed(model: str, tokens: int, building: str = "") -> None:
     if _db is None:
         return
