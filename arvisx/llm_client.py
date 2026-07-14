@@ -210,8 +210,16 @@ class ArvisxLLM:
             msgs.append({"role": m.get("role", "user"), "content": m.get("content", "")})
 
         def _call():
-            return self._client.chat.completions.create(
-                model=self.model, messages=msgs, temperature=0)
+            # Ask for a native JSON object so parsing is reliable by construction, not by
+            # scraping prose. Some OpenAI-compatible providers (K2Think / a few self-hosted
+            # gateways) reject response_format — fall back to a plain call + _extract_json.
+            try:
+                return self._client.chat.completions.create(
+                    model=self.model, messages=msgs, temperature=0,
+                    response_format={"type": "json_object"})
+            except Exception:
+                return self._client.chat.completions.create(
+                    model=self.model, messages=msgs, temperature=0)
 
         resp = await asyncio.to_thread(_call)
         _record_usage(resp, channel, self.model)

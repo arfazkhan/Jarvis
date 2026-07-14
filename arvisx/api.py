@@ -1465,8 +1465,11 @@ def create_app():
             return
         llm = _phrasing_llm()
         if llm is not None:
-            from arvisx.checklist_skills import phrase_line
-            msg = await phrase_line(llm, msg, facts)
+            from arvisx.checklist_skills import render_message
+            # who = the technician being recognised — lock the name so a warmed line can't drop
+            # or swap who gets the credit.
+            locks = [who] if who else None
+            msg = await render_message(llm, msg, facts=facts, locks=locks)
         state.db.enqueue_notification(run["building_id"], msg, to_number="", kind="round_done")
 
     async def _learn_from_resolved_issue(issue_id: int) -> None:
@@ -2755,9 +2758,12 @@ def create_app():
         # defer the send, reword each grounded notice, then enqueue (baseline on any failure).
         lapsed = ci.lapse_stale_rounds(state.db, building, enqueue=(llm is None))
         if llm is not None:
-            from arvisx.checklist_skills import phrase_line
+            from arvisx.checklist_skills import render_message
             for f in lapsed:
-                line = await phrase_line(llm, f.get("msg", ""), f.get("facts", ""))
+                # Lock the shift name + who's on the hook so a warmed line can't reword away
+                # the accountability. Skip 'unassigned' (generic, not a name to protect).
+                locks = [f.get("shift", "")] + ([f["who"]] if f.get("who") not in ("", "unassigned") else [])
+                line = await render_message(llm, f.get("msg", ""), facts=f.get("facts", ""), locks=locks)
                 if line:
                     state.db.enqueue_notification(building, line, to_number="", kind="round_lapsed")
         fired = ci.round_reminders(state.db, building, remind_after_h=remind_h, escalate_after_h=esc_h)

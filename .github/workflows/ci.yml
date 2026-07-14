@@ -77,20 +77,45 @@ jobs:
   integration:
     runs-on: ubuntu-latest
     needs: [lint, test]
-    
+
     steps:
       - uses: actions/checkout@v3
-      
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
-      
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      
+
       - name: Run integration tests
         run: |
           pytest tests/test_integration*.py -v || echo "Integration tests not yet implemented"
+
+  # ArvisX / AllGud — the WhatsApp-native building-ops package (arvisx/). Separate
+  # from the legacy agent/ tree above. Offline-only: the golden eval + full arvisx
+  # suite run with no LLM key (online-marked cases are deselected).
+  arvisx-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install ArvisX dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          pip install -r arvisx/requirements-pilot.txt -r arvisx/requirements-llm.txt
+
+      - name: Run ArvisX tests (offline)
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          pytest arvisx/tests/ -m "not online" -q

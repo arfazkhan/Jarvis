@@ -388,6 +388,16 @@ async def summarize_chat(llm, turns, label: str) -> str:
     return f"🗒 Recap ({label}) — topics raised:\n" + "\n".join(lines[:12])
 
 
+# Catch-all when no keyword matched: a helpful nudge, not a stats dump.
+_REDIRECT_MSG = ("I can help with this building's rounds, issues, assets, PPM and reports. Try "
+                 "\"what's pending?\", \"what's open?\", \"riskiest system?\", or \"weekly report\".")
+# Shown when the language model itself is unreachable (rate-limited / down / timing out) AND we
+# have nothing grounded to fall back on — a warm "not live right now", never a technical reason.
+_LLM_BUSY_MSG = ("I'm getting a lot of requests right now and can't get to that one this moment 🙏 "
+                 "Please try again in a few minutes. Meanwhile I can still pull up rounds, what's "
+                 "pending, or open issues if you need those.")
+
+
 def building_qa_deterministic(db, building: str, today: str, question: str) -> str:
     """Grounded fallback for the common questions — riskiest system, what's open, overview."""
     q = (question or "").lower()
@@ -432,8 +442,7 @@ def building_qa_deterministic(db, building: str, today: str, question: str) -> s
         return ("*Building overview:*\n" + "\n".join(f"• {h['asset']}: {h['score']}/100" for h in top)
                 + "\nAsk 'riskiest system?' or 'what's open?'")
     # No keyword matched → a helpful redirect, NOT a stats dump for an unrelated question.
-    return ("I can help with this building's rounds, issues, assets, PPM and reports. Try "
-            "\"what's pending?\", \"what's open?\", \"riskiest system?\", or \"weekly report\".")
+    return _REDIRECT_MSG
 
 
 _QA_SYSTEM = (
@@ -460,8 +469,9 @@ _QA_SYSTEM = (
     "the undone items per shift with each assignee's completion %. It auto-scopes: a TECHNICIAN "
     "only ever sees their OWN pending items; a MANAGER/owner sees everyone. When a manager asks "
     "and someone is behind, name them with their % and add a nudge hint like: \"Reply 'remind "
-    "<name>' to nudge them.\" Note: morning ≈ Shift I, afternoon/evening ≈ Shift II, night ≈ "
-    "Shift III. For 'who's on the team / who can I assign', call team_roster. For specs / service "
+    "<name>' to nudge them.\" (A per-building shift day-part guide is appended below when "
+    "available — use it to map words like 'morning'/'night' to this building's shifts.) "
+    "For 'who's on the team / who can I assign', call team_roster. For specs / service "
     "intervals / how-to-fix, call "
     "asset_manual (the equipment's uploaded manual); for 'has this happened before / chronic / "
     "recurring', call recurring_issues (building memory). Cite the asset + figure; if the data "
@@ -642,25 +652,65 @@ def _numbers_grounded(line: str, allowed: str) -> bool:
     return all(n in allowed_nums for n in _re.findall(r"\d+", line))
 
 
-async def phrase_line(llm, baseline: str, facts: str = "") -> str:
-    """Rephrase a grounded deterministic alert into a natural WhatsApp line. Falls back to the
-    baseline on no-llm / leaked reasoning / new numbers / any error — the substance never
-    depends on the LLM, only the wording does."""
-    if not llm or not baseline:
-        return baseline
+def _lead_emoji(s: str) -> str:
+    """The leading emoji of a template, if any (severity marker: ⚠️ 🔴 ✅ 🙏 …)."""
+    import re as _re
+    m = _re.match(r"\s*([\U0001F000-\U0001FAFF☀-➿⬀-⯿])", s or "")
+    return m.group(1) if m else ""
+
+
+def _invariants_preserved(out: str, source: str, locks=None) -> bool:
+    """The phrasing-sandbox invariance check. A warmed line may reword freely but must keep every
+    load-bearing token verbatim: no new numbers, each *bold* span from the source survives, the
+    leading emoji is unchanged, and any caller-supplied `locks` (names, ids) are still present.
+    Anything missing → reject, so the caller ships the deterministic template unchanged."""
+    import re as _re
+    # numbers — nothing invented
+    if not _numbers_grounded(out, source):
+        return False
+    # *bold* spans the template emphasised must still be there
+    for span in _re.findall(r"\*[^*\n]+\*", source):
+        if span not in out:
+            return False
+    # leading severity emoji must not be dropped or swapped
+    le = _lead_emoji(source)
+    if le and _lead_emoji(out) != le:
+        return False
+    # explicit locks the caller knows (a technician's name, an issue id) — must survive
+    for lk in (locks or []):
+        lk = str(lk).strip()
+        if lk and lk.lower() not in out.lower():
+            return False
+    return True
+
+
+async def render_message(llm, template: str, *, facts: str = "", locks=None) -> str:
+    """Phrasing sandbox — the one primitive for warming a deterministic message. A TEMPLATE whose
+    meaning is fixed may be reworded by the model into a more natural WhatsApp line, but ships only
+    if every invariant survives (numbers, *bold*, leading emoji, caller `locks`); otherwise the
+    template goes out unchanged. Substance never depends on the model, only the wording. Use for
+    alerts, digests, recognitions — anything with a locked meaning. (Grounded Q&A answers are NOT
+    templates; they keep their own verify_grounded contract.) No llm / any failure → template."""
+    if not llm or not template:
+        return template
     try:
         out = await llm.ask_json(
             messages=[{"role": "user",
-                       "content": f"Baseline alert:\n{baseline}\n\nFacts:\n{facts or baseline}"}],
+                       "content": f"Baseline alert:\n{template}\n\nFacts:\n{facts or template}"}],
             system_msgs=[{"role": "system", "content": _PHRASE_SYS}], channel="chat")
     except Exception:
-        return baseline
+        return template
     line = _crisp(str(out.get("line", ""))).strip() if isinstance(out, dict) else ""
     if not line or _looks_like_reasoning(line) or len(line) > 300:
-        return baseline
-    if not _numbers_grounded(line, f"{baseline} {facts}"):
-        return baseline
+        return template
+    if not _invariants_preserved(line, f"{template} {facts}", locks=locks):
+        return template
     return line
+
+
+async def phrase_line(llm, baseline: str, facts: str = "", locks=None) -> str:
+    """Back-compat wrapper over render_message (the phrasing sandbox)."""
+    return await render_message(llm, baseline, facts=facts, locks=locks)
 
 
 _RESIDENT_SYS = (
@@ -791,8 +841,12 @@ async def run_building_qa(llm, db, building: str, question: str, today: str,
         # Retry once — K2Think is occasionally flaky (transient timeout / a turn where it answers
         # from context without re-calling a tool). A second pass usually lands a grounded answer,
         # so a live blip doesn't dump the user into the context-blind deterministic fallback.
-        sys = (_QA_SYSTEM + _persona(asker) + f"\n\nToday is {today}. When you mean today, say "
+        from arvisx.checklist_intel import shift_synonyms
+        smap = shift_synonyms(building)          # per-building shift day-part guide (config, not prompt)
+        sys = (_QA_SYSTEM + _persona(asker) + (("\n\n" + smap) if smap else "")
+               + f"\n\nToday is {today}. When you mean today, say "
                "\"today\" — NEVER state a specific calendar date unless a tool result contains it.")
+        llm_errored = False
         for _attempt in range(2):
             try:
                 ctx = build_ctx(db, building, today, asker=asker)
@@ -803,7 +857,18 @@ async def run_building_qa(llm, db, building: str, question: str, today: str,
                         and verify_grounded(text, ev, extra=hist_ctx)["grounded"]):
                     return {"text": text, "source": "agent"}
             except Exception:
-                pass
+                # An actual call failure (rate limit / timeout / provider down), not just an
+                # ungrounded answer — remember it so we can acknowledge instead of redirecting.
+                llm_errored = True
+        soc = _social_reply(question)
+        if soc:
+            return {"text": soc, "source": "social"}
+        det = building_qa_deterministic(db, building, today, question)
+        # LLM was needed but is unreachable and we have nothing grounded (the generic redirect) —
+        # tell them we're swamped rather than dumping the capability list as if we understood.
+        if llm_errored and det == _REDIRECT_MSG:
+            return {"text": _LLM_BUSY_MSG, "source": "llm_busy"}
+        return {"text": det, "source": "deterministic"}
     soc = _social_reply(question)
     if soc:
         return {"text": soc, "source": "social"}
