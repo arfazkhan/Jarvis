@@ -14,10 +14,45 @@ import math
 import os
 from typing import List, Optional, Tuple
 
+# provider → (default_base_url, default_model). OpenAI-compatible /embeddings endpoints.
+EMBED_PROVIDERS = {
+    "openai": ("https://api.openai.com/v1", "text-embedding-3-small"),
+    "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai/", "text-embedding-004"),
+    "nvidia": ("https://integrate.api.nvidia.com/v1", "nvidia/nv-embedqa-e5-v5"),
+    "voyage": ("https://api.voyageai.com/v1", "voyage-3-lite"),
+    "custom": ("", ""),
+}
+EMBED_CATALOG = {
+    "openai": ["text-embedding-3-small", "text-embedding-3-large"],
+    "gemini": ["text-embedding-004", "gemini-embedding-001"],
+    "nvidia": ["nvidia/nv-embedqa-e5-v5", "nvidia/nv-embed-v1"],
+    "voyage": ["voyage-3-lite", "voyage-3"],
+    "custom": [],
+}
+
+_CONFIG_DB = None
+
+
+def set_config_db(db) -> None:
+    global _CONFIG_DB
+    _CONFIG_DB = db
+
 
 def _embed_config():
-    """(base_url, api_key, model) for the embeddings endpoint. Explicit ARVISX_EMBED_* wins;
-    otherwise reuse the configured LLM provider's key/base (same OpenAI-compatible host)."""
+    """(base_url, api_key, model) for the embeddings endpoint. Precedence: the admin panel's
+    saved config (DB '_embed') → explicit ARVISX_EMBED_* env → the LLM provider's key/base."""
+    if _CONFIG_DB is not None:
+        try:
+            prov = (_CONFIG_DB.get_setting("_embed", "provider", "") or "").strip().lower()
+            key = (_CONFIG_DB.get_setting("_embed", "api_key", "") or "").strip()
+            if prov and key:
+                pdef = EMBED_PROVIDERS.get(prov, ("", ""))
+                base = (_CONFIG_DB.get_setting("_embed", "base_url", "") or "").strip() or pdef[0]
+                model = (_CONFIG_DB.get_setting("_embed", "model", "") or "").strip() or pdef[1]
+                if base and model:
+                    return base, key, model
+        except Exception:
+            pass
     from arvisx.llm_client import _PROVIDERS
     prov = os.environ.get("ARVISX_LLM_PROVIDER", "k2think").strip().lower()
     key_env, base, _model = _PROVIDERS.get(prov, _PROVIDERS["k2think"])

@@ -320,6 +320,20 @@ def create_app():
     # Usage/cost metrics recorder (WhatsApp + LLM) writes to this building's DB.
     from arvisx import metrics as _metrics
     _metrics.set_db(state.db)
+    # LLM provider/model/key are configurable from the admin panel (stored in the DB) — make_llm
+    # reads that before falling back to env, so the operator isn't locked to K2Think.
+    try:
+        from arvisx import llm_client as _llmc
+        _llmc.set_config_db(state.db)
+        if _llmc._db_llm_config():          # a saved provider → enable the LLM layer (survives restart)
+            os.environ["ARVIS_X_LLM"] = "1"
+    except Exception:
+        pass
+    try:                                    # embeddings provider/model/key also admin-configurable
+        from arvisx import embeddings as _emb
+        _emb.set_config_db(state.db)
+    except Exception:
+        pass
 
     # Background-task keeper: asyncio GCs tasks with no strong reference mid-run, so hold
     # them until done (used for fire-and-forget LLM work like manual-distil + learn-from-fix).
@@ -1598,7 +1612,7 @@ def create_app():
 
     _ACTIONY = re.compile(
         r"\b(re-?assign|assign|mark|set|move|change|close|resolve|reopen|re-?open|start|"
-        r"sign\s*off|signoff|remind|put\s+\w+\s+on)\b", re.I)
+        r"sign\s*off|signoff|remind|nudge|send|share|forward|give|link)\b", re.I)
 
     async def _try_llm_action(q: str, sender: Dict[str, Any], building: str):
         """Natural-language write, LLM-mapped → CONFIRM → deterministic execute. Handles the
@@ -1614,8 +1628,18 @@ def create_app():
         openi = [i for i in state.db.list_issues(building) if i["status"] != "resolved"]
         ctx = ("Technicians: " + (", ".join(techs) or "none") + "\nShifts: 1, 2, 3\nOpen issues: "
                + ("; ".join(f"#{i['id']} {i.get('title', '')} [{i.get('asset') or ''}]" for i in openi[:10]) or "none"))
+        # Recent conversation → the extractor can resolve referents ("send HIM the link").
+        from datetime import datetime as _dta, timedelta as _tda
+        recent = state.db.chat_since(building, (_dta.now() - _tda(minutes=40)).isoformat(timespec="seconds"))
+        history = []
+        for t in recent[-6:]:
+            if (t.get("reply") or "") in ("(recap)", "(recall)"):
+                continue
+            history.append({"role": "user", "content": t.get("text", "")})
+            if t.get("reply"):
+                history.append({"role": "assistant", "content": t.get("reply", "")})
         from arvisx.checklist_skills import extract_action
-        a = await extract_action(llm, q, ctx)
+        a = await extract_action(llm, q, ctx, history=history)
         if not a:
             return None
         num = sender.get("number", "")
@@ -2440,6 +2464,80 @@ def create_app():
             raise HTTPException(403, "admin only")
         state.db.set_user_active(username, False)
         return {"username": username, "active": False}
+
+    @app.get("/api/v1/admin/llm/config")
+    async def admin_llm_config_get(authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        """Current LLM config (from the admin panel) + the provider/model catalog for the UI.
+        The API key is never returned in full — only whether one is set + its last 4."""
+        if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
+            raise HTTPException(403, "admin only")
+        from arvisx.llm_client import PROVIDER_CATALOG, _PROVIDERS
+        key = state.db.get_setting("_llm", "api_key", "")
+        return {
+            "provider": state.db.get_setting("_llm", "provider", ""),
+            "model": state.db.get_setting("_llm", "model", ""),
+            "base_url": state.db.get_setting("_llm", "base_url", ""),
+            "api_key_set": bool(key), "api_key_last4": key[-4:] if key else "",
+            "providers": sorted(_PROVIDERS.keys()), "catalog": PROVIDER_CATALOG,
+            "defaults": {p: {"base_url": v[1], "model": v[2]} for p, v in _PROVIDERS.items()},
+        }
+
+    @app.post("/api/v1/admin/llm/config")
+    async def admin_llm_config_set(payload: Dict[str, Any] = Body(...),
+                                   authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        """Save the LLM provider/model/API key from the admin panel (overrides env). Blank
+        api_key keeps the existing one (so you can change model without re-entering the key)."""
+        if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
+            raise HTTPException(403, "admin only")
+        p = payload or {}
+        provider = str(p.get("provider", "")).strip().lower()
+        from arvisx.llm_client import _PROVIDERS
+        if provider not in _PROVIDERS:
+            raise HTTPException(400, f"unknown provider — pick one of {sorted(_PROVIDERS)}")
+        state.db.set_setting("_llm", "provider", provider)
+        state.db.set_setting("_llm", "model", str(p.get("model", "")).strip())
+        state.db.set_setting("_llm", "base_url", str(p.get("base_url", "")).strip())
+        new_key = str(p.get("api_key", "")).strip()
+        if new_key:                                     # blank = keep the existing key
+            state.db.set_setting("_llm", "api_key", new_key)
+        os.environ["ARVIS_X_LLM"] = "1"                 # enable the LLM layer once a provider is set
+        return {"saved": True, "provider": provider, "model": str(p.get("model", "")).strip()}
+
+    @app.get("/api/v1/admin/embed/config")
+    async def admin_embed_config_get(authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        """Current embeddings config (semantic chat recall) + catalog. Key never returned in full."""
+        if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
+            raise HTTPException(403, "admin only")
+        from arvisx.embeddings import EMBED_PROVIDERS, EMBED_CATALOG
+        key = state.db.get_setting("_embed", "api_key", "")
+        return {
+            "provider": state.db.get_setting("_embed", "provider", ""),
+            "model": state.db.get_setting("_embed", "model", ""),
+            "base_url": state.db.get_setting("_embed", "base_url", ""),
+            "api_key_set": bool(key), "api_key_last4": key[-4:] if key else "",
+            "providers": sorted(EMBED_PROVIDERS.keys()), "catalog": EMBED_CATALOG,
+            "defaults": {p: {"base_url": v[0], "model": v[1]} for p, v in EMBED_PROVIDERS.items()},
+        }
+
+    @app.post("/api/v1/admin/embed/config")
+    async def admin_embed_config_set(payload: Dict[str, Any] = Body(...),
+                                     authorization: str = Header(default=""), x_api_key: str = Header(default="")):
+        """Save the embeddings provider/model/API key from the admin panel (overrides env). Blank
+        api_key keeps the existing one. Enables semantic (vs keyword) chat recall."""
+        if not _auth_mod.is_admin(_writer_role(authorization, x_api_key)):
+            raise HTTPException(403, "admin only")
+        p = payload or {}
+        provider = str(p.get("provider", "")).strip().lower()
+        from arvisx.embeddings import EMBED_PROVIDERS
+        if provider not in EMBED_PROVIDERS:
+            raise HTTPException(400, f"unknown provider — pick one of {sorted(EMBED_PROVIDERS)}")
+        state.db.set_setting("_embed", "provider", provider)
+        state.db.set_setting("_embed", "model", str(p.get("model", "")).strip())
+        state.db.set_setting("_embed", "base_url", str(p.get("base_url", "")).strip())
+        new_key = str(p.get("api_key", "")).strip()
+        if new_key:
+            state.db.set_setting("_embed", "api_key", new_key)
+        return {"saved": True, "provider": provider, "model": str(p.get("model", "")).strip()}
 
     @app.get("/api/v1/admin/llm/test")
     async def admin_llm_test(authorization: str = Header(default=""), x_api_key: str = Header(default="")):

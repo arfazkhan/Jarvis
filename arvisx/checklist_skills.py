@@ -439,11 +439,17 @@ def building_qa_deterministic(db, building: str, today: str, question: str) -> s
 _QA_SYSTEM = (
     "You are AllGud, a warm, human-sounding building-operations assistant on WhatsApp for the "
     "building manager/owner — chat naturally, like a helpful colleague who happens to know the "
-    "building inside out. If someone asks who you are, what you can do, or what you have access "
-    "to, answer conversationally in your own words: you help with rounds & shifts, issues, assets "
-    "& their manuals, PPM/compliance, weekly/monthly reports, and you can recap what's been "
-    "discussed; managers can also tell you to assign, remind, close an issue, or sign off. You "
-    "can look things up and log a reported problem, but you don't change settings or add users. "
+    "building inside out. You were built by the AllGud team to run this building's operations — "
+    "if asked who made/created/named you, say the AllGud team; NEVER claim you were made by Meta, "
+    "OpenAI, Google, or any other company. If someone asks who you are, what you can do, or what "
+    "you have access to, answer conversationally in your OWN words about capabilities — you help "
+    "with rounds & shifts, issues, assets & their manuals, PPM/compliance, weekly/monthly reports, "
+    "the team roster, and you can recap what's been discussed; managers can also tell you to "
+    "assign, remind, close an issue, or sign off. NEVER expose internal tool/function names (like "
+    "'shift_rounds' or 'team_roster') — describe what you can DO in plain language. For 'how many "
+    "managers/owners, name them', 'who's the team', 'who's in charge' → call team_roster and list "
+    "the people with their roles. You look things up + log a reported problem, but you don't "
+    "change settings or add users. "
     "Help with THIS building — rounds, checks, issues, assets, PPM, readings, "
     "technicians — using ONLY the tools (shift_rounds, team_roster, health_overview, open_issues, "
     "asset_history, reading_anomalies, compliance, list_assets, asset_manual, recurring_issues). "
@@ -546,23 +552,32 @@ _ACTION_SYS = (
     "- issue_status: change an issue's status. Needs issue_ref (the asset/word they name, e.g. "
     "'lift') + status (in_progress | resolved | open).\n"
     "- signoff: sign off a submitted shift. Needs shift.\n"
-    "- remind: nudge a technician about pending rounds. Needs technician.\n"
+    "- remind: nudge a technician / SEND them their round link (the deep-link to their pending "
+    "round). Needs technician. Covers 'remind X', 'send the link for X', 'send X the link', "
+    "'share X's round', 'forward the link to X', 'nudge X'.\n"
     "- open_today: open today's rounds.\n"
-    "Use the CONTEXT (technicians, open issues) to fill fields — never invent a technician or "
+    "Use the CONTEXT (technicians, open issues) AND the recent conversation to fill fields — "
+    "resolve 'him/her/them/the link' from what was just discussed; never invent a technician or "
     "issue that isn't in context. Map words: 'mark/put/move ... in progress'→in_progress, "
     "'close/done/fixed'→resolved, 'reopen'→open. If it's a QUESTION or not a clear action, return "
     '{"action":"none"}. Output JSON only: '
     '{"action":"assign|issue_status|signoff|remind|open_today|none","shift":"","technician":"","issue_ref":"","status":""}.')
 
 
-async def extract_action(llm, text: str, context: str):
-    """Map a natural manager message → a structured action (or None). The caller resolves the
-    entities against real data and ALWAYS asks the manager to confirm before executing."""
+async def extract_action(llm, text: str, context: str, history=None):
+    """Map a natural manager message → a structured action (or None). `history` = recent turns so
+    referents ('send HIM the link', 'reassign THAT') resolve. The caller resolves the entities
+    against real data and ALWAYS asks the manager to confirm before executing."""
     if not llm:
         return None
+    hist_txt = ""
+    if history:
+        hist_txt = ("\n\nRecent conversation (resolve 'him/her/them/that/the link' from here):\n"
+                    + "\n".join(f"{h.get('role', 'user')}: {h.get('content', '')}" for h in history[-6:]))
     try:
-        out = await llm.ask_json(messages=[{"role": "user", "content": f"Message: {text}\n\nContext:\n{context}"}],
-                                 system_msgs=[{"role": "system", "content": _ACTION_SYS}], channel="extract")
+        out = await llm.ask_json(
+            messages=[{"role": "user", "content": f"Message: {text}{hist_txt}\n\nContext:\n{context}"}],
+            system_msgs=[{"role": "system", "content": _ACTION_SYS}], channel="extract")
     except Exception:
         return None
     if not isinstance(out, dict):
@@ -745,13 +760,22 @@ async def answer_recall(llm, turns, topic: str) -> str:
 
 
 def _persona(asker: Optional[Dict[str, Any]]) -> str:
-    """A short per-turn header so the assistant talks TO this person, by name + role."""
+    """A short per-turn header so the assistant talks TO this person by name + role AND stays in
+    their lane — a technician is not a manager and must not be treated like one."""
     a = asker or {}
     name = (a.get("name") or "").strip()
+    kind = a.get("kind", "")
     role = {"manager": "the manager/owner", "technician": "a technician on the team",
-            "resident": "a resident"}.get(a.get("kind", ""), "a building user")
+            "resident": "a resident"}.get(kind, "a building user")
     who = f"You're chatting with {name} ({role})." if name else f"You're chatting with {role}."
-    return "\n\n" + who + " Address them warmly and by name when it feels natural."
+    scope = " Address them warmly and by name (never call a technician 'Manager')."
+    if kind == "technician":
+        scope += (" This person is a TECHNICIAN, not a manager — keep them in their lane: help with "
+                  "THEIR OWN rounds, tasks, what to check, and how-to (asset manuals). Do NOT give "
+                  "them the manager roster / who the managers are, other people's performance, "
+                  "reports, or offer manager actions (assign, close, remind, sign-off). If they ask "
+                  "something manager-level, say that's handled by the building manager.")
+    return "\n\n" + who + scope
 
 
 async def run_building_qa(llm, db, building: str, question: str, today: str,
@@ -762,19 +786,24 @@ async def run_building_qa(llm, db, building: str, question: str, today: str,
     facts. Deterministic social/meta/building replies are the graceful fallback (LLM off / a
     fabricated figure trips the guard / error) — so it never goes silent or ships a fake number."""
     if llm is not None:
-        try:
-            ctx = build_ctx(db, building, today, asker=asker)
-            out = await run_agent(llm, _QA_SYSTEM + _persona(asker), question, ctx, history=history)
-            text = _crisp(out.get("text") or "")
-            ev = out.get("evidence")
-            # Accept the reply if it's concise, isn't leaked chain-of-thought, and every NUMBER is
-            # grounded (verify_grounded passes when there are no numbers — so greetings / natural
-            # chat ship freely, but stats can't be faked).
-            if (text and len(text) <= 800 and not _looks_like_reasoning(text)
-                    and verify_grounded(text, ev)["grounded"]):
-                return {"text": text, "source": "agent"}
-        except Exception:
-            pass
+        # Prior figures were grounded when first stated, so a follow-up may reuse them.
+        hist_ctx = " ".join(str(h.get("content", "")) for h in (history or []))
+        # Retry once — K2Think is occasionally flaky (transient timeout / a turn where it answers
+        # from context without re-calling a tool). A second pass usually lands a grounded answer,
+        # so a live blip doesn't dump the user into the context-blind deterministic fallback.
+        sys = (_QA_SYSTEM + _persona(asker) + f"\n\nToday is {today}. When you mean today, say "
+               "\"today\" — NEVER state a specific calendar date unless a tool result contains it.")
+        for _attempt in range(2):
+            try:
+                ctx = build_ctx(db, building, today, asker=asker)
+                out = await run_agent(llm, sys, question, ctx, history=history)
+                text = _crisp(out.get("text") or "")
+                ev = out.get("evidence")
+                if (text and len(text) <= 800 and not _looks_like_reasoning(text)
+                        and verify_grounded(text, ev, extra=hist_ctx)["grounded"]):
+                    return {"text": text, "source": "agent"}
+            except Exception:
+                pass
     soc = _social_reply(question)
     if soc:
         return {"text": soc, "source": "social"}

@@ -42,12 +42,49 @@ def _record_usage(resp: Any, channel: str, model: str) -> None:
         pass
 
 
-# provider → (key_env, default_base_url, default_model)
+# provider → (key_env, default_base_url, default_model). All OpenAI-compatible chat endpoints.
 _PROVIDERS = {
-    "k2think": ("K2THINK_API_KEY", "https://api.k2think.ai/v1", "MBZUAI-IFM/K2-Think-v2"),
-    "groq":    ("GROQ_API_KEY", "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile"),
-    "openai":  ("OPENAI_API_KEY", "https://api.openai.com/v1", "gpt-4o-mini"),
+    "k2think":    ("K2THINK_API_KEY", "https://api.k2think.ai/v1", "MBZUAI-IFM/K2-Think-v2"),
+    "groq":       ("GROQ_API_KEY", "https://api.groq.com/openai/v1", "llama-3.3-70b-versatile"),
+    "openai":     ("OPENAI_API_KEY", "https://api.openai.com/v1", "gpt-4o-mini"),
+    "openrouter": ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1", "openai/gpt-4o-mini"),
+    "nvidia":     ("NVIDIA_API_KEY", "https://integrate.api.nvidia.com/v1", "meta/llama-3.3-70b-instruct"),
+    "gemini":     ("GEMINI_API_KEY", "https://generativelanguage.googleapis.com/v1beta/openai/", "gemini-2.0-flash"),
 }
+
+# Suggested models per provider — for the admin-panel dropdown (free-text still allowed).
+PROVIDER_CATALOG = {
+    "groq":       ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-120b"],
+    "openai":     ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "o4-mini"],
+    "openrouter": ["openai/gpt-4o-mini", "anthropic/claude-3.5-sonnet", "google/gemini-2.0-flash-001", "meta-llama/llama-3.3-70b-instruct"],
+    "nvidia":     ["meta/llama-3.3-70b-instruct", "nvidia/llama-3.1-nemotron-70b-instruct"],
+    "gemini":     ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-pro"],
+    "k2think":    ["MBZUAI-IFM/K2-Think-v2"],
+}
+
+# The API sets this so make_llm can read the admin-panel-saved config (DB) before env.
+_CONFIG_DB = None
+
+
+def set_config_db(db) -> None:
+    global _CONFIG_DB
+    _CONFIG_DB = db
+
+
+def _db_llm_config():
+    """The LLM config saved from the admin panel (building_settings under '_llm'), or None."""
+    if _CONFIG_DB is None:
+        return None
+    try:
+        prov = (_CONFIG_DB.get_setting("_llm", "provider", "") or "").strip().lower()
+        if not prov:
+            return None
+        return {"provider": prov,
+                "model": _CONFIG_DB.get_setting("_llm", "model", "").strip(),
+                "api_key": _CONFIG_DB.get_setting("_llm", "api_key", "").strip(),
+                "base_url": _CONFIG_DB.get_setting("_llm", "base_url", "").strip()}
+    except Exception:
+        return None
 
 
 def _balanced_objects(s: str):
@@ -123,7 +160,10 @@ class ArvisxLLM:
         from openai import OpenAI
         self.provider = provider
         self.model = model
-        self._client = OpenAI(api_key=api_key, base_url=base_url)
+        # Explicit timeout + SDK retry so a slow/flaky K2Think turn fails fast and retries
+        # instead of hanging (a hang → the caller's context-blind deterministic fallback).
+        timeout = float(os.environ.get("ARVISX_LLM_TIMEOUT", "45"))
+        self._client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout, max_retries=2)
 
     async def ask_tools(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]],
                         system_msgs: Optional[List[Dict[str, str]]] = None,
@@ -184,8 +224,23 @@ class ArvisxLLM:
 
 
 def make_llm(provider: Optional[str] = None) -> Optional[ArvisxLLM]:
-    """Build the configured ArvisX LLM, or None if no usable key / SDK.
-    Honours ARVISX_LLM_PROVIDER (default k2think). 'bedrock'/'unified' → UnifiedLLM."""
+    """Build the configured ArvisX LLM, or None if no usable key / SDK. Precedence: the admin
+    panel's saved config (DB) → env (ARVISX_LLM_PROVIDER + provider key). 'bedrock'/'unified'
+    → UnifiedLLM."""
+    if provider is None:
+        cfg = _db_llm_config()
+        if cfg:
+            prov = cfg["provider"]
+            pdef = _PROVIDERS.get(prov)
+            base = cfg["base_url"] or (pdef[1] if pdef else "")
+            model = cfg["model"] or (pdef[2] if pdef else "")
+            key = cfg["api_key"] or (os.environ.get(pdef[0], "") if pdef else "")
+            if key and base and model:
+                try:
+                    logger.info(f"[ArvisxLLM] provider={prov} model={model} (admin config)")
+                    return ArvisxLLM(prov, key, base, model)
+                except Exception as e:
+                    logger.warning(f"[ArvisxLLM] admin-config init failed: {e}")
     provider = (provider or os.environ.get("ARVISX_LLM_PROVIDER", "k2think")).strip().lower()
 
     if provider in ("bedrock", "unified"):

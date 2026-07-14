@@ -117,14 +117,24 @@ def _shift_rounds(ctx, **a):
     return {"date": date, "shifts": intel.shift_activity(d, b, date)}
 
 
-@_tool("team_roster", "Active technicians on this building's team (the people who can be "
-                      "assigned shifts/issues). Use for 'who's on the team', 'who can do this', "
-                      "'list technicians'.", _NONE)
+@_tool("team_roster", "The building's people: TECHNICIANS (who do the rounds) AND MANAGERS/OWNER "
+                      "(who run ops). Use for 'who's on the team', 'list technicians', 'how many "
+                      "managers / owners', 'name the managers', 'who's in charge', 'who can I "
+                      "assign'. Roles: owner runs the building, manager (fm) runs day-to-day ops, "
+                      "technician does the physical rounds.", _NONE)
 def _team_roster(ctx, **a):
     d, b, _t = _db(ctx)
-    techs = [{"name": x.get("name", ""), "phone": x.get("phone", "")}
-             for x in d.list_technicians(b, active_only=True)]
-    return {"technicians": techs, "count": len(techs)}
+    techs = [{"name": x.get("name", "")} for x in d.list_technicians(b, active_only=True)]
+    role_label = {"owner": "owner", "fm": "manager", "admin": "operator"}
+    managers = []
+    try:
+        for u in d.list_users():
+            if u.get("active") and u.get("role") in ("owner", "fm"):
+                managers.append({"name": u.get("username", ""), "role": role_label.get(u["role"], u["role"])})
+    except Exception:
+        pass
+    return {"technicians": techs, "technician_count": len(techs),
+            "managers": managers, "manager_count": len(managers)}
 
 
 _PENDING_ARGS = {"type": "object", "properties": {
@@ -208,11 +218,12 @@ async def run_agent(llm, system: str, user: str, ctx: Dict[str, Any],
 _NUMRE = re.compile(r"\d[\d,]*\.?\d*")
 
 
-def verify_grounded(text: str, evidence: Any) -> Dict[str, Any]:
-    """Every multi-digit number in `text` must appear in the tool outputs. Single digits
-    (ordinals/counts) are ignored. Returns {grounded, ungrounded:[...]}. A failure means
-    the answer contains an invented figure → caller should use the deterministic fallback."""
-    ev = json.dumps(evidence, default=str)
+def verify_grounded(text: str, evidence: Any, extra: str = "") -> Dict[str, Any]:
+    """Every multi-digit number in `text` must appear in the tool outputs (or `extra` — e.g. the
+    recent conversation, where figures were already grounded when first stated, so a follow-up may
+    reuse them). Single digits (ordinals/counts) are ignored. Returns {grounded, ungrounded:[...]}.
+    A failure means the answer contains an invented figure → caller uses the deterministic fallback."""
+    ev = json.dumps(evidence, default=str) + " " + str(extra or "")
     ungrounded = []
     for tok in _NUMRE.findall(text or ""):
         clean = tok.replace(",", "")
