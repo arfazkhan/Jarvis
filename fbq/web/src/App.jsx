@@ -25,6 +25,7 @@ export default function App() {
     <div className="shell">
       <aside>
         <div className="brand">firstbriq</div>
+        <div className="brand-sub">AI Manager</div>
         <NewProject onCreated={refresh} />
         <div className="proj-list">
           {projects.map((p) => (

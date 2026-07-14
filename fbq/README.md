@@ -1,9 +1,14 @@
-# fbq — WhatsApp AI Project Manager for Interior Vendors
+# fbq — **AI Manager**
 
-AI agent inside **hosted WhatsApp groups** (official Business Cloud API) for interior
-contractors: reads the group (text / voice / photos / PDFs), writes structured records to a
-**plan-driven backend**, surfaces intelligence back into chat. See the PRD (v2.0) — this
-package is the agent + plan engine, built on the ArvisX substrate.
+The feature: **an AI project manager that lives in the WhatsApp group your team already uses.**
+👉 **[Read the feature spec: AI_MANAGER.md](AI_MANAGER.md)**
+
+It listens to everything (text, voice notes, photos, PDFs), keeps a real dependency-scheduled
+plan, chases the promises people make, remembers everything forever, and briefs the team twice a
+day — with a web console for the office. Nobody installs an app.
+
+Built on the ArvisX substrate for interior contractors (firstbriq PRD v2.0).
+**Pilot runs on Baileys** so the bot can join the contractor's *existing* groups (no migration).
 
 **Discipline carried over from ArvisX (non-negotiable):**
 - Grounding is law — the LLM never states a fact a tool didn't return; "don't know" over fabrication.

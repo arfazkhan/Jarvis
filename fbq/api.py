@@ -58,7 +58,7 @@ def _llm():
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="fbq agent API")
+    app = FastAPI(title="firstbriq AI Manager")
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
     db = FbqDb()
     templates = _load_templates()
@@ -614,32 +614,58 @@ def create_app() -> FastAPI:
         L.append(f"({len(msgs)} messages today)")
         return "\n".join(L)
 
-    async def _answer(pid: int, q: str) -> str:
-        """F9 grounded Q&A: plan state + recent chat + SEMANTICALLY RETRIEVED history/memories
-        (so a question about something said months ago still finds it). Deterministic fallback."""
-        llm = _llm()
+    def _situation(pid: int, q: str, hits: List[Dict[str, Any]]) -> str:
+        """EVERYTHING the AI Manager knows, in one block — the same picture the web console shows.
+        Plan, the promise ledger, the approval trail, what photos turned out to be, and the
+        semantically-retrieved history. Whatever is changed in the console lands here on the next
+        question, because both read the one database."""
         plan = _plan(pid)
+        today_ = date.today().isoformat()
+        L = ["PLAN TASKS (id|name|status|dates|owner):"]
+        L += [f"{t.task_id}|{t.name}|{t.status}|{t.start}->{t.end}|{t.owner_role}" for t in plan.tasks]
+        cs = db.open_commitments(pid)
+        if cs:
+            L.append("\nOPEN PROMISES (who|what|promised|due|days_overdue):")
+            L += [f"{c['owner_name']}|{c['text']}|{c['promised_on']}|{c['due_date']}|"
+                  f"{max(0, chase.days_overdue(c, today_))}" for c in cs]
+        aps = db.approvals(pid)
+        if aps:
+            L.append("\nAPPROVALS (who approved what, and when):")
+            L += [f"#{a['id']} {a['approved_on'][:10]} {a['approver_name']}: {a['text'][:100]}"
+                  for a in aps[-8:]]
+        med = [m for m in db.media_on(pid, today_) if m.get("caption")]
+        if med:
+            L.append("\nTODAY'S PHOTOS (as described by the person who sent them):")
+            L += [f"{m['sender_name']}: {m['caption'][:80]}" for m in med[:6]]
+        if hits:
+            L.append("\nRELEVANT HISTORY & MEMORIES:")
+            L += [f"[{(h.get('ts') or '')[:10]}] {h.get('who') or '?'}"
+                  f"{' (memory)' if h.get('kind') == 'memory' else ''}: {h.get('text', '')[:140]}"
+                  for h in hits]
+        recent = db.recent_messages(pid, 12)
+        if recent:
+            L.append("\nRECENT MESSAGES:")
+            L += [f"[{m['ts'][:16]}] {m['sender_name']}: {m['text'][:120]}"
+                  for m in recent if (m.get("text") or "").strip()]
+        return "\n".join(L)
+
+    async def _answer(pid: int, q: str) -> str:
+        """The AI Manager answering about its project. Sees the whole situation — plan, promises,
+        approvals, photo context, and semantically-retrieved history — so anything done in the web
+        console is already known here (one database, one brain). Deterministic fallback."""
+        llm = _llm()
         if llm is not None:
             try:
                 from arvisx.checklist_skills import _crisp, _looks_like_reasoning, _numbers_grounded
-                lines = [f"{t.task_id}|{t.name}|{t.status}|{t.start}->{t.end}|{t.owner_role}"
-                         for t in plan.tasks]
-                recent = db.recent_messages(pid, 15)
                 hits = await asyncio.to_thread(brain.search, db, pid, q, 5)
-                ctx = ("PLAN TASKS (id|name|status|dates|owner):\n" + "\n".join(lines)
-                       + "\n\nRELEVANT HISTORY & MEMORIES:\n"
-                       + "\n".join(f"[{(h.get('ts') or '')[:10]}] {h.get('who') or '?'}"
-                                   f"{' (memory)' if h.get('kind') == 'memory' else ''}: "
-                                   f"{h.get('text', '')[:140]}" for h in hits)
-                       + "\n\nRECENT MESSAGES:\n"
-                       + "\n".join(f"[{m['ts'][:16]}] {m['sender_name']}: {m['text'][:120]}" for m in recent))
+                ctx = _situation(pid, q, hits)
                 out = await llm.ask_json(
                     messages=[{"role": "user", "content": f"{ctx}\n\nQUESTION: {q}"}],
                     system_msgs=[{"role": "system", "content":
-                                  "You answer questions about ONE interior project from the plan "
-                                  "and messages given. Use ONLY this data; cite task names/dates; "
-                                  "if it isn't there say you don't know. Output JSON only: "
-                                  '{"answer": "..."}'}],
+                                  "You are the AI Manager for ONE interior project. Answer from the "
+                                  "situation given — plan, promises, approvals, photos, history. Use "
+                                  "ONLY this data; name people and dates; if it isn't there, say you "
+                                  'don\'t know. Output JSON only: {"answer": "..."}'}],
                     channel="chat")
                 s = _crisp(str(out.get("answer", ""))).strip() if isinstance(out, dict) else ""
                 if s and not _looks_like_reasoning(s) and _numbers_grounded(s, ctx):
