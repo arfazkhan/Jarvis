@@ -44,6 +44,17 @@ tr.overdue td:first-child { border-left: 3px solid #d06060; }
   color: #e6e6e6; border-radius: 8px; padding: 7px 10px; }
 .linkbar button { background: #232a38; color: #cfd5e2; border: 1px solid #333b4c;
   border-radius: 8px; padding: 7px 14px; cursor: pointer; }
+.cards { display: grid; gap: 12px; max-width: 640px; }
+.spacer { flex: 1; }
+.linkbar.mt { margin-top: 18px; }
+.note { font-size: 12px; color: #7d8494; align-self: center; }
+.warn-dot { font-size: 10px; color: #e0a54a; margin-top: 2px; }
+.btn-primary.auto { width: auto; }
+.recall { max-width: 720px; margin-bottom: 6px; }
+.recall .card-body { font-size: 14px; line-height: 1.5; }
+.hits { border-top: 1px solid #232732; margin-top: 10px; padding-top: 8px; display: grid; gap: 5px; }
+.hit { font-size: 12px; color: #b8bfcf; }
+.pre { white-space: pre-wrap; }
 .inbox { display: grid; gap: 12px; max-width: 640px; }
 .card { background: #14171d; border: 1px solid #232732; border-radius: 12px; padding: 14px; }
 .card-head { display: flex; justify-content: space-between; margin-bottom: 8px; }
