@@ -24,8 +24,11 @@ from fastapi.responses import JSONResponse
 
 from fbq import brain
 from fbq import chase
+from fbq import estimator
 from fbq import extraction as ex
 from fbq import plan_engine as pe
+from fbq import pricing
+from fbq import takeoff
 from fbq.models import PlanTemplate, ProjectPlan
 from fbq.persistence import FbqDb
 
@@ -850,6 +853,144 @@ def create_app() -> FastAPI:
         ids = [int(i) for i in (payload or {}).get("ids", [])]
         db.outbox_ack(ids)
         return {"acked": len(ids)}
+
+    # ══════════════════════════════════════════════════════════════════════
+    # AGENT 2 — Cost Estimator. A 1:1 DM funnel (the AI Manager is the group).
+    # Worker 1 counts what's in the floor plan; Worker 2 prices it from a rate card.
+    # The LLM never touches a rupee, and the budget never changes the estimate.
+    # ══════════════════════════════════════════════════════════════════════
+    def _finish_estimate(phone: str, lead: Dict[str, Any]) -> str:
+        """Both workers have run and the budget is in — produce the one message they came for."""
+        scope, tier, band = lead["scope"], lead["tier"], lead["budget_band"]
+        est = pricing.estimate(scope, tier)                     # deterministic. No LLM.
+        verdict = pricing.budget_verdict(est["total"], band)    # words only — estimate is fixed
+        rc = pricing.load_rates()
+        db.upsert_lead(phone, stage="estimated", estimate=est, estimate_total=est["total"],
+                       confidence=est["confidence"])
+        return estimator.render_estimate(scope, est, verdict, rc["tiers"][tier]["label"])
+
+    async def _estimator_turn(phone: str, name: str, text: str,
+                              media: Optional[bytes] = None, mime: str = "") -> str:
+        """One step of the funnel. Explicit stages — a funnel that silently loses people is worse
+        than no funnel."""
+        lead = db.get_lead(phone)
+        if lead is None:
+            db.upsert_lead(phone, name=name, stage="awaiting_plan")
+            return estimator.greeting()
+        stage = lead.get("stage") or "new"
+        db.upsert_lead(phone, name=name or lead.get("name") or "")
+
+        # a floor plan can arrive at any point before we've priced it
+        if media and stage in ("new", "awaiting_plan", "awaiting_rooms"):
+            scope = await asyncio.to_thread(takeoff.read_floor_plan, media, mime or "image/jpeg")
+            if scope is None:
+                # no vision configured / call failed → don't guess at the drawing, ask.
+                db.upsert_lead(phone, stage="awaiting_rooms")
+                return estimator.ask_rooms()
+            if not scope.get("readable"):
+                db.upsert_lead(phone, stage="awaiting_rooms")
+                return estimator.ask_rooms()
+            scope = takeoff.scale_for_rooms(scope)
+            db.upsert_lead(phone, scope=scope, stage="awaiting_tier")
+            rooms = scope["rooms"]
+            got = (f"Got it — I can see a *{rooms['bedrooms']}BHK*"
+                   + (f", {rooms['bathrooms']} bath" if rooms["bathrooms"] else "")
+                   + (f", {int(rooms['carpet_sqft'])} sqft" if rooms.get("carpet_sqft") else "") + ".")
+            return f"{got}\n\n{estimator.ask_tier()}"
+
+        if stage in ("new", "awaiting_plan"):
+            # they typed instead of uploading — accept "3bhk" as a scope
+            rooms = estimator.parse_rooms(text)
+            if rooms:
+                scope = takeoff.scope_from_answers(**rooms)
+                db.upsert_lead(phone, scope=scope, stage="awaiting_tier")
+                return f"Got it — a *{rooms['bedrooms']}BHK*.\n\n{estimator.ask_tier()}"
+            return estimator.greeting()
+
+        if stage == "awaiting_rooms":
+            rooms = estimator.parse_rooms(text)
+            if not rooms:
+                return estimator.ask_rooms()
+            scope = takeoff.scope_from_answers(**rooms)
+            db.upsert_lead(phone, scope=scope, stage="awaiting_tier")
+            return f"Thanks — a *{rooms['bedrooms']}BHK*.\n\n{estimator.ask_tier()}"
+
+        if stage == "awaiting_tier":
+            tier = estimator.parse_tier(text)
+            if not tier:
+                return estimator.ask_tier()
+            db.upsert_lead(phone, tier=tier, stage="awaiting_budget")
+            return estimator.ask_budget()
+
+        if stage == "awaiting_budget":
+            band = estimator.parse_budget(text)
+            if not band:
+                return estimator.ask_budget()
+            db.upsert_lead(phone, budget_band=band)
+            return _finish_estimate(phone, db.get_lead(phone))
+
+        if stage == "estimated":
+            if re.search(r"break\s?down|detail|split|itemi[sz]e", text, re.I):
+                return estimator.breakdown(lead["estimate"])
+            want = estimator.wants_expert(text)
+            if want is True:
+                db.upsert_lead(phone, wants_expert=1, stage="lead_captured")
+                return ("Brilliant — I've passed your details to an interior expert. "
+                        "They'll reach out shortly. 🙌\n\n_Meanwhile, reply *breakdown* if you'd "
+                        "like to see where the money goes._")
+            if want is False:
+                db.upsert_lead(phone, wants_expert=0, stage="declined")
+                return ("No problem at all. Your estimate is saved — message me any time if you "
+                        "change your mind or want to try a different finish. 👋")
+            return ("Reply *yes* to speak with an interior expert, *no* to leave it for now, "
+                    "or *breakdown* to see the cost split.")
+
+        if stage in ("lead_captured", "declined"):
+            if re.search(r"break\s?down|detail|split", text, re.I) and lead.get("estimate"):
+                return estimator.breakdown(lead["estimate"])
+            if re.search(r"again|restart|new|another", text, re.I):
+                db.upsert_lead(phone, stage="awaiting_plan", scope=None, tier=None,
+                               budget_band=None, estimate=None, estimate_total=None)
+                return estimator.greeting()
+            return "_Reply *restart* for a fresh estimate, or *breakdown* to see the cost split._"
+
+        return estimator.greeting()
+
+    @app.post("/api/v1/estimate/message")
+    async def estimate_message(payload: Dict[str, Any] = Body(...)):
+        """A 1:1 text message in the estimator funnel."""
+        p = payload or {}
+        phone = re.sub(r"\D", "", str(p.get("phone", "")))
+        if not phone:
+            raise HTTPException(400, "provide 'phone'")
+        reply = await _estimator_turn(phone, str(p.get("name", "")).strip(),
+                                      str(p.get("text", "")).strip())
+        return {"reply": reply}
+
+    @app.post("/api/v1/estimate/plan")
+    async def estimate_plan(request: Request, phone: str = "", name: str = "",
+                            filename: str = "", mime: str = "image/jpeg"):
+        """The floor plan itself — raw bytes from the bot."""
+        ph = re.sub(r"\D", "", phone or "")
+        if not ph:
+            raise HTTPException(400, "provide phone")
+        data = await request.body()
+        _MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", filename or "plan.jpg")
+        fn = f"lead-{ph}-{datetime.now():%Y%m%d-%H%M%S}-{safe}"
+        (_MEDIA_DIR / fn).write_bytes(data)
+        db.upsert_lead(ph, plan_ref=fn)
+        reply = await _estimator_turn(ph, (name or "").strip(), "", media=data, mime=mime)
+        return {"reply": reply}
+
+    @app.get("/api/v1/leads")
+    async def leads_ep(stage: str = ""):
+        return {"leads": db.leads(stage or None)}
+
+    @app.get("/api/v1/pricing")
+    async def pricing_ep():
+        """The rate card, exposed so the business can see exactly what it's quoting."""
+        return pricing.load_rates()
 
     @app.get("/healthz")
     async def healthz():

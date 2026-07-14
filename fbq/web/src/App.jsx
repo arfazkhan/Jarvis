@@ -11,6 +11,7 @@ export default function App() {
   const [sel, setSel] = useState(null)
   const [tab, setTab] = useState('plan')
   const [err, setErr] = useState('')
+  const [view, setView] = useState('manager')     // manager (agent 1) | leads (agent 2)
 
   const refresh = useCallback(() => {
     api.projects().then((r) => {
@@ -25,21 +26,28 @@ export default function App() {
     <div className="shell">
       <aside>
         <div className="brand">firstbriq</div>
-        <div className="brand-sub">AI Manager</div>
-        <NewProject onCreated={refresh} />
-        <div className="proj-list">
-          {projects.map((p) => (
-            <button key={p.id} className={`proj ${p.id === sel ? 'active' : ''}`} onClick={() => setSel(p.id)}>
-              <div className="proj-name">{p.name}</div>
-              <div className="proj-sub">{p.tasks_done}/{p.tasks_total} tasks · {p.pct}%</div>
-              {!p.group_jid && <div className="warn-dot">no group linked</div>}
-            </button>
-          ))}
+        <div className="agent-switch">
+          <button className={view === 'manager' ? 'on' : ''} onClick={() => setView('manager')}>AI Manager</button>
+          <button className={view === 'leads' ? 'on' : ''} onClick={() => setView('leads')}>Estimator</button>
         </div>
+        {view === 'manager' && <>
+          <NewProject onCreated={refresh} />
+          <div className="proj-list">
+            {projects.map((p) => (
+              <button key={p.id} className={`proj ${p.id === sel ? 'active' : ''}`} onClick={() => setSel(p.id)}>
+                <div className="proj-name">{p.name}</div>
+                <div className="proj-sub">{p.tasks_done}/{p.tasks_total} tasks · {p.pct}%</div>
+                {!p.group_jid && <div className="warn-dot">no group linked</div>}
+              </button>
+            ))}
+          </div>
+        </>}
+        {view === 'leads' && <div className="note pad">Homeowners who asked for an estimate on WhatsApp.</div>}
       </aside>
       <main>
         {err && <div className="error">{err}</div>}
-        {project && (
+        {view === 'leads' && <Leads />}
+        {view === 'manager' && project && (
           <>
             <header>
               <div>
@@ -60,8 +68,72 @@ export default function App() {
             {tab === 'activity' && <Activity pid={project.id} />}
           </>
         )}
-        {!project && <div className="empty">Create a project to start.</div>}
+        {view === 'manager' && !project && <div className="empty">Create a project to start.</div>}
       </main>
+    </div>
+  )
+}
+
+// AGENT 2 — the leads the estimator qualified. The business outcome: by the time a designer
+// calls, we already know the home, the taste and the money.
+const STAGE_TONE = {
+  lead_captured: 'tone-green', estimated: 'tone-blue', declined: 'tone-red',
+}
+const SITUATION = { over: 'over budget', under: 'has headroom', close: 'on budget' }
+
+function Leads() {
+  const [leads, setLeads] = useState([])
+  const [only, setOnly] = useState('')
+  const load = useCallback(() => api.leads(only).then((r) => setLeads(r.leads)).catch(() => {}), [only])
+  useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t) }, [load])
+
+  const hot = leads.filter((l) => l.stage === 'lead_captured').length
+  return (
+    <div>
+      <header>
+        <div>
+          <h1>Estimator leads</h1>
+          <div className="sub">{leads.length} total · <strong>{hot} want an expert</strong></div>
+        </div>
+        <nav>
+          {['', 'lead_captured', 'estimated', 'declined'].map((s) => (
+            <button key={s || 'all'} className={only === s ? 'active' : ''} onClick={() => setOnly(s)}>
+              {s ? s.replace('_', ' ') : 'all'}
+            </button>
+          ))}
+        </nav>
+      </header>
+      {!leads.length && <div className="empty">No leads yet. They arrive when someone DMs the bot a floor plan.</div>}
+      {!!leads.length && (
+        <table>
+          <thead>
+            <tr><th>Who</th><th>Home</th><th>Style</th><th>Budget</th><th>Estimate</th>
+              <th>Confidence</th><th>Stage</th><th>When</th></tr>
+          </thead>
+          <tbody>
+            {leads.map((l) => {
+              const rooms = l.scope?.rooms
+              return (
+                <tr key={l.phone} className={l.stage === 'lead_captured' ? 'hot' : ''}>
+                  <td>
+                    <div>{l.name || '—'}</div>
+                    <div className="sub">+{l.phone}</div>
+                  </td>
+                  <td>{rooms ? `${rooms.bedrooms}BHK` : '—'}
+                    {rooms?.carpet_sqft ? <span className="sub"> · {Math.round(rooms.carpet_sqft)} sqft</span> : null}
+                  </td>
+                  <td>{l.tier ? <span className="pill">{l.tier}</span> : '—'}</td>
+                  <td className="sub">{l.budget_band?.replace(/_/g, '–') || '—'}</td>
+                  <td><strong>{l.estimate_total ? `₹${(l.estimate_total / 100000).toFixed(1)}L` : '—'}</strong></td>
+                  <td className="sub">{l.confidence ? `${l.confidence}%` : '—'}</td>
+                  <td><span className={`pill ${STAGE_TONE[l.stage] || ''}`}>{(l.stage || '').replace('_', ' ')}</span></td>
+                  <td className="dates">{(l.updated_at || '').slice(0, 16)}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      )}
     </div>
   )
 }

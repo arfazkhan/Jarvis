@@ -1,0 +1,88 @@
+{
+  "region": "Bangalore",
+  "currency": "INR",
+  "updated": "2026-07",
+  "note": "Rate card. Every rupee the estimator quotes comes from this file — the AI never invents a price. Edit these numbers to retune the business; nothing in code hardcodes a rate.",
+  "tiers": {
+    "basic":   {"label": "Basic",   "blurb": "Solid, functional. Laminate finishes, essential storage."},
+    "good":    {"label": "Good",    "blurb": "The popular choice. Better hardware, acrylic/membrane finishes."},
+    "premium": {"label": "Premium", "blurb": "Designer finishes, soft-close everywhere, custom detailing."},
+    "luxury":  {"label": "Luxury",  "blurb": "Imported hardware, veneer/lacquer, bespoke throughout."}
+  },
+  "items": {
+    "modular_kitchen": {
+      "label": "Modular kitchen", "unit": "sqft", "typical_qty": 110,
+      "rates": {"basic": 1250, "good": 1850, "premium": 2700, "luxury": 3900}
+    },
+    "wardrobe": {
+      "label": "Wardrobe", "unit": "sqft", "typical_qty": 42,
+      "per": "bedroom",
+      "rates": {"basic": 1150, "good": 1650, "premium": 2400, "luxury": 3500}
+    },
+    "tv_unit": {
+      "label": "TV unit", "unit": "sqft", "typical_qty": 32,
+      "rates": {"basic": 1100, "good": 1600, "premium": 2300, "luxury": 3400}
+    },
+    "false_ceiling": {
+      "label": "False ceiling", "unit": "sqft", "typical_qty": 420,
+      "rates": {"basic": 65, "good": 95, "premium": 150, "luxury": 230}
+    },
+    "painting": {
+      "label": "Painting", "unit": "sqft", "typical_qty": 1100,
+      "rates": {"basic": 22, "good": 34, "premium": 55, "luxury": 85}
+    },
+    "vanity": {
+      "label": "Bathroom vanity", "unit": "each", "typical_qty": 1,
+      "per": "bathroom",
+      "rates": {"basic": 14000, "good": 22000, "premium": 38000, "luxury": 65000}
+    },
+    "shoe_rack": {
+      "label": "Shoe rack", "unit": "each", "typical_qty": 1,
+      "rates": {"basic": 11000, "good": 17000, "premium": 27000, "luxury": 45000}
+    },
+    "crockery_unit": {
+      "label": "Crockery unit", "unit": "each", "typical_qty": 1,
+      "rates": {"basic": 16000, "good": 26000, "premium": 42000, "luxury": 70000}
+    },
+    "pooja_unit": {
+      "label": "Pooja unit", "unit": "each", "typical_qty": 1,
+      "rates": {"basic": 15000, "good": 25000, "premium": 45000, "luxury": 80000}
+    },
+    "study_table": {
+      "label": "Study table", "unit": "each", "typical_qty": 1,
+      "rates": {"basic": 12000, "good": 19000, "premium": 30000, "luxury": 50000}
+    },
+    "bed": {
+      "label": "Bed with storage", "unit": "each", "typical_qty": 1,
+      "per": "bedroom",
+      "rates": {"basic": 22000, "good": 34000, "premium": 55000, "luxury": 95000}
+    },
+    "dining": {
+      "label": "Dining set", "unit": "each", "typical_qty": 1,
+      "rates": {"basic": 28000, "good": 45000, "premium": 75000, "luxury": 140000}
+    },
+    "foyer_unit": {
+      "label": "Foyer / entrance unit", "unit": "each", "typical_qty": 1,
+      "rates": {"basic": 13000, "good": 21000, "premium": 34000, "luxury": 58000}
+    },
+    "balcony": {
+      "label": "Balcony styling", "unit": "each", "typical_qty": 1,
+      "per": "balcony",
+      "rates": {"basic": 9000, "good": 16000, "premium": 28000, "luxury": 50000}
+    }
+  },
+  "overheads": {
+    "design_fee_pct": 8.0,
+    "execution_pct": 6.0,
+    "gst_pct": 18.0
+  },
+  "budget_bands": [
+    {"id": "under_10", "label": "Under ₹10L",  "min": 0,        "max": 1000000},
+    {"id": "10_15",    "label": "₹10–15L", "min": 1000000,  "max": 1500000},
+    {"id": "15_20",    "label": "₹15–20L", "min": 1500000,  "max": 2000000},
+    {"id": "20_30",    "label": "₹20–30L", "min": 2000000,  "max": 3000000},
+    {"id": "above_30", "label": "Above ₹30L",   "min": 3000000,  "max": 99000000},
+    {"id": "unsure",   "label": "Not sure yet",      "min": null,     "max": null}
+  ],
+  "close_tolerance_pct": 12.0
+}

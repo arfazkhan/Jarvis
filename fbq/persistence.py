@@ -93,6 +93,14 @@ class FbqDb:
             CREATE TABLE IF NOT EXISTS sweep_log (
                 project_id INTEGER, kind TEXT, day TEXT, ts TEXT,
                 PRIMARY KEY (project_id, kind, day));
+            -- AGENT 2 — the cost estimator's funnel. One row per person, keyed by their number.
+            -- This IS the business outcome: a qualified lead with the home, the taste and the money.
+            CREATE TABLE IF NOT EXISTS leads (
+                phone TEXT PRIMARY KEY, name TEXT, stage TEXT DEFAULT 'new',
+                plan_ref TEXT, scope TEXT, tier TEXT, budget_band TEXT,
+                estimate_total INTEGER, confidence INTEGER, estimate TEXT,
+                wants_expert INTEGER, created_at TEXT, updated_at TEXT);
+            CREATE INDEX IF NOT EXISTS ix_leads ON leads(stage, updated_at);
             """)
 
     def _conn(self):
@@ -445,6 +453,61 @@ class FbqDb:
         with self._lock, self._conn() as c:
             c.execute("INSERT OR REPLACE INTO sweep_log (project_id, kind, day, ts)"
                       " VALUES (?,?,?,?)", (project_id, kind, day, self._now()))
+
+    # ── AGENT 2: the estimator funnel ─────────────────────────────────────
+    def get_lead(self, phone: str) -> Optional[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT * FROM leads WHERE phone=?", (phone,)).fetchone()
+            if not r:
+                return None
+            d = dict(r)
+            for k in ("scope", "estimate"):
+                if d.get(k):
+                    try:
+                        d[k] = json.loads(d[k])
+                    except Exception:
+                        d[k] = None
+            return d
+
+    def upsert_lead(self, phone: str, **fields: Any) -> None:
+        cur = self.get_lead(phone)
+        now = self._now()
+        if cur is None:
+            with self._lock, self._conn() as c:
+                c.execute("INSERT INTO leads (phone, created_at, updated_at) VALUES (?,?,?)",
+                          (phone, now, now))
+            cur = {"phone": phone}
+        sets, args = [], []
+        for k, v in fields.items():
+            if k in ("scope", "estimate") and v is not None and not isinstance(v, str):
+                v = json.dumps(v, default=str)
+            sets.append(f"{k}=?")
+            args.append(v)
+        sets.append("updated_at=?")
+        args.append(now)
+        args.append(phone)
+        with self._lock, self._conn() as c:
+            c.execute(f"UPDATE leads SET {', '.join(sets)} WHERE phone=?", tuple(args))
+
+    def leads(self, stage: Optional[str] = None) -> List[Dict[str, Any]]:
+        q = "SELECT * FROM leads"
+        args: List[Any] = []
+        if stage:
+            q += " WHERE stage=?"
+            args.append(stage)
+        q += " ORDER BY updated_at DESC"
+        with self._lock, self._conn() as c:
+            out = []
+            for r in c.execute(q, tuple(args)).fetchall():
+                d = dict(r)
+                for k in ("scope", "estimate"):
+                    if d.get(k):
+                        try:
+                            d[k] = json.loads(d[k])
+                        except Exception:
+                            d[k] = None
+                out.append(d)
+            return out
 
     def keyword_search(self, project_id: int, terms: List[str], limit: int = 8) -> List[Dict[str, Any]]:
         """Fallback when embeddings aren't configured — recall degrades, never breaks."""

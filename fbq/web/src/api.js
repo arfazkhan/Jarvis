@@ -43,6 +43,10 @@ export const api = {
   linkGroup: (pid, group_jid) => req(`/projects/${pid}/link-group`, { method: 'POST', body: { group_jid } }),
   people: (pid) => req(`/projects/${pid}/people`),
 
+  // agent 2 — the estimator funnel
+  leads: (stage) => req(`/leads${stage ? `?stage=${stage}` : ''}`),
+  pricing: () => req('/pricing'),
+
   // the moat — dispute-proof export
   evidencePack: async (pid, name) => {
     const b = await req(`/projects/${pid}/evidence.pdf`, { blob: true })
