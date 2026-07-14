@@ -74,6 +74,25 @@ class FbqDb:
                 ref_kind TEXT, ref_id INTEGER, vec BLOB,
                 UNIQUE(project_id, ref_kind, ref_id));
             CREATE INDEX IF NOT EXISTS ix_emb ON embeddings(project_id);
+            -- A PROMISE, as a first-class thing: who said it, what, by when. Aged with a
+            -- ladder so "we'll finish tomorrow" can't quietly become three weeks ago.
+            CREATE TABLE IF NOT EXISTS commitments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER, task_id TEXT,
+                text TEXT, owner_name TEXT, owner_phone TEXT,
+                promised_on TEXT, due_date TEXT, status TEXT DEFAULT 'open',
+                nudges INTEGER DEFAULT 0, last_nudge TEXT, source_msg INTEGER,
+                closed_on TEXT);
+            CREATE INDEX IF NOT EXISTS ix_commit ON commitments(project_id, status);
+            -- The evidence trail: who approved WHAT, when, and which message proves it.
+            CREATE TABLE IF NOT EXISTS approvals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER, text TEXT,
+                approver_name TEXT, approver_phone TEXT, source_msg INTEGER,
+                media_ref TEXT, approved_on TEXT);
+            CREATE INDEX IF NOT EXISTS ix_appr ON approvals(project_id);
+            -- Idempotency for the scheduled sweeps (one morning brief per day, etc).
+            CREATE TABLE IF NOT EXISTS sweep_log (
+                project_id INTEGER, kind TEXT, day TEXT, ts TEXT,
+                PRIMARY KEY (project_id, kind, day));
             """)
 
     def _conn(self):
@@ -354,6 +373,78 @@ class FbqDb:
                                 "ts": r["ts"], "source": r["source"]})
         out.sort(key=lambda x: x.get("ts", ""))
         return out
+
+    # ── commitments (the promise ledger) ──────────────────────────────────
+    def add_commitment(self, project_id: int, text: str, owner_name: str, owner_phone: str,
+                       due_date: str, task_id: str = "", source_msg: int = 0) -> int:
+        from datetime import date as _date
+        with self._lock, self._conn() as c:
+            cur = c.execute("INSERT INTO commitments (project_id, task_id, text, owner_name,"
+                            " owner_phone, promised_on, due_date, source_msg)"
+                            " VALUES (?,?,?,?,?,?,?,?)",
+                            (project_id, task_id, text[:300], owner_name, owner_phone,
+                             _date.today().isoformat(), due_date, source_msg))
+            return int(cur.lastrowid)
+
+    def open_commitments(self, project_id: int) -> List[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT * FROM commitments WHERE project_id=? AND status='open' ORDER BY due_date",
+                (project_id,)).fetchall()]
+
+    def commitments_for(self, project_id: int, owner_name: str) -> List[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT * FROM commitments WHERE project_id=? AND status='open'"
+                " AND lower(owner_name)=lower(?) ORDER BY due_date",
+                (project_id, owner_name)).fetchall()]
+
+    def close_commitments_for_task(self, project_id: int, task_id: str) -> int:
+        """Task done → its promise is kept. Returns how many closed."""
+        if not task_id:
+            return 0
+        with self._lock, self._conn() as c:
+            cur = c.execute("UPDATE commitments SET status='kept', closed_on=? WHERE project_id=?"
+                            " AND task_id=? AND status='open'",
+                            (self._now(), project_id, task_id))
+            return cur.rowcount
+
+    def bump_commitment_nudge(self, cid: int, day: str) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE commitments SET nudges=nudges+1, last_nudge=? WHERE id=?", (day, cid))
+
+    def set_commitment_due(self, cid: int, due: str) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE commitments SET due_date=?, nudges=0 WHERE id=?", (due, cid))
+
+    # ── approvals (the evidence trail) ────────────────────────────────────
+    def add_approval(self, project_id: int, text: str, approver_name: str, approver_phone: str,
+                     source_msg: int = 0, media_ref: str = "") -> int:
+        with self._lock, self._conn() as c:
+            cur = c.execute("INSERT INTO approvals (project_id, text, approver_name,"
+                            " approver_phone, source_msg, media_ref, approved_on)"
+                            " VALUES (?,?,?,?,?,?,?)",
+                            (project_id, text[:400], approver_name, approver_phone,
+                             source_msg, media_ref, self._now()))
+            return int(cur.lastrowid)
+
+    def approvals(self, project_id: int) -> List[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT * FROM approvals WHERE project_id=? ORDER BY id ASC",
+                (project_id,)).fetchall()]
+
+    # ── sweep idempotency ─────────────────────────────────────────────────
+    def sweep_done(self, project_id: int, kind: str, day: str) -> bool:
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT 1 FROM sweep_log WHERE project_id=? AND kind=? AND day=?",
+                          (project_id, kind, day)).fetchone()
+            return bool(r)
+
+    def mark_sweep(self, project_id: int, kind: str, day: str) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("INSERT OR REPLACE INTO sweep_log (project_id, kind, day, ts)"
+                      " VALUES (?,?,?,?)", (project_id, kind, day, self._now()))
 
     def keyword_search(self, project_id: int, terms: List[str], limit: int = 8) -> List[Dict[str, Any]]:
         """Fallback when embeddings aren't configured — recall degrades, never breaks."""

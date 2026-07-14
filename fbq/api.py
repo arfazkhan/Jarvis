@@ -23,6 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from fbq import brain
+from fbq import chase
 from fbq import extraction as ex
 from fbq import plan_engine as pe
 from fbq.models import PlanTemplate, ProjectPlan
@@ -197,52 +198,73 @@ def create_app() -> FastAPI:
         plan = _plan(pid)
         pr = db.get_project(pid) or {}
         gj = pr.get("group_jid", "")
+        phone = pay.get("confirm_phone", "")
         if e["type"] == "status_update" and pay.get("task_id"):
             shifts, nxt = pe.mark_done(plan, pay["task_id"], date.today().isoformat())
             _save(pid, plan)
+            kept = db.close_commitments_for_task(pid, pay["task_id"])   # promise kept
             db.log_activity(pid, "task_done", f"{pay['task_id']} via chat", by, lane="B",
                             source_msg=e.get("message_id") or 0)
             if gj:
                 _notify_shifts(pid, gj, shifts)
                 _notify_next(pid, gj, nxt)
             t = plan.task(pay["task_id"])
-            return f"✅ Marked *{t.name if t else pay['task_id']}* done."
+            tail = " (promise kept 👊)" if kept else ""
+            return f"✅ Marked *{t.name if t else pay['task_id']}* done.{tail}"
         if e["type"] == "commitment":
-            # ad-hoc task appended (F5); matched commitments become due-date updates (F17)
+            due = pay.get("due") or date.today().isoformat()
+            what = pay.get("task_hint", "the work")[:120]
+            # matched commitment → move the plan date (F17); unmatched → an ad-hoc task (F5).
             if pay.get("task_id"):
                 t = plan.task(pay["task_id"])
-                nd = pay.get("due") or ""
-                if t and nd:
-                    t.end = nd
-                    t.notes = (t.notes + f" | committed {nd} by {pay.get('owner', by)}").strip(" |")
+                if t and pay.get("due"):
+                    t.end = due
+                    t.notes = (t.notes + f" | committed {due} by {by}").strip(" |")
                     shifts = pe.recompute(plan)
                     _save(pid, plan)
-                    db.log_activity(pid, "commitment", f"{t.task_id} due {nd}", by, lane="B",
-                                    source_msg=e.get("message_id") or 0)
                     if gj:
                         _notify_shifts(pid, gj, shifts)
-                    return f"📌 Noted — *{t.name}* committed for {nd}."
-            from fbq.models import PlanTask
-            tid = f"adhoc_{e['id']}"
-            nd = pay.get("due") or ""
-            nt = PlanTask(tid, pay.get("task_hint", "ad-hoc task")[:60],
-                          owner_role=pay.get("owner", ""), milestone="(ad-hoc)")
-            nt.status = "pending"
-            nt.start = date.today().isoformat()
-            nt.end = nd or nt.start
-            plan.tasks.append(nt)
-            _save(pid, plan)
-            db.log_activity(pid, "task_created", f"{tid}: {nt.name} due {nt.end}", by, lane="B",
+                    what = t.name
+            else:
+                from fbq.models import PlanTask
+                tid = f"adhoc_{e['id']}"
+                nt = PlanTask(tid, what[:60], owner_role=pay.get("owner", ""), milestone="(ad-hoc)")
+                nt.status, nt.start, nt.end = "pending", date.today().isoformat(), due
+                plan.tasks.append(nt)
+                _save(pid, plan)
+                pay["task_id"] = tid
+                db.log_activity(pid, "task_created", f"{tid}: {nt.name} due {due}", by, lane="B",
+                                source_msg=e.get("message_id") or 0)
+            # The PROMISE itself is now a tracked thing — this is what gets aged.
+            cid = db.add_commitment(pid, what, owner_name=by, owner_phone=phone, due_date=due,
+                                    task_id=pay.get("task_id", ""),
+                                    source_msg=e.get("message_id") or 0)
+            db.log_activity(pid, "commitment", f"{by} → {what} by {due}", by, lane="B",
                             source_msg=e.get("message_id") or 0)
-            return f"📌 Task added: *{nt.name}* — due {nt.end}" + (f" ({nt.owner_role})" if nt.owner_role else "")
+            memo = f"{by} committed: {what} by {due}"
+            memid = db.add_memory(pid, memo, source="commitment", sender=by,
+                                  ref_date=date.today().isoformat())
+            _spawn(_index(pid, "memory", memid, memo))
+            return f"📌 Noted — *{what}* by *{due}* ({by}). I'll follow up. (#c{cid})"
         if e["type"] == "blocker":
             db.log_activity(pid, "blocker", pay.get("task_hint", ""), by, lane="B",
                             source_msg=e.get("message_id") or 0)
+            if gj:
+                db.enqueue(pid, gj, f"🚧 Blocker logged: _{pay.get('task_hint', '')[:80]}_ "
+                                    f"— flagged to the project owner.", kind="blocker")
             return "🚧 Blocker logged — the owner has been flagged."
         if e["type"] == "approval":
-            db.log_activity(pid, "approval", pay.get("task_hint", ""), by, lane="B",
+            what = pay.get("task_hint", "")[:200]
+            aid = db.add_approval(pid, what, approver_name=by, approver_phone=phone,
+                                  source_msg=e.get("message_id") or 0)
+            db.log_activity(pid, "approval", what, by, lane="B",
                             source_msg=e.get("message_id") or 0)
-            return "📝 Approval recorded (evidence kept with the source message)."
+            memo = f"{by} approved: {what}"
+            memid = db.add_memory(pid, memo, source="approval", sender=by,
+                                  ref_date=date.today().isoformat())
+            _spawn(_index(pid, "memory", memid, memo))
+            return (f"📝 Approval #{aid} recorded — *{by}*, {date.today().isoformat()}. "
+                    f"Kept with the original message as evidence.")
         return "Noted."
 
     async def _process_text(pr: Dict[str, Any], phone: str, name: str, text: str,
@@ -293,6 +315,15 @@ def create_app() -> FastAPI:
             return _task_list(pid)
         if re.search(r"@?firstbriq\s+digest|^digest$", low):
             return _digest(pid)
+        # manager: chase someone by name — "remind Ravi" / "@firstbriq remind Ravi"
+        mm = re.match(r"^(?:@?firstbriq[,:\s]+)?(?:remind|chase|follow ?up (?:with|on))\s+(.+)$",
+                      text.strip(), re.I)
+        if mm:
+            return _remind_person(pid, mm.group(1).strip().rstrip("?.!"), by=who)
+        if re.search(r"@?firstbriq\s+(commitments|promises)|^promises$", low):
+            return _promise_list(pid)
+        if re.search(r"@?firstbriq\s+approvals|^approvals$", low):
+            return _approval_list(pid)
         # recall — "what did we say about X" (works months later)
         topic = brain.recall_request(text)
         if topic and (low.startswith(("@firstbriq", "firstbriq")) or "?" in text):
@@ -412,6 +443,135 @@ def create_app() -> FastAPI:
         db.mark_media_asked(med)
         db.log_activity(pid, "photo_filed", safe, who, lane="A", source_msg=mid)
         return {"reply": "📷 Got the photo — what's this about? (reply here, voice note is fine)"}
+
+    # ── chase: remind / promises / approvals ──────────────────────────────
+    def _remind_person(pid: int, name: str, by: str = "") -> str:
+        """Manager chases someone by name: their open promises + tasks they own, in-group."""
+        plan = _plan(pid)
+        today = date.today().isoformat()
+        promises = db.commitments_for(pid, name)
+        # roles are the plan's owner field; match loosely against the person's name or role
+        low = name.lower()
+        tasks = [t for t in plan.tasks
+                 if t.status != "done" and (low in (t.owner_role or "").lower()
+                                            or (t.owner_role or "").lower() in low)]
+        if not promises and not tasks:
+            people = ", ".join(p["name"] for p in db.people(pid) if p["name"]) or "nobody yet"
+            return f"I have nothing open against *{name}*. (Known here: {people})"
+        L = [f"👋 *{name}* — a nudge from {by or 'the team'}:"]
+        for c in promises[:5]:
+            over = (date.fromisoformat(today) - date.fromisoformat(c["due_date"])).days \
+                if c.get("due_date") else 0
+            tag = f" — *{over}d overdue*" if over > 0 else (" — due today" if over == 0 else "")
+            L.append(f"• {c['text'][:60]} (by {c['due_date']}){tag}")
+        for t in tasks[:5]:
+            L.append(f"• {t.name} — planned {t.start} → {t.end}")
+        L.append("_Reply here with an update, or say when it'll be done._")
+        db.log_activity(pid, "reminded", f"{name} ({len(promises)} promises, {len(tasks)} tasks)",
+                        by or "agent", lane="B")
+        return "\n".join(L)
+
+    def _promise_list(pid: int) -> str:
+        today = date.today().isoformat()
+        cs = db.open_commitments(pid)
+        if not cs:
+            return "No open promises. 👌"
+        L = ["🤝 *Open promises:*"]
+        for c in cs[:12]:
+            over = chase.days_overdue(c, today)
+            tag = f" 🔴 *{over}d overdue*" if over > 0 else (" — due today" if over == 0 else "")
+            L.append(f"• *{c['owner_name']}* — {c['text'][:50]} (by {c['due_date']}){tag}")
+        return "\n".join(L)
+
+    def _approval_list(pid: int) -> str:
+        aps = db.approvals(pid)
+        if not aps:
+            return "No approvals on record yet."
+        L = ["📝 *Approval log:*"]
+        for a in aps[-10:]:
+            L.append(f"• #{a['id']} {a['approved_on'][:10]} — *{a['approver_name']}*: "
+                     f"{a['text'][:60]}")
+        L.append("_Full evidence pack: ask the office for the PDF export._")
+        return "\n".join(L)
+
+    # ── the sweep: morning brief, evening brief, commitment aging ─────────
+    async def _run_sweep(pid: int, now: Optional[datetime] = None) -> List[str]:
+        """Called on a poll by the bot. Idempotent per day per kind. Returns what it queued."""
+        now = now or datetime.now()
+        today = now.date().isoformat()
+        pr = db.get_project(pid) or {}
+        gj = pr.get("group_jid", "")
+        if not gj:
+            return []
+        pname = pr.get("name", "Project")
+        did: List[str] = []
+        morning_h = int(os.environ.get("FBQ_MORNING_HOUR", "8"))
+        evening_h = int(os.environ.get("FBQ_EVENING_HOUR", "19"))
+
+        # morning brief
+        if now.hour >= morning_h and not db.sweep_done(pid, "morning", today):
+            plan = _plan(pid)
+            overdue = pe.overdue_tasks(plan, today)
+            due_today = [t for t in plan.tasks if t.status != "done" and t.start <= today <= t.end]
+            nxt = sorted([t for t in plan.tasks if t.status != "done" and t.start > today],
+                         key=lambda t: t.start)
+            txt = chase.morning_brief(pname, today, due_today, overdue,
+                                      db.open_commitments(pid), nxt)
+            db.enqueue(pid, gj, txt, kind="morning_brief")
+            db.mark_sweep(pid, "morning", today)
+            did.append("morning")
+
+        # commitment aging — the ladder (≤1 nudge per promise per day)
+        for n in chase.due_nudges(db.open_commitments(pid), today):
+            c = n["commitment"]
+            db.enqueue(pid, gj, n["text"], kind=f"chase_{n['to']}")
+            db.bump_commitment_nudge(c["id"], today)
+            db.log_activity(pid, "chased", f"{c['owner_name']}: {c['text'][:50]} ({n['over']}d)",
+                            "agent", lane="A")
+            did.append(f"chase:{c['id']}")
+
+        # photo without context — ask once more, then let it go (AllGud curiosity rule)
+        for m in db.uncaptioned_media(pid):
+            if m["kind"] != "photo" or (m.get("created_at") or "")[:10] == today:
+                continue
+            if m["nudges"] >= 1:
+                db.give_up_media(m["id"])              # filed without context; stop nagging
+                continue
+            db.enqueue(pid, gj, f"📷 {m['sender_name'] or 'Someone'} — the photo from "
+                                f"{m['created_at'][:10]}, what was it about?", kind="photo_nudge")
+            db.bump_media_nudge(m["id"])
+            did.append(f"photo:{m['id']}")
+
+        # evening brief — the day becomes a memory
+        if now.hour >= evening_h and not db.sweep_done(pid, "evening", today):
+            summary = await _close_day_text(pid, today)
+            unanswered = len([m for m in db.uncaptioned_media(pid) if m["kind"] == "photo"])
+            txt = chase.evening_brief(pname, today, summary, db.open_commitments(pid), unanswered)
+            db.enqueue(pid, gj, txt, kind="evening_brief")
+            db.mark_sweep(pid, "evening", today)
+            did.append("evening")
+        return did
+
+    @app.post("/api/v1/sweep")
+    async def sweep_ep(payload: Dict[str, Any] = Body(default={})):
+        """The bot polls this. Runs briefs + aging for every active project."""
+        out: Dict[str, Any] = {}
+        for pr in db.list_projects():
+            try:
+                r = await _run_sweep(pr["id"])
+                if r:
+                    out[pr["name"]] = r
+            except Exception as err:
+                logger.warning(f"sweep failed for {pr['id']}: {err}")
+        return {"ran": out}
+
+    @app.get("/api/v1/projects/{pid}/commitments")
+    async def commitments_ep(pid: int):
+        return {"commitments": db.open_commitments(pid)}
+
+    @app.get("/api/v1/projects/{pid}/approvals")
+    async def approvals_ep(pid: int):
+        return {"approvals": db.approvals(pid)}
 
     # ── digest / tasks / Q&A (read lane) ──────────────────────────────────
     def _task_list(pid: int) -> str:
@@ -551,26 +711,88 @@ def create_app() -> FastAPI:
     async def media_list_ep(pid: int):
         return {"media": db.media_on(pid, date.today().isoformat())}
 
-    async def _close_day(pid: int, day: str) -> str:
-        """The day becomes a memory (idempotent) + the manager's end-of-day report text."""
-        msgs = db.messages_on(pid, day)
-        acts = db.activities_on(pid, day)
-        med = db.media_on(pid, day)
-        summary = await brain.day_memory(_llm(), msgs, acts, med, day)
+    async def _close_day_text(pid: int, day: str) -> str:
+        """Distil the day and STORE it as a memory (idempotent). Returns the summary body."""
+        summary = await brain.day_memory(_llm(), db.messages_on(pid, day),
+                                         db.activities_on(pid, day), db.media_on(pid, day), day)
         if not db.memory_exists_for_date(pid, "daily", day):
-            mid = db.add_memory(pid, summary, source="daily", sender="AllGud", ref_date=day)
+            mid = db.add_memory(pid, summary, source="daily", sender="firstbriq", ref_date=day)
             _spawn(_index(pid, "memory", mid, f"Day {day}: {summary}"))
-        pr = db.get_project(pid) or {}
-        return f"🌙 *{pr.get('name', 'Project')} — end of day {day}*\n{summary}"
+        return summary
 
     @app.post("/api/v1/projects/{pid}/close-day")
     async def close_day_ep(pid: int, payload: Dict[str, Any] = Body(default={})):
         day = str((payload or {}).get("date") or date.today().isoformat())
-        text = await _close_day(pid, day)
+        summary = await _close_day_text(pid, day)
         pr = db.get_project(pid) or {}
+        unanswered = len([m for m in db.uncaptioned_media(pid) if m["kind"] == "photo"])
+        text = chase.evening_brief(pr.get("name", "Project"), day, summary,
+                                   db.open_commitments(pid), unanswered)
         if pr.get("group_jid"):
             db.enqueue(pid, pr["group_jid"], text, kind="evening_brief")
         return {"text": text}
+
+    @app.get("/api/v1/projects/{pid}/evidence.pdf")
+    async def evidence_pack(pid: int):
+        """The dispute-proof export: every approval, with who / when / the exact words, plus the
+        promise ledger. This is the artefact a contractor shows an angry client."""
+        from fastapi.responses import Response
+        from fpdf import FPDF
+        pr = db.get_project(pid) or {}
+        plan = _plan(pid)
+
+        def _safe(s: Any) -> str:
+            return (str(s).replace("—", "-").replace("’", "'")
+                    .encode("latin-1", "ignore").decode("latin-1"))
+
+        pdf = FPDF()
+        pdf.set_auto_page_break(auto=True, margin=15)
+        pdf.add_page()
+        pdf.set_font("Helvetica", "B", 16)
+        pdf.cell(0, 9, _safe(f"{pr.get('name', 'Project')} - Evidence Pack"), ln=1)
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_text_color(90, 90, 90)
+        pdf.cell(0, 6, _safe(f"Generated {datetime.now():%Y-%m-%d %H:%M} - every entry is a real "
+                             f"message from the project group."), ln=1)
+        pdf.set_text_color(0, 0, 0)
+
+        pdf.ln(3); pdf.set_font("Helvetica", "B", 12); pdf.cell(0, 7, "Approvals", ln=1)
+        aps = db.approvals(pid)
+        pdf.set_font("Helvetica", "", 9)
+        if not aps:
+            pdf.cell(0, 6, "No approvals recorded.", ln=1)
+        for a in aps:
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.cell(0, 5, _safe(f"#{a['id']}  {a['approved_on'][:16]}  -  {a['approver_name']}"), ln=1)
+            pdf.set_font("Helvetica", "", 9)
+            pdf.multi_cell(0, 5, _safe(f'   "{a["text"]}"'))
+            pdf.ln(1)
+
+        pdf.ln(2); pdf.set_font("Helvetica", "B", 12); pdf.cell(0, 7, "Commitments", ln=1)
+        pdf.set_font("Helvetica", "", 9)
+        cs = db.open_commitments(pid)
+        today = date.today().isoformat()
+        if not cs:
+            pdf.cell(0, 6, "No open commitments.", ln=1)
+        for c in cs:
+            over = chase.days_overdue(c, today)
+            tag = f"  [{over}d OVERDUE]" if over > 0 else ""
+            pdf.multi_cell(0, 5, _safe(f"- {c['owner_name']}: {c['text']}  (promised "
+                                       f"{c['promised_on']}, due {c['due_date']}){tag}"))
+
+        pdf.ln(2); pdf.set_font("Helvetica", "B", 12); pdf.cell(0, 7, "Completed work", ln=1)
+        pdf.set_font("Helvetica", "", 9)
+        done = [t for t in plan.tasks if t.status == "done"]
+        if not done:
+            pdf.cell(0, 6, "Nothing completed yet.", ln=1)
+        for t in done:
+            pdf.multi_cell(0, 5, _safe(f"- {t.name} (completed {t.actual_end or t.end})"))
+
+        out = pdf.output(dest="S")
+        data = bytes(out) if isinstance(out, (bytes, bytearray)) else out.encode("latin-1")
+        fn = f"evidence-{pr.get('name', 'project').replace(' ', '_')}-{today}.pdf"
+        return Response(content=data, media_type="application/pdf",
+                        headers={"Content-Disposition": f'attachment; filename="{fn}"'})
 
     @app.get("/api/v1/projects/{pid}/people")
     async def people_ep(pid: int):

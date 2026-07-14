@@ -61,7 +61,7 @@ def test_commitment_creates_adhoc_task_with_due(client):
     r = _ingest(client, "we will fix the balcony grill tomorrow", name="Suresh")
     assert "commitment" in r["reply"].lower() and "YES" in r["reply"]
     r2 = _ingest(client, "yes", name="Suresh")
-    assert "Task added" in r2["reply"] or "committed" in r2["reply"]
+    assert "follow up" in r2["reply"] and "Suresh" in r2["reply"]
     plan = client.get(f"/api/v1/projects/{pid}/plan").json()
     assert any(t["task_id"].startswith("adhoc_") or "committed" in t.get("notes", "")
                for t in plan["tasks"])
