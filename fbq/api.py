@@ -9,6 +9,7 @@ never auto-commit; everything degrades to a deterministic floor without an LLM.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -21,6 +22,7 @@ from fastapi import Body, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from fbq import brain
 from fbq import extraction as ex
 from fbq import plan_engine as pe
 from fbq.models import PlanTemplate, ProjectPlan
@@ -28,6 +30,7 @@ from fbq.persistence import FbqDb
 
 logger = logging.getLogger("fbq.api")
 _SEED_DIR = Path(__file__).parent / "seeds"
+_MEDIA_DIR = Path(os.environ.get("FBQ_MEDIA_DIR", "fbq/data/media"))
 
 
 def _load_templates() -> Dict[str, PlanTemplate]:
@@ -59,6 +62,18 @@ def create_app() -> FastAPI:
     db = FbqDb()
     templates = _load_templates()
     _api_key = os.environ.get("FBQ_API_KEY", "").strip()
+    _MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Background-task keeper — a bare create_task can be GC'd mid-run (ArvisX scar tissue).
+    _bg: set = set()
+
+    def _spawn(coro) -> None:
+        t = asyncio.create_task(coro)
+        _bg.add(t)
+        t.add_done_callback(_bg.discard)
+
+    async def _index(project_id: int, ref_kind: str, ref_id: int, text: str) -> None:
+        await asyncio.to_thread(brain.index_text, db, project_id, ref_kind, ref_id, text)
 
     @app.middleware("http")
     async def _auth(request: Request, call_next):
@@ -230,56 +245,72 @@ def create_app() -> FastAPI:
             return "📝 Approval recorded (evidence kept with the source message)."
         return "Noted."
 
-    @app.post("/api/v1/ingest")
-    async def ingest(payload: Dict[str, Any] = Body(...)):
-        """The bot relays every group message here. Returns {reply} when the agent should
-        answer in the group ('' = stay silent — most chatter)."""
-        p = payload or {}
-        gj = str(p.get("group_jid", "")).strip()
-        phone = re.sub(r"\D", "", str(p.get("phone", "")))
-        name = str(p.get("name", "")).strip()
-        text = str(p.get("text", "")).strip()
-        kind = str(p.get("kind", "text"))
-        pr = db.project_by_group(gj)
-        if pr is None:
-            return {"reply": ""}                       # unlinked group — ignore
+    async def _process_text(pr: Dict[str, Any], phone: str, name: str, text: str,
+                            mid: int, kind: str = "text") -> str:
+        """The ONE brain. A typed message and a transcribed voice note both land here — voice
+        adds an input channel, never a second pipeline (ArvisX rule)."""
         pid = pr["id"]
-        db.upsert_person(pid, phone, name=name)
-        mid = db.log_message(pid, phone, name, kind, text, media_ref=str(p.get("media_ref", "")))
+        who = name or phone
 
         # 1) resolve a pending Lane-B confirm addressed to this sender
         pend = db.latest_pending_for(pid, phone)
         if pend and _YES.match(text):
-            db.decide_extraction(pend["id"], "confirmed", by=name or phone)
+            db.decide_extraction(pend["id"], "confirmed", by=who)
             try:
-                return {"reply": _execute_extraction(pend, name or phone)}
+                return _execute_extraction(pend, who)
             except Exception as err:
                 logger.warning(f"execute failed: {err}")
-                return {"reply": "Couldn't apply that — the team has been notified."}
+                return "Couldn't apply that — the team has been notified."
         if pend and _NO.match(text):
-            db.decide_extraction(pend["id"], "declined", by=name or phone)   # training signal
-            return {"reply": "👍 Ignored."}
+            db.decide_extraction(pend["id"], "declined", by=who)   # training signal
+            return "👍 Ignored."
 
-        # 2) commands (deterministic, addressed to the agent)
+        # 2) a photo we asked about → THIS is the answer. The human gives the context; the bot
+        #    never guesses at an image. The caption becomes durable memory.
+        pending_media = db.awaiting_caption(pid, phone)
+        if pending_media and not text.lower().startswith(("@firstbriq", "firstbriq")):
+            db.set_media_caption(pending_media["id"], text)
+            db.log_activity(pid, "photo_captioned", f"{pending_media['filename']}: {text[:80]}",
+                            who, lane="A", source_msg=mid)
+            memo = f"Photo ({pending_media['filename']}): {text}"
+            memid = db.add_memory(pid, memo, source="photo", sender=who,
+                                  ref_date=date.today().isoformat())
+            _spawn(_index(pid, "memory", memid, memo))
+            return f"📷 Got it — filed as: _{text[:70]}_"
+
+        # 3) "remember X" → straight into the brain, verbatim, forever
+        what = brain.remember_request(text)
+        if what:
+            memid = db.add_memory(pid, what, source="remember", sender=who,
+                                  ref_date=date.today().isoformat())
+            _spawn(_index(pid, "memory", memid, what))
+            db.log_activity(pid, "memory_saved", what[:120], who, lane="A", source_msg=mid)
+            return f"🧠 Noted, I'll remember that: _{what[:90]}_"
+
+        # 4) commands (deterministic, addressed to the agent)
         low = text.lower()
         if re.search(r"@?firstbriq\s+tasks|^tasks$|today'?s tasks", low):
-            return {"reply": _task_list(pid)}
+            return _task_list(pid)
         if re.search(r"@?firstbriq\s+digest|^digest$", low):
-            return {"reply": _digest(pid)}
+            return _digest(pid)
+        # recall — "what did we say about X" (works months later)
+        topic = brain.recall_request(text)
+        if topic and (low.startswith(("@firstbriq", "firstbriq")) or "?" in text):
+            hits = await asyncio.to_thread(brain.search, db, pid, topic)
+            return await brain.answer_recall(_llm(), hits, topic)
         if low.startswith(("@firstbriq", "firstbriq")):
             q = re.sub(r"@?firstbriq[,:]?", "", text, flags=re.I).strip()
             if q:
-                return {"reply": await _answer(pid, q)}
+                return await _answer(pid, q)
 
-        # 3) typed extraction → lane routing
-        if kind != "text" or not text:
-            db.log_activity(pid, "media_filed", f"{kind} stored", name or phone, lane="A", source_msg=mid)
-            return {"reply": ""}                       # Lane A: photos/docs filed silently
+        # 5) typed extraction → lane routing
+        if not text:
+            return ""
         llm = _llm()
         found = await ex.extract(llm, text)
         etype = found.get("type", "chatter")
         if etype == "chatter":
-            return {"reply": ""}
+            return ""
         plan = _plan(pid)
         m = ex.match_task(plan, found.get("task_hint", ""))
         payload_out = {"task_hint": found.get("task_hint", ""), "owner": found.get("owner_hint", ""),
@@ -300,7 +331,87 @@ def create_app() -> FastAPI:
             ask = f"Log a blocker: \"{payload_out['task_hint'][:60]}\"?"
         else:
             ask = f"Record this as a client approval: \"{payload_out['task_hint'][:60]}\"?"
-        return {"reply": f"{ask} Reply YES / NO. (#{eid})"}
+        return f"{ask} Reply YES / NO. (#{eid})"
+
+    @app.post("/api/v1/ingest")
+    async def ingest(payload: Dict[str, Any] = Body(...)):
+        """The bot relays every group TEXT message here. Returns {reply} when the agent should
+        speak ('' = stay silent). Understanding is never gated — only speaking is."""
+        p = payload or {}
+        pr = db.project_by_group(str(p.get("group_jid", "")).strip())
+        if pr is None:
+            return {"reply": ""}                       # unlinked group — ignore
+        pid = pr["id"]
+        phone = re.sub(r"\D", "", str(p.get("phone", "")))
+        name = str(p.get("name", "")).strip()
+        text = str(p.get("text", "")).strip()
+        db.upsert_person(pid, phone, name=name)
+        mid = db.log_message(pid, phone, name, "text", text)
+        if text:
+            _spawn(_index(pid, "message", mid, f"{name or phone}: {text}"))
+        return {"reply": await _process_text(pr, phone, name, text, mid)}
+
+    @app.post("/api/v1/media")
+    async def media(request: Request, group_jid: str = "", phone: str = "", name: str = "",
+                    kind: str = "photo", filename: str = "", seconds: float = 0.0):
+        """Raw media bytes from the bot. VOICE is transcribed and then flows through the SAME
+        text brain. A PHOTO is stored and the bot ASKS what it is — it never guesses at an image;
+        the human's answer becomes the caption and durable memory. PDFs are text-extracted."""
+        pr = db.project_by_group((group_jid or "").strip())
+        if pr is None:
+            return {"reply": ""}
+        pid = pr["id"]
+        ph = re.sub(r"\D", "", phone or "")
+        nm = (name or "").strip()
+        who = nm or ph
+        data = await request.body()
+        db.upsert_person(pid, ph, name=nm)
+
+        if kind == "voice":
+            from arvisx import stt
+            r = await asyncio.to_thread(stt.transcribe, data, filename or "voice.ogg", True, seconds)
+            text = (r or {}).get("text", "").strip()
+            if not text:
+                # No STT key / failed → say nothing rather than guess at the audio.
+                db.log_message(pid, ph, nm, "voice", "", media_ref="(not transcribed)")
+                return {"reply": ""}
+            mid = db.log_message(pid, ph, nm, "voice", text)
+            _spawn(_index(pid, "message", mid, f"{who}: {text}"))
+            reply = await _process_text(pr, ph, nm, text, mid, kind="voice")
+            # A voice note that triggers a state change must show what was heard (a misheard
+            # command must never execute silently) — the confirm ask carries the transcript.
+            if reply:
+                reply = f'🎙 Heard: "{text[:120]}"\n\n{reply}'
+            return {"reply": reply}
+
+        # photo / pdf → store the file
+        _MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", filename or f"{kind}.bin")
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        fn = f"{pid}-{stamp}-{safe}"
+        (_MEDIA_DIR / fn).write_bytes(data)
+        mid = db.log_message(pid, ph, nm, kind, "", media_ref=fn)
+        med = db.add_media(pid, mid, kind, str(_MEDIA_DIR / fn), safe, ph, nm)
+
+        if kind == "pdf":
+            text = ""
+            try:
+                from arvisx.manual_skills import extract_text
+                text = (await asyncio.to_thread(extract_text, _MEDIA_DIR / fn) or "")[:4000]
+            except Exception:
+                pass
+            if text:
+                db.set_media_caption(med, f"PDF: {safe}")
+                memid = db.add_memory(pid, f"Document {safe}: {text[:600]}", source="document",
+                                      sender=who, ref_date=date.today().isoformat())
+                _spawn(_index(pid, "memory", memid, f"Document {safe}: {text[:600]}"))
+            db.log_activity(pid, "document_filed", safe, who, lane="A", source_msg=mid)
+            return {"reply": f"📄 Filed *{safe}*."}
+
+        # PHOTO — ask, don't analyse.
+        db.mark_media_asked(med)
+        db.log_activity(pid, "photo_filed", safe, who, lane="A", source_msg=mid)
+        return {"reply": "📷 Got the photo — what's this about? (reply here, voice note is fine)"}
 
     # ── digest / tasks / Q&A (read lane) ──────────────────────────────────
     def _task_list(pid: int) -> str:
@@ -344,7 +455,8 @@ def create_app() -> FastAPI:
         return "\n".join(L)
 
     async def _answer(pid: int, q: str) -> str:
-        """F9 grounded Q&A: plan state + recent messages; deterministic fallback = task list."""
+        """F9 grounded Q&A: plan state + recent chat + SEMANTICALLY RETRIEVED history/memories
+        (so a question about something said months ago still finds it). Deterministic fallback."""
         llm = _llm()
         plan = _plan(pid)
         if llm is not None:
@@ -353,7 +465,12 @@ def create_app() -> FastAPI:
                 lines = [f"{t.task_id}|{t.name}|{t.status}|{t.start}->{t.end}|{t.owner_role}"
                          for t in plan.tasks]
                 recent = db.recent_messages(pid, 15)
+                hits = await asyncio.to_thread(brain.search, db, pid, q, 5)
                 ctx = ("PLAN TASKS (id|name|status|dates|owner):\n" + "\n".join(lines)
+                       + "\n\nRELEVANT HISTORY & MEMORIES:\n"
+                       + "\n".join(f"[{(h.get('ts') or '')[:10]}] {h.get('who') or '?'}"
+                                   f"{' (memory)' if h.get('kind') == 'memory' else ''}: "
+                                   f"{h.get('text', '')[:140]}" for h in hits)
                        + "\n\nRECENT MESSAGES:\n"
                        + "\n".join(f"[{m['ts'][:16]}] {m['sender_name']}: {m['text'][:120]}" for m in recent))
                 out = await llm.ask_json(
@@ -409,6 +526,51 @@ def create_app() -> FastAPI:
     @app.get("/api/v1/projects/{pid}/activity")
     async def activity_ep(pid: int):
         return {"activity": db.activities(pid)}
+
+    # ── the brain (web) ───────────────────────────────────────────────────
+    @app.get("/api/v1/projects/{pid}/memories")
+    async def memories_ep(pid: int):
+        return {"memories": db.memories(pid)}
+
+    @app.post("/api/v1/projects/{pid}/memories")
+    async def add_memory_ep(pid: int, payload: Dict[str, Any] = Body(...)):
+        text = str((payload or {}).get("text", "")).strip()
+        if not text:
+            raise HTTPException(400, "provide 'text'")
+        mid = db.add_memory(pid, text, source="manual", sender=str((payload or {}).get("by", "web")),
+                            ref_date=date.today().isoformat())
+        _spawn(_index(pid, "memory", mid, text))
+        return {"id": mid}
+
+    @app.get("/api/v1/projects/{pid}/recall")
+    async def recall_ep(pid: int, q: str):
+        hits = await asyncio.to_thread(brain.search, db, pid, q)
+        return {"answer": await brain.answer_recall(_llm(), hits, q), "hits": hits}
+
+    @app.get("/api/v1/projects/{pid}/media")
+    async def media_list_ep(pid: int):
+        return {"media": db.media_on(pid, date.today().isoformat())}
+
+    async def _close_day(pid: int, day: str) -> str:
+        """The day becomes a memory (idempotent) + the manager's end-of-day report text."""
+        msgs = db.messages_on(pid, day)
+        acts = db.activities_on(pid, day)
+        med = db.media_on(pid, day)
+        summary = await brain.day_memory(_llm(), msgs, acts, med, day)
+        if not db.memory_exists_for_date(pid, "daily", day):
+            mid = db.add_memory(pid, summary, source="daily", sender="AllGud", ref_date=day)
+            _spawn(_index(pid, "memory", mid, f"Day {day}: {summary}"))
+        pr = db.get_project(pid) or {}
+        return f"🌙 *{pr.get('name', 'Project')} — end of day {day}*\n{summary}"
+
+    @app.post("/api/v1/projects/{pid}/close-day")
+    async def close_day_ep(pid: int, payload: Dict[str, Any] = Body(default={})):
+        day = str((payload or {}).get("date") or date.today().isoformat())
+        text = await _close_day(pid, day)
+        pr = db.get_project(pid) or {}
+        if pr.get("group_jid"):
+            db.enqueue(pid, pr["group_jid"], text, kind="evening_brief")
+        return {"text": text}
 
     @app.get("/api/v1/projects/{pid}/people")
     async def people_ep(pid: int):

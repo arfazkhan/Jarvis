@@ -80,12 +80,17 @@ def test_unlinked_group_ignored(client):
     assert r["reply"] == ""
 
 
-def test_photo_filed_lane_a_silent(client):
+def test_photo_is_filed_and_asked_about(client):
+    """Photos are Lane A (filed, undoable) but NOT silent — the bot asks what it is rather than
+    analysing the image. Full ask→answer→memory path is covered in test_brain.py."""
     pid = _setup(client)
-    r = _ingest(client, "", kind="photo")
-    assert r["reply"] == ""
+    r = client.post("/api/v1/media", content=b"\x89PNG-fake",
+                    params={"group_jid": GJ, "phone": "919900011122", "name": "Ravi",
+                            "kind": "photo", "filename": "site.jpg"},
+                    headers={"Content-Type": "application/octet-stream"}).json()["reply"]
+    assert "what's this about" in r.lower()
     acts = client.get(f"/api/v1/projects/{pid}/activity").json()["activity"]
-    assert any(a["action"] == "media_filed" and a["lane"] == "A" for a in acts)
+    assert any(a["action"] == "photo_filed" and a["lane"] == "A" for a in acts)
 
 
 def test_task_list_digest_and_shift_notice(client):

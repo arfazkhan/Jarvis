@@ -54,6 +54,26 @@ class FbqDb:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER, action TEXT,
                 detail TEXT, actor TEXT, lane TEXT, source_msg INTEGER, ts TEXT);
             CREATE INDEX IF NOT EXISTS ix_activity ON activity(project_id, ts);
+            -- Media (photos/PDFs/voice). The bot never interprets a photo — it ASKS what it is
+            -- and stores the human's own answer as the caption (which may itself be a voice note).
+            CREATE TABLE IF NOT EXISTS media (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER, message_id INTEGER,
+                kind TEXT, path TEXT, filename TEXT, sender_phone TEXT, sender_name TEXT,
+                caption TEXT DEFAULT '', asked INTEGER DEFAULT 0, nudges INTEGER DEFAULT 0,
+                created_at TEXT, captioned_at TEXT);
+            CREATE INDEX IF NOT EXISTS ix_media ON media(project_id, caption);
+            -- The BRAIN: durable project memory. "remember X" from chat, end-of-day summaries,
+            -- captured decisions. Retrievable months later via semantic search.
+            CREATE TABLE IF NOT EXISTS memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER, text TEXT,
+                source TEXT, sender TEXT, ref_date TEXT, ts TEXT);
+            CREATE INDEX IF NOT EXISTS ix_mem ON memories(project_id, ts);
+            -- Embeddings over BOTH messages and memories → "what did we say about X 6 months ago".
+            CREATE TABLE IF NOT EXISTS embeddings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER,
+                ref_kind TEXT, ref_id INTEGER, vec BLOB,
+                UNIQUE(project_id, ref_kind, ref_id));
+            CREATE INDEX IF NOT EXISTS ix_emb ON embeddings(project_id);
             """)
 
     def _conn(self):
@@ -225,3 +245,131 @@ class FbqDb:
             return [dict(r) for r in c.execute(
                 "SELECT * FROM activity WHERE project_id=? ORDER BY id DESC LIMIT ?",
                 (project_id, limit)).fetchall()]
+
+    def activities_on(self, project_id: int, date: str) -> List[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT * FROM activity WHERE project_id=? AND substr(ts,1,10)=? ORDER BY id ASC",
+                (project_id, date)).fetchall()]
+
+    # ── media (ask-don't-analyse) ─────────────────────────────────────────
+    def add_media(self, project_id: int, message_id: int, kind: str, path: str, filename: str,
+                  sender_phone: str, sender_name: str) -> int:
+        with self._lock, self._conn() as c:
+            cur = c.execute("INSERT INTO media (project_id, message_id, kind, path, filename,"
+                            " sender_phone, sender_name, created_at) VALUES (?,?,?,?,?,?,?,?)",
+                            (project_id, message_id, kind, path, filename, sender_phone,
+                             sender_name, self._now()))
+            return int(cur.lastrowid)
+
+    def mark_media_asked(self, media_id: int) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE media SET asked=1 WHERE id=?", (media_id,))
+
+    def awaiting_caption(self, project_id: int, phone: str) -> Optional[Dict[str, Any]]:
+        """The most recent uncaptioned photo this person posted (we asked; they haven't said)."""
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT * FROM media WHERE project_id=? AND sender_phone=? AND asked=1"
+                          " AND caption='' ORDER BY id DESC LIMIT 1",
+                          (project_id, phone)).fetchone()
+            return dict(r) if r else None
+
+    def uncaptioned_media(self, project_id: int) -> List[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT * FROM media WHERE project_id=? AND caption='' AND asked=1"
+                " ORDER BY id ASC", (project_id,)).fetchall()]
+
+    def set_media_caption(self, media_id: int, caption: str) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE media SET caption=?, captioned_at=? WHERE id=?",
+                      (caption[:500], self._now(), media_id))
+
+    def bump_media_nudge(self, media_id: int) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE media SET nudges=nudges+1 WHERE id=?", (media_id,))
+
+    def give_up_media(self, media_id: int) -> None:
+        """Let it go (AllGud curiosity rule) — filed without context rather than nagging."""
+        with self._lock, self._conn() as c:
+            c.execute("UPDATE media SET caption='(no context given)', captioned_at=? WHERE id=?",
+                      (self._now(), media_id))
+
+    def media_on(self, project_id: int, date: str) -> List[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT * FROM media WHERE project_id=? AND substr(created_at,1,10)=?"
+                " ORDER BY id ASC", (project_id, date)).fetchall()]
+
+    # ── the brain: durable memories ───────────────────────────────────────
+    def add_memory(self, project_id: int, text: str, source: str, sender: str = "",
+                   ref_date: str = "") -> int:
+        with self._lock, self._conn() as c:
+            cur = c.execute("INSERT INTO memories (project_id, text, source, sender, ref_date, ts)"
+                            " VALUES (?,?,?,?,?,?)",
+                            (project_id, text[:1000], source, sender, ref_date, self._now()))
+            return int(cur.lastrowid)
+
+    def memories(self, project_id: int, limit: int = 100) -> List[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT * FROM memories WHERE project_id=? ORDER BY id DESC LIMIT ?",
+                (project_id, limit)).fetchall()]
+
+    def memory_exists_for_date(self, project_id: int, source: str, ref_date: str) -> bool:
+        with self._lock, self._conn() as c:
+            r = c.execute("SELECT 1 FROM memories WHERE project_id=? AND source=? AND ref_date=?",
+                          (project_id, source, ref_date)).fetchone()
+            return bool(r)
+
+    # ── embeddings (semantic recall over messages + memories) ─────────────
+    def save_embedding(self, project_id: int, ref_kind: str, ref_id: int, vec: bytes) -> None:
+        with self._lock, self._conn() as c:
+            c.execute("INSERT OR REPLACE INTO embeddings (project_id, ref_kind, ref_id, vec)"
+                      " VALUES (?,?,?,?)", (project_id, ref_kind, ref_id, vec))
+
+    def all_embeddings(self, project_id: int) -> List[Dict[str, Any]]:
+        with self._lock, self._conn() as c:
+            return [dict(r) for r in c.execute(
+                "SELECT ref_kind, ref_id, vec FROM embeddings WHERE project_id=?",
+                (project_id,)).fetchall()]
+
+    def resolve_refs(self, project_id: int, refs: List[tuple]) -> List[Dict[str, Any]]:
+        """[(ref_kind, ref_id)] → the underlying text rows, for grounding a recall answer."""
+        out: List[Dict[str, Any]] = []
+        msg_ids = [r for k, r in refs if k == "message"]
+        mem_ids = [r for k, r in refs if k == "memory"]
+        with self._lock, self._conn() as c:
+            if msg_ids:
+                ph = ",".join("?" for _ in msg_ids)
+                for r in c.execute(f"SELECT id, sender_name, text, ts FROM messages WHERE id IN ({ph})",
+                                   tuple(msg_ids)).fetchall():
+                    out.append({"kind": "message", "who": r["sender_name"], "text": r["text"],
+                                "ts": r["ts"]})
+            if mem_ids:
+                ph = ",".join("?" for _ in mem_ids)
+                for r in c.execute(f"SELECT id, sender, text, ts, source FROM memories WHERE id IN ({ph})",
+                                   tuple(mem_ids)).fetchall():
+                    out.append({"kind": "memory", "who": r["sender"], "text": r["text"],
+                                "ts": r["ts"], "source": r["source"]})
+        out.sort(key=lambda x: x.get("ts", ""))
+        return out
+
+    def keyword_search(self, project_id: int, terms: List[str], limit: int = 8) -> List[Dict[str, Any]]:
+        """Fallback when embeddings aren't configured — recall degrades, never breaks."""
+        if not terms:
+            return []
+        cl = " OR ".join("text LIKE ?" for _ in terms)
+        args: List[Any] = [f"%{t}%" for t in terms]
+        out: List[Dict[str, Any]] = []
+        with self._lock, self._conn() as c:
+            for r in c.execute(f"SELECT sender_name who, text, ts FROM messages WHERE project_id=?"
+                               f" AND ({cl}) ORDER BY id DESC LIMIT ?",
+                               (project_id, *args, limit)).fetchall():
+                out.append({"kind": "message", **dict(r)})
+            for r in c.execute(f"SELECT sender who, text, ts FROM memories WHERE project_id=?"
+                               f" AND ({cl}) ORDER BY id DESC LIMIT ?",
+                               (project_id, *args, limit)).fetchall():
+                out.append({"kind": "memory", **dict(r)})
+        out.sort(key=lambda x: x.get("ts", ""))
+        return out[:limit]
