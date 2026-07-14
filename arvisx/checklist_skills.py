@@ -610,16 +610,21 @@ _ACTION_SYS = (
     "- issue_status: change an issue's status. Needs issue_ref (the asset/word they name, e.g. "
     "'lift') + status (in_progress | resolved | open).\n"
     "- signoff: sign off a submitted shift. Needs shift.\n"
-    "- remind: nudge a technician / SEND them their round link (the deep-link to their pending "
-    "round). Needs technician. Covers 'remind X', 'send the link for X', 'send X the link', "
-    "'share X's round', 'forward the link to X', 'nudge X'.\n"
+    "- remind: DM someone on the team. Put WHO in `technician` (a technician, OR the manager/owner "
+    "— 'remind the manager' is valid). Covers 'remind X', 'tell X to …', 'ask X to …', 'nudge X', "
+    "'send the link for X', 'send X the link', 'share X's round', 'forward the link to X'.\n"
+    "  * `note` = WHAT they are being asked to do, in the MANAGER'S OWN WORDS, copied verbatim from "
+    "their message (e.g. 'remind Rohit to check the DG oil' → technician='Rohit', note='check the DG "
+    "oil'). Do NOT rewrite, embellish, or invent a task. If they only said 'remind X' / 'send X the "
+    "link' with no task, leave note empty — that sends X their pending round instead.\n"
     "- open_today: open today's rounds.\n"
     "Use the CONTEXT (technicians, open issues) AND the recent conversation to fill fields — "
     "resolve 'him/her/them/the link' from what was just discussed; never invent a technician or "
     "issue that isn't in context. Map words: 'mark/put/move ... in progress'→in_progress, "
     "'close/done/fixed'→resolved, 'reopen'→open. If it's a QUESTION or not a clear action, return "
     '{"action":"none"}. Output JSON only: '
-    '{"action":"assign|issue_status|signoff|remind|open_today|none","shift":"","technician":"","issue_ref":"","status":""}.')
+    '{"action":"assign|issue_status|signoff|remind|open_today|none","shift":"","technician":"",'
+    '"issue_ref":"","status":"","note":""}.')
 
 
 async def extract_action(llm, text: str, context: str, history=None):
@@ -646,7 +651,10 @@ async def extract_action(llm, text: str, context: str, history=None):
     return {"action": act, "shift": str(out.get("shift", "")).strip(),
             "technician": str(out.get("technician", "")).strip(),
             "issue_ref": str(out.get("issue_ref", "")).strip(),
-            "status": str(out.get("status", "")).strip().lower()}
+            "status": str(out.get("status", "")).strip().lower(),
+            # The ask, in the manager's own words. Capped, never reworded — it goes out as a
+            # message to a real person and gets attributed to them.
+            "note": str(out.get("note", "")).strip()[:300]}
 
 
 async def extract_decision(llm, sender: str, q: str, reply: str) -> str:

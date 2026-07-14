@@ -486,7 +486,74 @@ function LlmConfig() {
           {saved ? <CheckCircle2 className="w-4 h-4" /> : null} {busy ? 'Saving…' : saved ? 'Saved — run the test below' : 'Save LLM config'}
         </button>
       </Card>
+      <KeyPool cfg={cfg} reload={load} />
     </div>
+  )
+}
+
+// ── API key pool: rotate off a rate-limited key instead of going dark ─────────
+function KeyPool({ cfg, reload }) {
+  const [newKey, setNewKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const keys = cfg?.keys || []
+  const avail = cfg?.keys_available ?? 0
+
+  async function add() {
+    if (!newKey.trim()) return
+    setBusy(true); setErr('')
+    try { await api.adminAddLlmKey(newKey.trim()); setNewKey(''); reload() }
+    catch (e) { setErr(e.message) } finally { setBusy(false) }
+  }
+  async function remove(last4) {
+    setBusy(true); setErr('')
+    try { await api.adminRemoveLlmKey(last4); reload() }
+    catch (e) { setErr(e.message) } finally { setBusy(false) }
+  }
+  const mins = (s) => (s >= 60 ? `${Math.ceil(s / 60)} min` : `${s}s`)
+
+  return (
+    <Card className="p-6 mt-4 space-y-4">
+      <div>
+        <div className="text-sm text-text-dim">API key pool</div>
+        <div className="text-xs text-text-faint mt-1">
+          Add more keys and AllGud rotates automatically: when the provider rate-limits one key it's
+          parked until the provider says it's free, and the next key answers. The bot only shows the
+          "busy" message once <b className="text-text-dim">every</b> key is exhausted.
+        </div>
+        {keys.length > 0 && (
+          <div className="text-xs mt-2">
+            <span className={avail > 0 ? 'text-green' : 'text-red'}>{avail} of {keys.length} available</span>
+          </div>
+        )}
+      </div>
+
+      {keys.length > 0 && (
+        <div className="space-y-2">
+          {keys.map((k) => (
+            <div key={k.last4} className="flex items-center justify-between bg-bg border border-border rounded-lg px-3 py-2">
+              <div className="flex items-center gap-3 text-sm">
+                <span className="font-mono text-text-dim">•••• {k.last4}</span>
+                {k.cooling
+                  ? <span className="text-xs text-amber">rate-limited · frees up in {mins(k.cooldown_s)}</span>
+                  : <span className="text-xs text-green">available</span>}
+              </div>
+              <button onClick={() => remove(k.last4)} disabled={busy}
+                className="text-xs text-text-faint hover:text-red disabled:opacity-50">Remove</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="flex gap-2">
+        <input type="password" value={newKey} onChange={(e) => setNewKey(e.target.value)}
+          placeholder="paste another API key" onKeyDown={(e) => e.key === 'Enter' && add()}
+          className="flex-1 bg-bg border border-border rounded-lg px-3 py-2 text-sm text-text" />
+        <button onClick={add} disabled={busy || !newKey.trim()}
+          className="text-sm bg-primary text-white rounded-lg px-4 py-2 disabled:opacity-50">Add key</button>
+      </div>
+      {err && <div className="text-xs text-red">{err}</div>}
+    </Card>
   )
 }
 
