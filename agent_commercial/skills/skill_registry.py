@@ -72,6 +72,19 @@ class SkillRegistry:
                 )
                 """
             )
+            # Fleet sharing: many equipment instances → one compiled skill.
+            # The compiled files are shared; each instance keeps its own learned
+            # layer in the skillbook (keyed by equipment_id), so a shared manual
+            # never blurs one instance's quirks into another's.
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS skill_binding (
+                    equipment_id  TEXT PRIMARY KEY,
+                    equipment_key TEXT NOT NULL,
+                    bound_at      TEXT
+                )
+                """
+            )
 
     def upsert(self, e: RegistryEntry) -> None:
         with self._conn() as c:
@@ -133,6 +146,47 @@ class SkillRegistry:
                 "UPDATE compiled_skill SET equipment_id=? WHERE equipment_key=?",
                 (equipment_id, equipment_key),
             )
+
+    # ---- fleet bindings (many instances → one compiled skill) -------------
+
+    def bind_instance(self, equipment_id: str, equipment_key: str) -> None:
+        """Bind an equipment instance to a shared compiled skill."""
+        from datetime import datetime
+        with self._conn() as c:
+            c.execute(
+                """
+                INSERT INTO skill_binding (equipment_id, equipment_key, bound_at)
+                VALUES (?,?,?)
+                ON CONFLICT(equipment_id) DO UPDATE SET
+                    equipment_key=excluded.equipment_key,
+                    bound_at=excluded.bound_at
+                """,
+                (equipment_id.strip(), equipment_key.strip(),
+                 datetime.now().isoformat(timespec="seconds")),
+            )
+        logger.info("Fleet-bound %s → %s", equipment_id, equipment_key)
+
+    def bind_fleet(self, equipment_key: str, equipment_ids: list[str]) -> int:
+        for eid in equipment_ids:
+            self.bind_instance(eid, equipment_key)
+        return len(equipment_ids)
+
+    def resolve_instance(self, equipment_id: str) -> Optional[str]:
+        """Return the compiled skill key an instance is fleet-bound to, if any."""
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT equipment_key FROM skill_binding WHERE equipment_id=?",
+                (equipment_id.strip(),),
+            ).fetchone()
+        return row["equipment_key"] if row else None
+
+    def list_fleet(self, equipment_key: str) -> list[str]:
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT equipment_id FROM skill_binding WHERE equipment_key=? ORDER BY equipment_id",
+                (equipment_key.strip(),),
+            ).fetchall()
+        return [r["equipment_id"] for r in rows]
 
     @staticmethod
     def _row(row: sqlite3.Row) -> RegistryEntry:

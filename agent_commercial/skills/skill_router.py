@@ -131,9 +131,16 @@ class SkillRouter:
             if e:
                 return e
         if equipment_id:
-            e = self.registry.get_by_equipment_id(equipment_id.strip())
+            eid = equipment_id.strip()
+            e = self.registry.get_by_equipment_id(eid)
             if e:
                 return e
+            # fleet binding: instance shares another equipment's compiled skill
+            bound_key = self.registry.resolve_instance(eid)
+            if bound_key:
+                e = self.registry.get(bound_key)
+                if e:
+                    return e
         # infer from query: match registry keys/ids against query tokens
         if query:
             q = query.lower()
