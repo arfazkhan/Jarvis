@@ -22,6 +22,7 @@ from agent_commercial.tools.handlers.gsas import GSASHandlerMixin
 from agent_commercial.tools.handlers.advisory import AdvisoryHandlerMixin
 from agent_commercial.tools.handlers.ml import MLHandlerMixin
 from agent_commercial.tools.handlers.sovereign import SovereignHandlerMixin
+from agent_commercial.tools.handlers.skills import SkillsHandlerMixin
 
 logger = logging.getLogger("arvis.bms.tools")
 
@@ -99,7 +100,8 @@ class BMSToolHandler(
     GSASHandlerMixin,
     AdvisoryHandlerMixin,
     MLHandlerMixin,
-    SovereignHandlerMixin
+    SovereignHandlerMixin,
+    SkillsHandlerMixin
 ):
     """
     Handler for BMS tools, to be integrated with the main ToolExecutor.

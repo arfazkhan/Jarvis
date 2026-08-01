@@ -48,3 +48,6 @@ models/
 # test_results.txt
 # test_report.md
 # system_implementation_report.md
+
+# Generated compiled-skill output (produced by skill_compiler)
+agent_commercial/data/skills/

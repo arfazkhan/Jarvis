@@ -1,0 +1,6 @@
+# CBI manual→skill compiler dependencies (agent_commercial/skills/)
+# Optional extras beyond the core app requirements.
+PyMuPDF>=1.24        # fitz: PDF render + embedded-text extraction
+rapidocr>=3.0        # onnxruntime OCR (no torch) — primary bulk OCR backend
+openai>=1.40         # OpenAI-compatible client for analyzer + vision escalation
+# docling            # optional: structure-aware extraction (needs working torch)

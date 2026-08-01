@@ -15,6 +15,7 @@ from agent_commercial.tools.definitions.advisory import ADVISORY_TOOLS
 from agent_commercial.tools.definitions.ml import ML_TOOLS
 from agent_commercial.tools.definitions.sovereign import SOVEREIGN_TOOLS
 from agent_commercial.tools.definitions.system import SYSTEM_TOOLS
+from agent_commercial.tools.definitions.skills import SKILL_TOOLS
 
 
 def get_all_tools() -> list:
@@ -28,7 +29,8 @@ def get_all_tools() -> list:
         ADVISORY_TOOLS +
         ML_TOOLS +
         SOVEREIGN_TOOLS +
-        SYSTEM_TOOLS
+        SYSTEM_TOOLS +
+        SKILL_TOOLS
     )
 
 
@@ -46,5 +48,6 @@ __all__ = [
     "ML_TOOLS",
     "SOVEREIGN_TOOLS",
     "SYSTEM_TOOLS",
+    "SKILL_TOOLS",
     "get_all_tools",
 ]
