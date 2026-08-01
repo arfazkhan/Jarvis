@@ -52,6 +52,7 @@ class VisionBackend(OCRBackend):
     def __init__(self, model: str | None = None) -> None:
         self._client = None
         self._model = model
+        self._pool = None  # GroqKeyPool when Groq keys are present
         self._resolve_client()
 
     def _resolve_client(self) -> None:
@@ -60,6 +61,19 @@ class VisionBackend(OCRBackend):
         except Exception:
             logger.warning("openai package not available; vision backend disabled")
             return
+        # Prefer the shared Groq key pool (rotates on rate limits) when Groq keys
+        # are configured. Same pool the analyzer uses — cooldowns are shared.
+        try:
+            from agent_commercial.skills.groq_pool import GroqKeyPool
+            pool = GroqKeyPool()
+            if pool.available:
+                self._pool = pool
+                self._model = self._model or "qwen/qwen3.6-27b"
+                logger.info("Vision OCR using Groq key pool (%d keys) model=%s",
+                            pool.size, self._model)
+                return
+        except Exception as e:
+            logger.debug("Groq pool init skipped for vision: %s", e)
         for provider, env_var, base_url, default_model in _VISION_PROVIDERS:
             key = os.getenv(env_var, "").strip()
             if not key:
@@ -81,7 +95,7 @@ class VisionBackend(OCRBackend):
 
     @property
     def available(self) -> bool:
-        return self._client is not None
+        return self._client is not None or self._pool is not None
 
     def extract_page(self, png_bytes: bytes, page_no: int) -> PageOCRResult:
         if not self.available:
@@ -92,20 +106,24 @@ class VisionBackend(OCRBackend):
         img_bytes, mime = self._prepare_image(png_bytes)
         b64 = base64.b64encode(img_bytes).decode("ascii")
         data_url = f"data:{mime};base64,{b64}"
+        call_kwargs = dict(
+            model=self._model,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": _TRANSCRIBE_PROMPT},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            }],
+            temperature=0.0,
+            max_tokens=8192,
+            extra_body={"reasoning_effort": "none"},
+        )
         try:
-            resp = self._client.chat.completions.create(
-                model=self._model,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": _TRANSCRIBE_PROMPT},
-                        {"type": "image_url", "image_url": {"url": data_url}},
-                    ],
-                }],
-                temperature=0.0,
-                max_tokens=8192,
-                extra_body={"reasoning_effort": "none"},
-            )
+            if self._pool is not None:
+                resp = self._pool.chat_completion(**call_kwargs)
+            else:
+                resp = self._client.chat.completions.create(**call_kwargs)
             text = (resp.choices[0].message.content or "").strip()
             text = self._strip_reasoning(text)
         except Exception as e:

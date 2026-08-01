@@ -110,6 +110,7 @@ class SkillAnalyzer:
         self._client = None
         self._model = model
         self._provider = None
+        self._pool = None  # GroqKeyPool when Groq keys are present
         self._resolve_client()
 
     def _resolve_client(self) -> None:
@@ -118,6 +119,20 @@ class SkillAnalyzer:
         except Exception:
             logger.warning("openai package unavailable; analyzer disabled")
             return
+        # Prefer the shared Groq key pool (rotates on rate limits) when Groq keys
+        # are configured — the workhorse for compile.
+        try:
+            from agent_commercial.skills.groq_pool import GroqKeyPool
+            pool = GroqKeyPool()
+            if pool.available:
+                self._pool = pool
+                self._provider = "groq"
+                self._model = self._model or "llama-3.3-70b-versatile"
+                logger.info("Analyzer using Groq key pool (%d keys) model=%s",
+                            pool.size, self._model)
+                return
+        except Exception as e:
+            logger.debug("Groq pool init skipped: %s", e)
         for provider, env_var, base_url, default_model in _COMPILE_PROVIDERS:
             key = os.getenv(env_var, "").strip()
             if not key:
@@ -137,7 +152,7 @@ class SkillAnalyzer:
 
     @property
     def available(self) -> bool:
-        return self._client is not None
+        return self._client is not None or self._pool is not None
 
     # ---- segmentation -----------------------------------------------------
 
@@ -162,10 +177,15 @@ class SkillAnalyzer:
     # ---- LLM plumbing -----------------------------------------------------
 
     def _chat_json(self, system: str, user: str) -> dict[str, Any]:
+        messages = [{"role": "system", "content": system},
+                    {"role": "user", "content": user}]
+        if self._pool is not None:
+            resp = self._pool.chat_completion(
+                model=self._model, messages=messages, temperature=0.0, max_tokens=4096)
+            return self._parse_json((resp.choices[0].message.content or "").strip())
         resp = self._client.chat.completions.create(
             model=self._model,
-            messages=[{"role": "system", "content": system},
-                      {"role": "user", "content": user}],
+            messages=messages,
             temperature=0.0,
             max_tokens=4096,
         )
