@@ -98,6 +98,9 @@ class OpsCopilot:
             bacnet_config: BACnet connection settings
         """
         self.mode = mode
+        # Honest data-source status: LIVE | SIMULATED | UNAVAILABLE. Set during
+        # connect(); defaults to SIMULATED for simulator mode, UNAVAILABLE otherwise.
+        self.data_source = "SIMULATED" if mode == "simulator" else "UNAVAILABLE"
         self.api_port = api_port
         self.bacnet_config = bacnet_config or {}
         self.modbus_config = modbus_config or {}
@@ -487,23 +490,26 @@ class OpsCopilot:
         except Exception as e:
             logger.debug(f"Event correlator warm-start skipped: {e}")
 
-        # Initialize based on mode
+        # Initialize based on mode. data_source is the honest signal for what the
+        # readings actually are: LIVE (real device), SIMULATED (fabricated), or
+        # UNAVAILABLE (degraded, no live data) — so fake data never reads as real.
         self._bms_connected = False
+        self.data_source = "UNAVAILABLE"
         if self.mode == "simulator":
             await self._start_simulator()
             self._bms_connected = True
+            self.data_source = "SIMULATED"
         elif self.mode == "bacnet":
             _allow_offline = self.bacnet_config.get("allow_offline", False)
             try:
-                await self._start_bacnet()
+                await self._start_bacnet()   # sets data_source LIVE / UNAVAILABLE
             except RuntimeError as _e:
                 if _allow_offline:
                     logger.warning(f"BACnet offline — starting in degraded mode: {_e}")
                 else:
                     raise
         elif self.mode == "modbus":
-            await self._start_modbus()
-            self._bms_connected = True
+            await self._start_modbus()       # sets _bms_connected + data_source itself
 
         # Commissioning — apply the building's declared design facts (design_attributes,
         # zones, specs) AFTER equipment is registered so they merge onto the live records.
@@ -731,20 +737,24 @@ class OpsCopilot:
         """Start with real BACnet connection"""
         logger.info("Starting BACnet mode...")
         
+        # NOTE: BACnetAdapter's kwarg is `port`, not `local_port` — the old call
+        # passed local_port= and crashed the live path at construction.
         self.bacnet_adapter = BACnetAdapter(
             local_address=self.bacnet_config.get("local_address", "0.0.0.0"),
-            local_port=self.bacnet_config.get("port", 47808),
+            port=self.bacnet_config.get("port", 47808),
         )
-        
+
         success = await self.bacnet_adapter.connect()
         if not success:
             logger.error("Failed to connect to BACnet network")
             self._bms_connected = False
+            self.data_source = "UNAVAILABLE"
             raise RuntimeError(
                 "BACnet connection failed. Check network config or switch to mode='simulator'. "
                 "Set bacnet_config['allow_offline']=True to start degraded (no live data)."
             )
         self._bms_connected = True
+        self.data_source = "LIVE"
         
         # Discover devices
         devices = await self.bacnet_adapter.discover_devices()
@@ -754,10 +764,11 @@ class OpsCopilot:
         if "points_config" in self.bacnet_config:
             self.bacnet_adapter.load_points_from_config(self.bacnet_config["points_config"])
         
-        # Start polling
+        # Start polling — start_polling is async; the old call didn't await it,
+        # so live polling never actually ran while _bms_connected read True.
         poll_interval = self.bacnet_config.get("poll_interval", 60)
-        self.bacnet_adapter.start_polling(poll_interval)
-        
+        await self.bacnet_adapter.start_polling(poll_interval)
+
         logger.info("BACnet mode started")
     
     async def _start_modbus(self) -> None:
@@ -772,9 +783,24 @@ class OpsCopilot:
         success = await self.modbus_adapter.connect()
         if not success:
             logger.error(f"Failed to connect to Modbus device at {host}:{port}")
-            logger.info("Falling back to Modbus simulator")
+            self._bms_connected = False
+            self.data_source = "UNAVAILABLE"
+            # HARD-FAIL: never silently replace a failed live connection with
+            # simulated data — that serves fake readings as if real. Only fall
+            # back to the simulator if explicitly allowed, and mark it SIMULATED.
+            if not self.modbus_config.get("allow_offline"):
+                raise RuntimeError(
+                    f"Modbus connection to {host}:{port} failed. Fix the connection, "
+                    "use mode='simulator', or set modbus_config['allow_offline']=True "
+                    "to run on SIMULATED data (clearly flagged, not live)."
+                )
+            logger.warning("Modbus allow_offline set — running on SIMULATED data (NOT live)")
             self.modbus_adapter = ModbusSimulatorAdapter()
             await self.modbus_adapter.connect()
+            self.data_source = "SIMULATED"
+        else:
+            self._bms_connected = True
+            self.data_source = "LIVE"
 
         if "registers" in self.modbus_config:
             count = self.modbus_adapter.load_points_from_config(self.modbus_config)
