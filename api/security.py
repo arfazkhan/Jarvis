@@ -53,6 +53,25 @@ def _parse_api_keys() -> Dict[str, Role]:
 
 API_KEYS: Dict[str, Role] = _parse_api_keys()
 
+
+def _verify_jwt(token: str) -> Optional[Role]:
+    """Verify a Bearer JWT against the shared ARVIS_AUTH_SECRET and return its
+    role, or None if invalid. Uses the same secret/algorithm as the token issuer
+    so tokens from /auth/token verify here."""
+    try:
+        from agent_commercial.api.auth import SECRET_KEY, ALGORITHM
+        from jose import jwt as _jwt
+    except Exception:
+        return None
+    try:
+        payload = _jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except Exception:
+        return None
+    try:
+        return Role(str(payload.get("role", "")).lower())
+    except Exception:
+        return None
+
 # If no keys configured, generate a temporary one for safety (never leave open)
 if not API_KEYS:
     import secrets
@@ -84,18 +103,23 @@ async def get_api_key(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing API Key or Token",
         )
-    
-    # Allow Pilot Tokens
-    if key in ["pilot_admin_token", "pilot_operator_token"]:
-        # Map them to internal keys or just return as valid for now
+
+    # A configured API key wins.
+    if key in API_KEYS:
         return key
 
-    if key not in API_KEYS:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Invalid API Key",
-        )
-    return key
+    # Otherwise it must be a valid signed JWT (issued by /auth/token). The old
+    # code accepted the fixed strings "pilot_admin_token"/"pilot_operator_token"
+    # here — a password-free admin backdoor. Removed: only real JWTs pass now.
+    role = _verify_jwt(key)
+    if role is not None:
+        API_KEYS[key] = role  # cache role for this token so has_permission resolves
+        return key
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Invalid API Key",
+    )
 
 
 async def get_admin_key(api_key_header: str = Security(api_key_header)) -> str:
@@ -129,12 +153,4 @@ def has_permission(api_key: str, required_role: Role) -> bool:
         Role.VIEWER: 1,
     }
     
-    # Pilot token mapping
-    if api_key == "pilot_admin_token":
-        current_role = Role.ADMIN
-    elif api_key == "pilot_operator_token":
-        current_role = Role.OPERATOR
-    else:
-        current_role = role
-        
-    return role_hierarchy.get(current_role, 0) >= role_hierarchy.get(required_role, 0)
+    return role_hierarchy.get(role, 0) >= role_hierarchy.get(required_role, 0)

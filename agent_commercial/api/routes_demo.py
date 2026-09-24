@@ -295,9 +295,22 @@ async def discover_draft(request: Request, payload: Dict[str, Any] = Body(defaul
     _llm_agent = getattr(request.app.state, "llm_agent", None)
     _llm = getattr(_llm_agent, "llm", None) if _llm_agent else None
     draft = await sweep_and_draft(bms_state, database, building_id, llm=_llm)
+    written_to = None
     if payload.get("out"):
-        write_draft(draft, payload["out"])
-    return {"status": "success", "draft": draft}
+        # SECURITY: never write to a client-supplied absolute path or traversal.
+        # Confine output to a fixed drafts directory, using only the basename.
+        from pathlib import Path as _Path
+        base = (_Path(__file__).resolve().parent.parent / "data" / "commissioning" / "drafts")
+        base.mkdir(parents=True, exist_ok=True)
+        name = _Path(str(payload["out"])).name or "draft.yaml"
+        if not name.lower().endswith((".yaml", ".yml")):
+            name += ".yaml"
+        safe = (base / name).resolve()
+        if base.resolve() not in safe.parents:
+            raise HTTPException(400, "Invalid output path")
+        write_draft(draft, safe)
+        written_to = str(safe)
+    return {"status": "success", "draft": draft, "written_to": written_to}
 
 @router.post("/admin/commission")
 async def commission(request: Request, payload: Dict[str, Any] = Body(...)):
