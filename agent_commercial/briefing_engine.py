@@ -382,7 +382,15 @@ class BriefingGenerator:
         self.energy_analyzer = energy_analyzer
         self.skillbook = skillbook
         self.database = database
-        
+
+        # Demo seeding is OFF by default. When false, briefings contain ONLY
+        # real, grounded findings — never invented equipment alerts, deltas, or
+        # "wins". Turn on ONLY for scripted demos via ARVIS_DEMO_BRIEFING=1.
+        # Previously this content fired for any building_id containing "default"
+        # or "marina", which injected fabricated findings into real briefings.
+        import os as _os
+        self.demo_seed = _os.getenv("ARVIS_DEMO_BRIEFING", "").strip() in ("1", "true", "yes")
+
         self.weather_service = WeatherService()
         
         self.llm_provider = None
@@ -644,9 +652,9 @@ class BriefingGenerator:
             except Exception as e:
                 logger.debug(f"Could not get energy patterns: {e}")
         
-        # Add real/realistic prior phase deltas for Marina Heights or fallback
-        is_marina = self.building_id == "Marina Heights" or "marina" in self.building_id.lower() or "default" in self.building_id.lower()
-        if is_marina:
+        # Scripted demo seeding ONLY. Never fires for a real building — real
+        # briefings carry only the grounded findings gathered above.
+        if self.demo_seed:
             # Always append Floor 23, CH-04, and AHU-19 prior phase deltas to ensure ARVIS starts with them
             if not any(getattr(item, "equipment_id", "") == "FLOOR-23" for item in critical):
                 critical.append(BriefingItem(
@@ -680,8 +688,8 @@ class BriefingGenerator:
                     action="Verify auto-staging rotation schedules in Desigo CC.",
                     timestamp=since + timedelta(hours=6),
                 ))
-        elif not critical and not attention:
-            # Fallback Demo critical item
+        elif self.demo_seed and not critical and not attention:
+            # Fallback Demo critical item (scripted demo only)
             critical.append(BriefingItem(
                 priority=IssuePriority.CRITICAL,
                 title="CHW-PUMP-02 Vibration Trending",
@@ -724,8 +732,8 @@ class BriefingGenerator:
             except Exception as e:
                 logger.debug(f"Could not get wins: {e}")
         
-        # Add demo win if empty
-        if not wins:
+        # Demo win (scripted demo only) — never fabricate a saving for a real building.
+        if self.demo_seed and not wins:
             wins.append(BriefingItem(
                 priority=IssuePriority.WIN,
                 title="Zone B3 optimization working",

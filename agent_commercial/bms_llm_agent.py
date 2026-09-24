@@ -1223,17 +1223,11 @@ class BMSLLMAgent:
                     stale = []
                     points = await self.bms_state.get_points_by_equipment(eq.equipment_id)
                     from datetime import datetime, timedelta, timezone
+                    # Staleness MUST be measured against real wall-clock. Deriving
+                    # "now" from the newest sensor timestamp meant a frozen feed
+                    # never aged — dead data read as live, defeating the guard.
+                    # If the whole feed stops, points now correctly go stale.
                     _now = datetime.now(timezone.utc)
-                    if hasattr(self.bms_state, "_points") and self.bms_state._points:
-                        valid_ts = []
-                        for p in self.bms_state._points.values():
-                            ts = getattr(p, 'timestamp', None)
-                            if ts:
-                                if ts.tzinfo is None:
-                                    ts = ts.replace(tzinfo=timezone.utc)
-                                valid_ts.append(ts)
-                        if valid_ts:
-                            _now = max(valid_ts)
                     _stale_threshold = timedelta(minutes=15)
 
                     for p in points:
