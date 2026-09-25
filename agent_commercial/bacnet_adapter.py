@@ -12,7 +12,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any, Callable
 from enum import Enum
 
@@ -228,7 +228,7 @@ class BACnetAdapter:
             name=point_config.point_name,
             value=float_val,
             unit=point_config.unit,
-            timestamp=datetime.now(),
+            timestamp=datetime.now(timezone.utc),
             source="bacnet",
             equipment_id=point_config.equipment_id,
             point_type=point_config.point_type,
@@ -463,7 +463,7 @@ class BACnetSimulatorAdapter:
             name=point_config.point_name,
             value=round(val, 2),
             unit=point_config.unit,
-            timestamp=datetime.now(),
+            timestamp=datetime.now(timezone.utc),
             source="simulator",
             equipment_id=point_config.equipment_id,
             point_type=point_config.point_type,

@@ -24,7 +24,7 @@ import time
 import re
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 from agent_unified.llm import UnifiedLLM
 from agent_unified.schema import Message
@@ -1231,9 +1231,13 @@ class BMSLLMAgent:
                     _stale_threshold = timedelta(minutes=15)
 
                     for p in points:
-                        # Staleness check: skip stale points from grounding
+                        # Staleness check: skip stale points from grounding.
+                        # A naive timestamp is LOCAL wall-time (adapters used
+                        # datetime.now()); interpret it as local and convert to
+                        # UTC — never relabel local as UTC, which skewed the
+                        # cutoff by the host's UTC offset (≈3h on Qatar time).
                         if hasattr(p, 'timestamp') and p.timestamp:
-                            _ts = p.timestamp if p.timestamp.tzinfo else p.timestamp.replace(tzinfo=timezone.utc)
+                            _ts = p.timestamp if p.timestamp.tzinfo else p.timestamp.astimezone(timezone.utc)
                             _age = _now - _ts
                             if _age > _stale_threshold:
                                 stale.append({
@@ -1403,9 +1407,21 @@ class BMSLLMAgent:
                                 continue
 
                             eq_block["operational"] = True
+                            _now_ev = datetime.now(timezone.utc)
+                            _stale_excluded = 0
                             for p in pts:
                                 if p.value is None:
                                     continue
+                                # Never let a STALE reading into LIVE evidence.
+                                # Naive timestamps are local wall-time → convert,
+                                # don't relabel as UTC. Points older than 15 min
+                                # are excluded (counted for transparency).
+                                _p_ts = getattr(p, "timestamp", None)
+                                if _p_ts is not None:
+                                    _p_ts = _p_ts if _p_ts.tzinfo else _p_ts.astimezone(timezone.utc)
+                                    if (_now_ev - _p_ts) > timedelta(minutes=15):
+                                        _stale_excluded += 1
+                                        continue
                                 # Capture the most diagnostic points per kind
                                 pid_lower = p.point_id.lower()
                                 interesting = any(k in pid_lower for k in (
@@ -1419,7 +1435,10 @@ class BMSLLMAgent:
                                     eq_block["points"][p.name or p.point_id] = {
                                         "value": p.value,
                                         "unit": p.unit or "",
+                                        "ts": _p_ts.isoformat() if _p_ts else None,
                                     }
+                            if _stale_excluded:
+                                eq_block["stale_excluded"] = _stale_excluded
                             eq_block["data_point_count"] = len(eq_block["points"])
                             snapshot["equipment_status"].append(eq_block)
                         except Exception:

@@ -295,14 +295,26 @@ def create_api(
         llm = getattr(app.state, "llm_agent", None)
         llm_ok = llm is not None
 
+        # Honest data-source signal so operators can tell live from simulated.
+        _ops = getattr(app.state, "ops_copilot", None)
+        data_source = getattr(_ops, "data_source", None) or (
+            "SIMULATED" if getattr(_ops, "mode", None) == "simulator" else "UNKNOWN")
+        bms_connected = bool(getattr(_ops, "_bms_connected", False))
+
         status_detail = {
             "status": "healthy" if (bms_ok and llm_ok) else "degraded",
+            "data_source": data_source,          # LIVE | SIMULATED | UNAVAILABLE | UNKNOWN
+            "bms_connected": bms_connected,
             "bms_state_engine": "up" if bms_ok else "down",
             "llm_agent": "up" if llm_ok else "down",
             "skillbook": "up" if getattr(app.state, "skillbook", None) else "absent",
             "meta_cognition": "up" if getattr(app.state, "meta_cognition", None) else "absent",
             "goal_tracker": "up" if getattr(app.state, "goal_tracker", None) else "absent",
         }
+
+        # A pilot must not be treated as healthy-live when the data isn't live.
+        if data_source == "UNAVAILABLE":
+            status_detail["status"] = "degraded"
 
         if not bms_ok:
             from fastapi.responses import JSONResponse

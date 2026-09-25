@@ -33,7 +33,7 @@ Register mapping config:
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any, Callable
 import warnings
 
@@ -234,7 +234,7 @@ class ModbusAdapter:
             name=point.point_name,
             value=value,
             unit=point.unit,
-            timestamp=datetime.now(),
+            timestamp=datetime.now(timezone.utc),
             source="modbus",
             equipment_id=point.equipment_id,
             point_type=point.point_type,
@@ -420,7 +420,7 @@ class ModbusSimulatorAdapter:
                 name=point.point_name,
                 value=value,
                 unit=point.unit,
-                timestamp=datetime.now(),
+                timestamp=datetime.now(timezone.utc),
                 source="modbus_sim",
                 equipment_id=point.equipment_id,
                 quality=PointQuality.GOOD,

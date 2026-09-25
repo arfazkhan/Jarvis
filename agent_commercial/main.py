@@ -1313,6 +1313,9 @@ class OpsCopilot:
         try:
             self.api_app.state.calibrator = getattr(self, "calibrator", None)
             self.api_app.state.dispatcher = getattr(self, "_dispatcher", None)
+            # Expose the running copilot so /health can report the live
+            # data_source (LIVE | SIMULATED | UNAVAILABLE) and connection state.
+            self.api_app.state.ops_copilot = self
         except Exception:
             pass
 
