@@ -158,12 +158,41 @@ class BACnetAdapter:
             logger.warning("Not connected")
             return []
 
-        logger.info(f"Sending WhoIs (timeout={timeout_seconds}s)...")
-        self._app.whois()
-        await asyncio.sleep(timeout_seconds)
+        logger.info(f"Sending Who-Is (timeout={timeout_seconds}s)...")
+        # Previously called self._app.whois() (which does not exist in bacpypes3)
+        # and then returned _devices — a dict nothing ever populated, so discovery
+        # always found zero devices and every subsequent point read was rejected
+        # as an unknown device. bacpypes3's who_is() broadcasts Who-Is AND returns
+        # the I-Am responses; register each discovered device so reads resolve.
+        i_ams = []
+        try:
+            i_ams = await asyncio.wait_for(self._app.who_is(), timeout=timeout_seconds + 1)
+        except asyncio.TimeoutError:
+            logger.warning("Who-Is timed out with no I-Am responses")
+        except Exception as e:
+            logger.warning(f"Who-Is failed: {e}")
+
+        for iam in (i_ams or []):
+            try:
+                dev_ident = getattr(iam, "iAmDeviceIdentifier", None)
+                if dev_ident is None:
+                    continue
+                # ObjectIdentifier behaves like ('device', instance)
+                dev_id = int(dev_ident[1])
+                addr = str(getattr(iam, "pduSource", "") or "")
+                self._devices[dev_id] = BACnetDevice(
+                    device_id=dev_id,
+                    device_name=f"device-{dev_id}",
+                    address=addr,
+                    vendor_name=str(getattr(iam, "vendorID", "") or ""),
+                    is_connected=True,
+                )
+            except Exception as e:
+                logger.debug(f"Skipping malformed I-Am response: {e}")
+                continue
 
         discovered = list(self._devices.values())
-        logger.info(f"Discovered {len(discovered)} devices")
+        logger.info(f"Discovered {len(discovered)} BACnet devices")
         return discovered
 
     async def read_property(
