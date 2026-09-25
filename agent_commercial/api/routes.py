@@ -317,13 +317,14 @@ def create_api(
     @app.post("/api/v1/auth/token", response_model=Token)
     async def login(form_data: OAuth2PasswordRequestForm = Depends()):
         """Authenticate operator and return JWT token."""
-        import os, hashlib
-        # Credentials loaded from env vars — set ARVIS_ADMIN_USER/PASS and ARVIS_OPERATOR_USER/PASS
+        import os, hmac
+        # Credentials from env only. Accept both *_PASSWORD (preferred) and the
+        # legacy *_PASS names so a single convention works across both APIs.
         valid_users = {}
         _admin_user = os.getenv("ARVIS_ADMIN_USER", "admin")
-        _admin_pass = os.getenv("ARVIS_ADMIN_PASS", "")
+        _admin_pass = os.getenv("ARVIS_ADMIN_PASSWORD", "") or os.getenv("ARVIS_ADMIN_PASS", "")
         _op_user = os.getenv("ARVIS_OPERATOR_USER", "operator")
-        _op_pass = os.getenv("ARVIS_OPERATOR_PASS", "")
+        _op_pass = os.getenv("ARVIS_OPERATOR_PASSWORD", "") or os.getenv("ARVIS_OPERATOR_PASS", "")
 
         if _admin_pass:
             valid_users[_admin_user] = {"password": _admin_pass, "role": "admin"}
@@ -331,18 +332,22 @@ def create_api(
             valid_users[_op_user] = {"password": _op_pass, "role": "operator"}
 
         if not valid_users:
-            # Dev fallback — no passwords set, accept any login with warning
-            logger.warning("AUTH: No credentials configured. Set ARVIS_ADMIN_PASS / ARVIS_OPERATOR_PASS env vars.")
-            role = "admin" if form_data.username == _admin_user else "operator"
-        else:
-            user_record = valid_users.get(form_data.username)
-            if not user_record or user_record["password"] != form_data.password:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Incorrect username or password",
-                    headers={"WWW-Authenticate": "Bearer"},
-                )
-            role = user_record["role"]
+            # FAIL CLOSED: no password-free access. The old "accept any login"
+            # dev fallback was a live backdoor on the deployed commercial API.
+            logger.error("AUTH: no credentials configured — refusing login. "
+                         "Set ARVIS_ADMIN_PASSWORD / ARVIS_OPERATOR_PASSWORD.")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authentication is not configured on this server.",
+            )
+        user_record = valid_users.get(form_data.username)
+        if not user_record or not hmac.compare_digest(form_data.password, user_record["password"]):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect username or password",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        role = user_record["role"]
 
         from agent_commercial.api.auth import create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
         from datetime import timedelta

@@ -72,6 +72,14 @@ def _verify_jwt(token: str) -> Optional[Role]:
     except Exception:
         return None
 
+
+def _resolve_role(key: str) -> Optional[Role]:
+    """Role for a credential, resolved fresh each call: a configured API key, or
+    a valid signed JWT (decoded + expiry-checked every time — never cached)."""
+    if key in API_KEYS:
+        return API_KEYS[key]
+    return _verify_jwt(key)
+
 # If no keys configured, generate a temporary one for safety (never leave open)
 if not API_KEYS:
     import secrets
@@ -104,16 +112,11 @@ async def get_api_key(
             detail="Missing API Key or Token",
         )
 
-    # A configured API key wins.
-    if key in API_KEYS:
-        return key
-
-    # Otherwise it must be a valid signed JWT (issued by /auth/token). The old
-    # code accepted the fixed strings "pilot_admin_token"/"pilot_operator_token"
-    # here — a password-free admin backdoor. Removed: only real JWTs pass now.
-    role = _verify_jwt(key)
-    if role is not None:
-        API_KEYS[key] = role  # cache role for this token so has_permission resolves
+    # Resolve the role fresh on EVERY request — a static API key OR a signed JWT
+    # (re-decoded each time, so expiry is always enforced). The prior version
+    # cached verified JWTs into API_KEYS, which meant an expired token kept
+    # working after its first use. Never cache tokens.
+    if _resolve_role(key) is not None:
         return key
 
     raise HTTPException(
@@ -125,8 +128,8 @@ async def get_api_key(
 async def get_admin_key(api_key_header: str = Security(api_key_header)) -> str:
     """Validate Admin-level API Key (requires admin role)."""
     key = await get_api_key(api_key_header)
-    role = API_KEYS.get(key)
-    
+    role = _resolve_role(key)
+
     if role != Role.ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -142,7 +145,7 @@ def get_role(api_key: str) -> Optional[Role]:
 
 def has_permission(api_key: str, required_role: Role) -> bool:
     """Check if an API key has the required role or higher."""
-    role = API_KEYS.get(api_key)
+    role = _resolve_role(api_key)
     if not role:
         return False
     

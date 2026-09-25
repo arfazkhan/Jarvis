@@ -25,11 +25,10 @@ class Token(BaseModel):
 # Passwords come from the environment ONLY. If unset, that role cannot log in
 # (fail closed) — never a hardcoded or password-free credential.
 def _expected_password(username: str) -> Optional[str]:
-    mapping = {
-        "admin": os.getenv("ARVIS_ADMIN_PASSWORD", "").strip(),
-        "operator": os.getenv("ARVIS_OPERATOR_PASSWORD", "").strip(),
-        "viewer": os.getenv("ARVIS_VIEWER_PASSWORD", "").strip(),
-    }
+    def _pw(role: str) -> str:
+        return (os.getenv(f"ARVIS_{role}_PASSWORD", "").strip()
+                or os.getenv(f"ARVIS_{role}_PASS", "").strip())
+    mapping = {"admin": _pw("ADMIN"), "operator": _pw("OPERATOR"), "viewer": _pw("VIEWER")}
     return mapping.get(username.lower()) or None
 
 
