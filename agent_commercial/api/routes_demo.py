@@ -278,6 +278,22 @@ async def list_scenarios():
     return SCENARIO_CATALOG
 
 @router.post("/admin/discover-draft")
+def _safe_draft_path(out: str):
+    """Confine a client-supplied draft filename to the drafts directory.
+
+    SECURITY: never writes to an absolute path or ../ traversal — only the
+    basename is used, forced under data/commissioning/drafts/ with a .yaml/.yml
+    extension. Returns (base_dir, safe_path); callers verify base is a parent.
+    """
+    from pathlib import Path as _Path
+    base = (_Path(__file__).resolve().parent.parent / "data" / "commissioning" / "drafts")
+    name = _Path(str(out)).name or "draft.yaml"
+    if not name.lower().endswith((".yaml", ".yml")):
+        name += ".yaml"
+    safe = (base / name).resolve()
+    return base, safe
+
+
 async def discover_draft(request: Request, payload: Dict[str, Any] = Body(default={})):
     """
     Pre-deployment sweep: read the discovered inventory (bms_state — populated by
@@ -297,17 +313,10 @@ async def discover_draft(request: Request, payload: Dict[str, Any] = Body(defaul
     draft = await sweep_and_draft(bms_state, database, building_id, llm=_llm)
     written_to = None
     if payload.get("out"):
-        # SECURITY: never write to a client-supplied absolute path or traversal.
-        # Confine output to a fixed drafts directory, using only the basename.
-        from pathlib import Path as _Path
-        base = (_Path(__file__).resolve().parent.parent / "data" / "commissioning" / "drafts")
-        base.mkdir(parents=True, exist_ok=True)
-        name = _Path(str(payload["out"])).name or "draft.yaml"
-        if not name.lower().endswith((".yaml", ".yml")):
-            name += ".yaml"
-        safe = (base / name).resolve()
+        base, safe = _safe_draft_path(str(payload["out"]))
         if base.resolve() not in safe.parents:
             raise HTTPException(400, "Invalid output path")
+        base.mkdir(parents=True, exist_ok=True)
         write_draft(draft, safe)
         written_to = str(safe)
     return {"status": "success", "draft": draft, "written_to": written_to}

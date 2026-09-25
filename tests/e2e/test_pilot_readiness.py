@@ -110,8 +110,8 @@ class TestPilotReadiness:
         alarm = AlarmFactory.critical_chiller()
         full_system.add_alarm(alarm)
         
-        # Get active alarms
-        active = full_system.get_active_alarms()
+        # Get active alarms (async on the state engine)
+        active = await full_system.get_active_alarms()
         assert len(active) >= 1
         
         # Cluster
@@ -153,11 +153,11 @@ class TestPilotReadiness:
     @pytest.mark.e2e
     async def test_tool_execution(self, full_system):
         """Tool execution should work."""
-        # Simulate tool call
-        equipment = full_system.get_equipment("CH-01")
-        
+        # Simulate tool call (get_equipment is async on the state engine)
+        equipment = await full_system.get_equipment("CH-01")
+
         assert equipment is not None
-        assert equipment["equipment_id"] == "CH-01"
+        assert equipment.to_dict()["equipment_id"] == "CH-01"
     
     @pytest.mark.asyncio
     @pytest.mark.e2e
@@ -166,19 +166,17 @@ class TestPilotReadiness:
         from agent_advisory.verify_loop import VerifyLoop
         from agent_cognitive.prediction_engine import PredictionEngine
         
-        llm = MockLLM()
-        
-        # Prediction engine
+        import tempfile, os
+        # Prediction engine — real signature uses bms_state_engine.
         prediction_engine = PredictionEngine(
-            bms_state=full_system,
-            llm=llm,
+            bms_state_engine=full_system,
         )
         assert prediction_engine is not None
-        
-        # Verify loop
+
+        # Verify loop — real signature uses state_engine; isolate persistence.
         verify_loop = VerifyLoop(
-            bms_state=full_system,
-            llm=llm,
+            state_engine=full_system,
+            persist_path=os.path.join(tempfile.mkdtemp(), "recs.json"),
         )
         assert verify_loop is not None
     
@@ -190,8 +188,8 @@ class TestPilotReadiness:
         
         This verifies all components work together.
         """
-        # 1. Get equipment status
-        equipment = full_system.get_all_equipment()
+        # 1. Get equipment status (async on the state engine)
+        equipment = await full_system.get_all_equipment()
         assert len(equipment) >= 5  # At least 5 equipment items
         
         # 2. Check state summary

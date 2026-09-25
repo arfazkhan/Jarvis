@@ -548,7 +548,9 @@ class MockBMSStateEngine:
         return {
             "equipment_count": len(self._equipment),
             "point_count": len(self._points),
-            "active_alarms": len(self.get_active_alarms()),
+            # get_active_alarms is async; compute the count directly here so this
+            # sync summary never leaves an un-awaited coroutine.
+            "active_alarms": len([a for a in self._alarms if a.get("status") != "acknowledged"]),
             "total_alarms": len(self._alarms),
         }
     
@@ -851,6 +853,7 @@ class MockGSASReporter:
             "target_score": self._target_score,
             "gap_to_target": self._target_score - self._overall_score,
             "categories": self._category_scores,
+            "category_scores": self._category_scores,  # alias expected by callers
         }
     
     def target_score(self) -> float:
@@ -968,7 +971,9 @@ class MockBriefingScheduler:
     def __init__(
         self,
         briefing: Optional[Dict[str, Any]] = None,
+        bms_state=None,
     ):
+        self.bms_state = bms_state
         self._briefing = briefing or {
             "briefing_type": "daily_morning",
             "generated_at": datetime.now().isoformat(),
@@ -1462,9 +1467,10 @@ class MockKnowledgeBase:
 class MockAlarmEngine:
     """Mock alarm engine for testing."""
     
-    def __init__(self, alarms=None):
+    def __init__(self, alarms=None, bms_state=None):
         self._alarms = alarms or []
         self._clusters = []
+        self.bms_state = bms_state
     
     def add_alarm(self, alarm):
         self._alarms.append(alarm)
@@ -1516,7 +1522,7 @@ class MockAlarmEngine:
             "analysis_note": "Mock cascade analysis completed"
         }
     
-    def cluster_alarms(self):
+    def cluster_alarms(self, alarms=None):
         return self._clusters
     
     def get_stats(self):
