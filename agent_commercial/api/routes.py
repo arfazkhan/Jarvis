@@ -273,10 +273,19 @@ def create_api(
     app.state.goal_tracker = goal_tracker
     app.state.memory_orchestrator = memory_orchestrator
 
-    # Include Omega Simulation Routes
-    app.include_router(omega_router)
-    # Include ARVIS Demo Capabilities routes (/api/v1/demo/*) — see docs/API_DEMO.md
-    app.include_router(demo_router)
+    # Simulation + demo routes (Omega simulation, /api/v1/demo/* scenario
+    # injection, artifacts). These MUST NOT be mounted on a real building — they
+    # can inject fabricated scenarios and fake findings. Disabled in production
+    # unless ARVIS_ENABLE_DEMO is explicitly set.
+    import os as _os
+    _is_prod = _os.getenv("ARVIS_ENV", "development").lower() == "production"
+    _demo_on = _os.getenv("ARVIS_ENABLE_DEMO", "").lower() in ("1", "true", "yes")
+    if _demo_on or not _is_prod:
+        app.include_router(omega_router)
+        app.include_router(demo_router)
+    else:
+        logger.warning("[PROD] Simulation/demo routes DISABLED (real-building deployment). "
+                       "Set ARVIS_ENABLE_DEMO=1 to re-enable for a demo build.")
 
     # ═══════════════════════════════════════════════════════════════════════
     # HEALTH CHECK

@@ -98,6 +98,14 @@ class OpsCopilot:
             bacnet_config: BACnet connection settings
         """
         self.mode = mode
+        # PRODUCTION SAFETY: never serve simulated / no-data content to a real
+        # building. In production only live protocols are allowed.
+        import os as _os
+        if _os.getenv("ARVIS_ENV", "development").lower() == "production" and mode in ("simulator", "api_only"):
+            raise RuntimeError(
+                f"Refusing to start in production with mode='{mode}'. "
+                "Set ARVIS_MODE=bacnet or ARVIS_MODE=modbus to connect a real building."
+            )
         # Honest data-source status: LIVE | SIMULATED | UNAVAILABLE. Set during
         # connect(); defaults to SIMULATED for simulator mode, UNAVAILABLE otherwise.
         self.data_source = "SIMULATED" if mode == "simulator" else "UNAVAILABLE"
@@ -1701,8 +1709,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mode",
         choices=["simulator", "bacnet", "modbus", "api_only"],
-        default="simulator",
-        help="Operating mode (default: simulator)"
+        default=os.getenv("ARVIS_MODE", "simulator"),
+        help="Operating mode (default: $ARVIS_MODE or simulator). "
+             "Production (ARVIS_ENV=production) requires bacnet or modbus."
     )
     parser.add_argument(
         "--port",

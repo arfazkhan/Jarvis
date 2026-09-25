@@ -74,8 +74,14 @@ COPY config/ /app/config/
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     ENV=production \
+    ARVIS_ENV=production \
+    ARVIS_MODE=bacnet \
     DEBUG=false \
     LOG_LEVEL=INFO
+# Production connects a REAL building: ARVIS_ENV=production disables all
+# simulation/demo surfaces and refuses simulator/api_only modes. Override
+# ARVIS_MODE=modbus at deploy if the site uses Modbus. Required at deploy:
+# ARVIS_AUTH_SECRET, ARVIS_ADMIN_PASSWORD, and the BACnet/Modbus connection cfg.
 
 # Switch to non-root user
 USER arvis
@@ -89,8 +95,9 @@ EXPOSE 8000 9090
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Default command
-CMD ["python", "-m", "agent_commercial.main", "--mode", "api_only", "--port", "8000"]
+# Default command — mode comes from ARVIS_MODE (bacnet by default). No hardcoded
+# simulator/api_only: a production image must connect a live building.
+CMD ["python", "-m", "agent_commercial.main", "--port", "8000"]
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Stage 3: Development Image (Optional)
