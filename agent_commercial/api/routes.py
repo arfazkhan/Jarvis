@@ -235,6 +235,37 @@ def create_api(
     app.add_middleware(SecurityAuditMiddleware)
     app.add_middleware(RateLimitMiddleware)
 
+    # PRODUCTION-ONLY app-wide authentication. Many individual routes did not
+    # declare an auth dependency, so an exposed instance could be reached
+    # anonymously. In production every request must carry a valid signed JWT
+    # (issued by /api/v1/auth/token), except health/docs/login. Dev + demo are
+    # unaffected so existing flows keep working.
+    @app.middleware("http")
+    async def _require_auth_in_production(request, call_next):
+        import os as _os
+        if _os.getenv("ARVIS_ENV", "development").lower() == "production":
+            p = request.url.path
+            exempt = (
+                p in ("/", "/health", "/api/docs", "/api/redoc", "/openapi.json")
+                or p.startswith("/api/v1/auth")
+            )
+            if not exempt:
+                ok = False
+                try:
+                    authz = request.headers.get("authorization", "")
+                    if authz.lower().startswith("bearer "):
+                        from agent_commercial.api.auth import SECRET_KEY, ALGORITHM
+                        from jose import jwt as _jwt
+                        _jwt.decode(authz[7:].strip(), SECRET_KEY, algorithms=[ALGORITHM])
+                        ok = True
+                except Exception:
+                    ok = False
+                if not ok:
+                    from starlette.responses import JSONResponse
+                    return JSONResponse(status_code=401,
+                                        content={"detail": "Authentication required"})
+        return await call_next(request)
+
     # Store engine references
     app.state.bms_state = bms_state
     app.state.alarm_engine = alarm_engine
