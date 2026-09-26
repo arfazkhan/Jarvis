@@ -119,3 +119,52 @@ def test_draft_path_confined(evil):
     assert base.resolve() in safe.parents, f"{evil} escaped the drafts dir"
     assert safe.name == __import__("pathlib").Path(evil).name.replace("\\", "/").split("/")[-1] \
         or safe.suffix in (".yaml", ".yml")
+
+
+# ── Security: privileged approval routes require auth + derive actor ──────────
+
+class _FakeApproval:
+    """Records who a package was approved by (as the route passed it)."""
+    def __init__(self):
+        self.approved_by = None
+
+    def approve_package(self, package_id, operator):
+        self.approved_by = operator
+        return {"status": "success", "package_id": package_id, "operator": operator}
+
+
+def _client_with_approval():
+    from fastapi.testclient import TestClient
+    from agent_commercial.api.routes import create_api
+    fake = _FakeApproval()
+    app = create_api(gsas_approval=fake)
+    app.state.gsas_approval = fake
+    return TestClient(app), fake
+
+
+def test_gsas_approval_rejects_anonymous():
+    """Finding #1: the approval route must NOT accept an unauthenticated request
+    and must NOT trust a body-supplied operator_id."""
+    os.environ["ARVIS_AUTH_SECRET"] = "regression-secret"
+    client, fake = _client_with_approval()
+    resp = client.post("/api/v1/gsas/packages/PKG-1/approve",
+                       json={"operator_id": "claimed-admin"})
+    assert resp.status_code == 401, resp.text
+    assert fake.approved_by is None, "approval executed for an anonymous caller"
+
+
+def test_gsas_approval_actor_from_token_not_body():
+    """A valid operator token approves; the recorded actor is the token subject,
+    never the attacker-controlled body operator_id."""
+    os.environ["ARVIS_AUTH_SECRET"] = "regression-secret"
+    from agent_commercial.api.auth import create_access_token
+    from datetime import timedelta
+    client, fake = _client_with_approval()
+    token = create_access_token({"sub": "alice.operator", "role": "operator"},
+                                expires_delta=timedelta(minutes=5))
+    resp = client.post("/api/v1/gsas/packages/PKG-1/approve",
+                       headers={"Authorization": f"Bearer {token}"},
+                       json={"operator_id": "claimed-admin"})
+    assert resp.status_code == 200, resp.text
+    assert fake.approved_by == "alice.operator", fake.approved_by
+    assert fake.approved_by != "claimed-admin"

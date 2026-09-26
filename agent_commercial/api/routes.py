@@ -140,10 +140,13 @@ class GSASAnomalyResolutionRequest(BaseModel):
     resolution: str
 
 class GSASApprovalRequest(BaseModel):
-    operator_id: str
+    # Deprecated: the acting operator is derived from the authenticated
+    # identity, never trusted from the request body. Kept optional for
+    # backward-compatible clients; the value is ignored.
+    operator_id: Optional[str] = None
 
 class GSASRejectionRequest(BaseModel):
-    operator_id: str
+    operator_id: Optional[str] = None
     reason: str
 
 
@@ -1446,7 +1449,12 @@ def create_api(
         return package.to_dict()
 
     @app.post("/api/v1/gsas/packages/{package_id}/resolve/{anomaly_id}")
-    async def resolve_gsas_anomaly(package_id: str, anomaly_id: str, req: GSASAnomalyResolutionRequest):
+    async def resolve_gsas_anomaly(
+        package_id: str,
+        anomaly_id: str,
+        req: GSASAnomalyResolutionRequest,
+        current_user: User = Depends(require_role(["admin", "operator"])),
+    ):
         """CSP resolves a flagged anomaly."""
         approval = getattr(app.state, "gsas_approval", None)
         if not approval:
@@ -1459,29 +1467,37 @@ def create_api(
         return {"status": "success", "message": "Anomaly resolved"}
 
     @app.post("/api/v1/gsas/packages/{package_id}/approve")
-    async def approve_gsas_package(package_id: str, req: GSASApprovalRequest):
-        """Final CSP approval gate."""
+    async def approve_gsas_package(
+        package_id: str,
+        req: GSASApprovalRequest,
+        current_user: User = Depends(require_role(["admin", "operator"])),
+    ):
+        """Final CSP approval gate. Actor is the authenticated user, not the body."""
         approval = getattr(app.state, "gsas_approval", None)
         if not approval:
             raise HTTPException(404, "Approval engine offline")
-            
-        result = approval.approve_package(package_id, req.operator_id)
+
+        result = approval.approve_package(package_id, current_user.username)
         if result["status"] == "error":
             raise HTTPException(400, result["message"])
-            
+
         return result
 
     @app.post("/api/v1/gsas/packages/{package_id}/reject")
-    async def reject_gsas_package(package_id: str, req: GSASRejectionRequest):
-        """CSP rejection with reason."""
+    async def reject_gsas_package(
+        package_id: str,
+        req: GSASRejectionRequest,
+        current_user: User = Depends(require_role(["admin", "operator"])),
+    ):
+        """CSP rejection with reason. Actor is the authenticated user, not the body."""
         approval = getattr(app.state, "gsas_approval", None)
         if not approval:
             raise HTTPException(404, "Approval engine offline")
-            
-        success = approval.reject_package(package_id, req.operator_id, req.reason)
+
+        success = approval.reject_package(package_id, current_user.username, req.reason)
         if not success:
             raise HTTPException(404, "Package not found")
-            
+
         return {"status": "success"}
         
     @app.get("/api/v1/gsas/packages/{package_id}/export")
@@ -2432,12 +2448,16 @@ def create_api(
         return []
 
     @app.post("/api/v1/skills/{skill_id}/approve")
-    async def approve_skill(skill_id: str, payload: Dict[str, Any]):
-        """Officially approve an AI-generated skill."""
+    async def approve_skill(
+        skill_id: str,
+        payload: Dict[str, Any],
+        current_user: User = Depends(require_role(["admin", "operator"])),
+    ):
+        """Officially approve an AI-generated skill. Actor is the authenticated user."""
         sb = getattr(app.state, "skillbook", None)
         if not sb:
             raise HTTPException(503, "Skillbook not connected.")
-        return {"status": "approved", "skill_id": skill_id, "operator": payload.get("operator_id")}
+        return {"status": "approved", "skill_id": skill_id, "operator": current_user.username}
 
     @app.get("/api/v1/memory/episodic/{day}")
     async def get_episodic_memory(day: int):
