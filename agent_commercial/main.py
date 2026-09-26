@@ -34,6 +34,8 @@ from agent_commercial.bms_data_model import (
     EquipmentStatus,
     BMSDataPoint,
     PointType,
+    PointQuality,
+    EnergyReading,
 )
 from agent_commercial.bms_state_engine import BMSStateEngine
 from agent_commercial.alarm_engine import AlarmEngine
@@ -58,6 +60,54 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("arvis.ops_copilot")
+
+
+# Point-id suffixes that denote instantaneous electrical power when no unit is
+# configured. Energy (kWh) counters are deliberately excluded — the old
+# `"KW" in point_id` test matched METER/KWH and fed cumulative kWh in as kW.
+_POWER_SUFFIXES = {"KW", "POWER_KW", "DEMAND_KW", "TOTAL_KW", "KW_TOTAL"}
+
+
+def _is_power_meter_point(point: BMSDataPoint) -> bool:
+    """True if the point is instantaneous power in kW (by unit, else suffix)."""
+    unit = (getattr(point, "unit", "") or "").strip().lower()
+    if unit:
+        return unit == "kw"
+    suffix = (point.point_id or "").upper().rsplit("/", 1)[-1]
+    return suffix in _POWER_SUFFIXES
+
+
+def _is_water_total_point(point: BMSDataPoint) -> bool:
+    return (point.point_id or "").upper().rsplit("/", 1)[-1] == "TOTAL_M3"
+
+
+def load_bms_config(path: str) -> Dict[str, Any]:
+    """Load the site BMS integration config (YAML or JSON).
+
+    Shape (see config/bms_config.yaml):
+      bacnet: {local_address, port, device_id, poll_interval, discovery_timeout, points: [...]}
+      modbus: {host, port, unit_id, poll_interval, registers: [...]}
+    """
+    import json
+    with open(path, "r", encoding="utf-8") as fh:
+        if path.lower().endswith(".json"):
+            return json.load(fh) or {}
+        import yaml
+        return yaml.safe_load(fh) or {}
+
+
+def build_protocol_configs(cfg: Dict[str, Any]):
+    """Split a site config into (bacnet_config, modbus_config) for OpsCopilot."""
+    bacnet_cfg: Dict[str, Any] = {}
+    b = cfg.get("bacnet") or {}
+    if b:
+        for key in ("local_address", "port", "device_id", "poll_interval",
+                    "discovery_timeout", "allow_offline"):
+            if key in b:
+                bacnet_cfg[key] = b[key]
+        bacnet_cfg["points_config"] = {"points": list(b.get("points") or [])}
+    modbus_cfg: Dict[str, Any] = dict(cfg.get("modbus") or {})
+    return bacnet_cfg, modbus_cfg
 
 
 class OpsCopilot:
@@ -479,6 +529,18 @@ class OpsCopilot:
 
         self._running = True
 
+        # Persist every accepted point update to data_points BEFORE any adapter
+        # starts polling, so the calibrator, digests and FDD engine learn from
+        # real history. Subscribed to the state engine, so suppression and
+        # source-priority have already been applied to what gets stored.
+        from agent_commercial.telemetry_recorder import TelemetryRecorder
+        self.telemetry_recorder = TelemetryRecorder(
+            self.database,
+            flush_interval_s=float(os.getenv("ARVIS_TELEMETRY_FLUSH_S", "60")),
+        )
+        self.state_engine.on_point_update(self.telemetry_recorder.on_point)
+        self._tasks.append(self.telemetry_recorder.start())
+
         # Warm-start: restore previous state from DB snapshot
         restored = await self.state_engine.restore_from_snapshot()
         if restored:
@@ -684,6 +746,10 @@ class OpsCopilot:
         # Stop learning engine
         await self.learning_engine.stop()
 
+        # Flush buffered telemetry so the last minute of history is not lost
+        if getattr(self, "telemetry_recorder", None):
+            await self.telemetry_recorder.stop()
+
         # Stop adapters
         if self.bacnet_adapter:
             await self.bacnet_adapter.disconnect()
@@ -769,7 +835,18 @@ class OpsCopilot:
         self.bacnet_adapter = BACnetAdapter(
             local_address=self.bacnet_config.get("local_address", "0.0.0.0"),
             port=self.bacnet_config.get("port", 47808),
+            device_id=self.bacnet_config.get("device_id", 999),
         )
+
+        # Points first: a live connection that polls nothing must not start.
+        n_points = 0
+        if "points_config" in self.bacnet_config:
+            n_points = self.bacnet_adapter.load_points_from_config(self.bacnet_config["points_config"])
+        if n_points == 0 and os.getenv("ARVIS_ENV", "development").lower() == "production":
+            raise RuntimeError(
+                "No BACnet points configured. Set ARVIS_BMS_CONFIG to the site point "
+                "list (bacnet.points) — refusing to report a live building with zero points."
+            )
 
         success = await self.bacnet_adapter.connect()
         if not success:
@@ -780,23 +857,24 @@ class OpsCopilot:
                 "BACnet connection failed. Check network config or switch to mode='simulator'. "
                 "Set bacnet_config['allow_offline']=True to start degraded (no live data)."
             )
+        # Socket bound ≠ live data. data_source stays UNAVAILABLE until the first
+        # GOOD reading arrives (see _on_point_update).
         self._bms_connected = True
-        self.data_source = "LIVE"
-        
+
         # Discover devices
-        devices = await self.bacnet_adapter.discover_devices()
+        devices = await self.bacnet_adapter.discover_devices(
+            timeout_seconds=int(self.bacnet_config.get("discovery_timeout", 5)))
         logger.info(f"Discovered {len(devices)} BACnet devices")
-        
-        # Load point config
-        if "points_config" in self.bacnet_config:
-            self.bacnet_adapter.load_points_from_config(self.bacnet_config["points_config"])
-        
+
+        # Wire the ingestion callback BEFORE polling so no first-cycle reads are lost.
+        self._wire_adapter(self.bacnet_adapter)
+
         # Start polling — start_polling is async; the old call didn't await it,
         # so live polling never actually ran while _bms_connected read True.
         poll_interval = self.bacnet_config.get("poll_interval", 60)
         await self.bacnet_adapter.start_polling(poll_interval)
 
-        logger.info("BACnet mode started")
+        logger.info(f"BACnet mode started ({n_points} points, polling every {poll_interval}s)")
     
     async def _start_modbus(self) -> None:
         """Start with Modbus TCP connection"""
@@ -826,14 +904,22 @@ class OpsCopilot:
             await self.modbus_adapter.connect()
             self.data_source = "SIMULATED"
         else:
+            # Connected ≠ live data: LIVE is set on the first GOOD reading.
             self._bms_connected = True
-            self.data_source = "LIVE"
 
+        count = 0
         if "registers" in self.modbus_config:
             count = self.modbus_adapter.load_points_from_config(self.modbus_config)
             logger.info(f"Loaded {count} Modbus register points")
+        if count == 0 and os.getenv("ARVIS_ENV", "development").lower() == "production":
+            raise RuntimeError(
+                "No Modbus registers configured. Set ARVIS_BMS_CONFIG (modbus.registers) — "
+                "refusing to report a live building with zero points."
+            )
 
-        self.modbus_adapter.on_point_update(self._on_point_update)
+        # Wire exactly once, before polling (previously also re-registered in
+        # _setup_callbacks, so every Modbus reading was processed twice).
+        self._wire_adapter(self.modbus_adapter)
         poll_interval = self.modbus_config.get("poll_interval", 30)
         await self.modbus_adapter.start_polling(poll_interval)
         logger.info(f"Modbus mode started (polling every {poll_interval}s)")
@@ -1023,8 +1109,7 @@ class OpsCopilot:
     async def _simulation_loop(self) -> None:
         """Background loop for simulating BMS data updates"""
         import random
-        from agent_commercial.bms_data_model import EnergyReading
-        
+
         while self._running:
             try:
                 # Read all points
@@ -1078,7 +1163,7 @@ class OpsCopilot:
                 
                 # Add energy readings to analyzer AND persist to database
                 for point in points:
-                    if "KW" in point.point_id:
+                    if _is_power_meter_point(point):
                         reading = EnergyReading(
                             meter_id=point.equipment_id,
                             value=point.value,
@@ -1095,7 +1180,7 @@ class OpsCopilot:
                             timestamp=point.timestamp,
                         )
                     
-                    if "TOTAL_M3" in point.point_id:
+                    if _is_water_total_point(point):
                         self.water_adapter.ingest_reading(
                             meter_id="MAIN",
                             value_m3=point.value,
@@ -1363,18 +1448,32 @@ class OpsCopilot:
     # CALLBACKS
     # ═══════════════════════════════════════════════════════════════════════
     
+    def _wire_adapter(self, adapter: Any) -> None:
+        """Register _on_point_update on an adapter exactly once."""
+        wired = self.__dict__.setdefault("_wired_adapters", set())
+        if adapter is None or id(adapter) in wired:
+            return
+        adapter.on_point_update(self._on_point_update)
+        wired.add(id(adapter))
+
     def _setup_callbacks(self) -> None:
-        """Set up event callbacks between components"""
-        
-        # Point updates -> state engine (both adapters register here if both active)
-        if self.bacnet_adapter:
-            self.bacnet_adapter.on_point_update(self._on_point_update)
-        if self.modbus_adapter:
-            self.modbus_adapter.on_point_update(self._on_point_update)
-    
+        """Set up event callbacks between components (idempotent)."""
+        # Live adapters are wired in _start_bacnet/_start_modbus before polling;
+        # this only covers adapters created elsewhere and never double-registers.
+        self._wire_adapter(self.bacnet_adapter)
+        self._wire_adapter(self.modbus_adapter)
+
     def _on_point_update(self, point: BMSDataPoint) -> None:
         """Handle point update from adapter"""
         self.state_engine.update_point_sync(point)
+
+        # The first real reading from a connected live adapter is what makes the
+        # building LIVE — not the socket bind. BAD/STALE readings don't count.
+        if (self.data_source == "UNAVAILABLE" and getattr(self, "_bms_connected", False)
+                and point.value is not None
+                and point.quality not in (PointQuality.BAD, PointQuality.STALE)):
+            self.data_source = "LIVE"
+            logger.info(f"First live reading received ({point.point_id}) — data_source=LIVE")
 
         # Feed filter DP readings into degradation predictor
         pid = (point.point_id or "").upper()
@@ -1392,7 +1491,9 @@ class OpsCopilot:
         try:
             self._ingest_meter_point(point)
         except Exception as _e:
-            logger.debug("Live meter ingest skipped for %s: %s", point.point_id, _e)
+            # Warning, not debug: a debug-level swallow is how a NameError here
+            # silently starved the energy analyzer on live buildings.
+            logger.warning("Live meter ingest failed for %s: %s", point.point_id, _e)
 
     def _ingest_meter_point(self, point: BMSDataPoint) -> None:
         """Meter-aware ingestion used by BOTH the live callback and the sim loop:
@@ -1400,8 +1501,7 @@ class OpsCopilot:
         water adapter."""
         if point.value is None:
             return
-        pid = (point.point_id or "").upper()
-        if "KW" in pid and getattr(self, "energy_analyzer", None) is not None:
+        if _is_power_meter_point(point) and getattr(self, "energy_analyzer", None) is not None:
             reading = EnergyReading(meter_id=point.equipment_id, value=point.value,
                                     unit="kW", timestamp=point.timestamp)
             self.energy_analyzer.add_reading(reading)
@@ -1418,7 +1518,7 @@ class OpsCopilot:
                                                     timestamp=point.timestamp), _loop)
                 except Exception:
                     pass
-        if "TOTAL_M3" in pid and getattr(self, "water_adapter", None) is not None:
+        if _is_water_total_point(point) and getattr(self, "water_adapter", None) is not None:
             self.water_adapter.ingest_reading(meter_id="MAIN", value_m3=point.value,
                                               timestamp=point.timestamp)
 
@@ -1727,9 +1827,27 @@ class OpsCopilot:
 
 async def main(args):
     """Main entry point"""
+    bacnet_config: Dict[str, Any] = {}
+    modbus_config: Dict[str, Any] = {}
+    if args.mode in ("bacnet", "modbus"):
+        # Site point list. Production must name it explicitly — the repo default
+        # (config/bms_config.yaml) describes the development simulator, not a building.
+        production = os.getenv("ARVIS_ENV", "development").lower() == "production"
+        cfg_path = args.bms_config or os.getenv("ARVIS_BMS_CONFIG", "")
+        if not cfg_path and not production and os.path.exists("config/bms_config.yaml"):
+            cfg_path = "config/bms_config.yaml"
+        if not cfg_path:
+            raise SystemExit(
+                "ARVIS_BMS_CONFIG is not set. Point it at the site BMS config "
+                "(bacnet.points / modbus.registers) before starting in live mode.")
+        bacnet_config, modbus_config = build_protocol_configs(load_bms_config(cfg_path))
+        logger.info(f"Loaded BMS config from {cfg_path}")
+
     copilot = OpsCopilot(
         mode=args.mode,
         api_port=args.port,
+        bacnet_config=bacnet_config,
+        modbus_config=modbus_config,
     )
     
     # Handle shutdown signals
@@ -1774,6 +1892,12 @@ if __name__ == "__main__":
         type=int,
         default=8000,
         help="API server port (default: 8000)"
+    )
+    parser.add_argument(
+        "--bms-config",
+        default="",
+        help="Site BMS config (YAML/JSON with bacnet.points / modbus.registers). "
+             "Defaults to $ARVIS_BMS_CONFIG."
     )
     
     args = parser.parse_args()

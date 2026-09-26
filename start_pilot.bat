@@ -13,9 +13,14 @@ set LOG_LEVEL=INFO
 
 echo.
 echo Mode: %ARVIS_MODE%   (ARVIS_ENV=production - simulator/demo disabled)
-echo Required before start: ARVIS_AUTH_SECRET, ARVIS_ADMIN_PASSWORD, and the
-echo BMS connection config (BACnet/Modbus device + point mapping).
+echo Required before start: ARVIS_AUTH_SECRET, ARVIS_ADMIN_PASSWORD, and
+echo ARVIS_BMS_CONFIG = path to the site BMS config (bacnet.points / modbus.registers).
 echo.
+if "%ARVIS_BMS_CONFIG%"=="" (
+  echo ERROR: ARVIS_BMS_CONFIG is not set. ARVIS will not start a live building with no points.
+  pause
+  exit /b 1
+)
 echo Starting commercial live pipeline...
 echo.
 

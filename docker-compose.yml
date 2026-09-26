@@ -31,6 +31,9 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - WEB_UI_SECRET=${WEB_UI_SECRET}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # The runtime DB is SQLite (DATABASE_URL above is unused by BMSDatabase).
+      # Keep it on the persistent volume — the code default is inside the image.
+      - ARVIS_DB_PATH=/app/data/arvis_bms.db
     volumes:
       - arvis-data:/app/data
       - arvis-logs:/app/logs

@@ -387,7 +387,10 @@ async def test_watchdog_hot_reload_and_lookup(temp_db):
 
     # Assert watchdog has loaded it into its cache
     assert "point:VAV01_FLOW" in watchdog.calibrated_thresholds
-    floor, z = watchdog.calibrated_thresholds["point:VAV01_FLOW"]
+    # Cache order is (z_threshold, std_floor) — the order _get_threshold_and_floor
+    # unpacks. This test previously unpacked both in the swapped order, which
+    # hid the bug where the std floor (120) was applied as the z threshold.
+    z, floor = watchdog.calibrated_thresholds["point:VAV01_FLOW"]
     assert z == 3.5
     assert floor == 120.0
 
@@ -399,7 +402,7 @@ async def test_watchdog_hot_reload_and_lookup(temp_db):
             self.unit = "cfm"
 
     point = DummyPoint("VAV01_FLOW", "VAV-01")
-    std_floor, z_thresh = watchdog._get_threshold_and_floor(point)
+    z_thresh, std_floor = watchdog._get_threshold_and_floor(point)  # documented return order
     assert z_thresh == 3.5
     assert std_floor == 120.0
 

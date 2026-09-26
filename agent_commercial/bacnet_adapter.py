@@ -10,6 +10,7 @@ All operations are proper coroutines.
 
 import asyncio
 import logging
+import math
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -32,6 +33,46 @@ from agent_commercial.bms_data_model import (
 )
 
 logger = logging.getLogger("arvis.bms.bacnet3")
+
+
+# Text forms of BACnet binary present values (BinaryPV enumerations).
+_BINARY_TEXT = {"active": 1.0, "inactive": 0.0, "on": 1.0, "off": 0.0,
+                "true": 1.0, "false": 0.0}
+
+
+def coerce_numeric(value: Any) -> Optional[float]:
+    """Convert a BACnet present value to a float, or None if it has no honest
+    numeric meaning. Never substitutes a default — the old `except: 0.0` turned
+    unreadable values into a fake GOOD zero."""
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return _BINARY_TEXT.get(str(value).strip().lower())
+    return f if math.isfinite(f) else None
+
+
+def quality_from_status_flags(flags: Any) -> PointQuality:
+    """Map BACnet StatusFlags (inAlarm, fault, overridden, outOfService) to quality.
+
+    fault or outOfService → BAD (the value is not a live measurement);
+    overridden → OVERRIDDEN; flags unavailable → UNCERTAIN; else GOOD.
+    """
+    if flags is None:
+        return PointQuality.UNCERTAIN
+    try:
+        bits = [int(b) for b in flags]
+    except (TypeError, ValueError):
+        return PointQuality.UNCERTAIN
+    if len(bits) < 4:
+        return PointQuality.UNCERTAIN
+    _in_alarm, fault, overridden, out_of_service = bits[:4]
+    if fault or out_of_service:
+        return PointQuality.BAD
+    if overridden:
+        return PointQuality.OVERRIDDEN
+    return PointQuality.GOOD
 
 
 class BACnetObjectType(Enum):
@@ -99,10 +140,16 @@ class BACnetAdapter:
         local_address: Optional[str] = None,
         port: int = 47808,
         device_id: int = 999,
+        check_status_flags: bool = True,
     ):
         self.local_address = local_address
         self.port = port
         self.device_id = device_id
+        # Read statusFlags alongside presentValue so faulted / out-of-service /
+        # overridden points are marked, not trusted as GOOD. Costs one extra read
+        # per point until ReadPropertyMultiple lands.
+        self.check_status_flags = check_status_flags
+        self._invalid_warned: set = set()
 
         self._app: Optional[Application] = None
         self._is_connected = False
@@ -117,6 +164,7 @@ class BACnetAdapter:
             "reads_total": 0,
             "reads_success": 0,
             "reads_failed": 0,
+            "reads_non_numeric": 0,
             "last_read": None,
         }
 
@@ -247,10 +295,25 @@ class BACnetAdapter:
         if value is None:
             return None
 
-        try:
-            float_val = float(value)
-        except (TypeError, ValueError):
-            float_val = 0.0
+        float_val = coerce_numeric(value)
+        if float_val is None:
+            # No honest numeric reading — skip it rather than invent one.
+            self.stats["reads_non_numeric"] += 1
+            if point_config.point_id not in self._invalid_warned:
+                self._invalid_warned.add(point_config.point_id)
+                logger.warning(f"{point_config.point_id}: non-numeric present value "
+                               f"{value!r} — not recorded")
+            return None
+
+        quality = PointQuality.GOOD
+        if self.check_status_flags:
+            flags = await self.read_property(
+                device_address=device.address,
+                object_type=point_config.object_type,
+                object_instance=point_config.object_instance,
+                property_name="statusFlags",
+            )
+            quality = quality_from_status_flags(flags)
 
         return BMSDataPoint(
             point_id=point_config.point_id,
@@ -261,7 +324,7 @@ class BACnetAdapter:
             source="bacnet",
             equipment_id=point_config.equipment_id,
             point_type=point_config.point_type,
-            quality=PointQuality.GOOD,
+            quality=quality,
             bacnet_device_id=point_config.device_id,
             bacnet_object_type=point_config.object_type,
             bacnet_object_instance=point_config.object_instance,

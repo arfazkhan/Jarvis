@@ -141,12 +141,8 @@ class AnomalyWatchdog:
         if getattr(self, "paused", False):
             return
 
-        # Filter out ghost chillers CH-05 to CH-08 based on physical topology limits
-        eq_id = str(getattr(point, "equipment_id", "") or "").upper()
-        pid = str(getattr(point, "point_id", "") or "").upper()
-        if any(ghost in eq_id or ghost in pid for ghost in ["CH-05", "CH-06", "CH-07", "CH-08"]):
-            return
-
+        # (A hardcoded CH-05..CH-08 "ghost chiller" drop used to live here — it
+        # silently muted anomalies on any real building with chillers 5-8.)
         try:
             self._stats["total_processed"] += 1
             self._check_point(point)
@@ -330,7 +326,10 @@ class AnomalyWatchdog:
                 rows = await cursor.fetchall()
                 new_calibs = {}
                 for r in rows:
-                    new_calibs[r["scope_key"]] = (r["calibrated_floor"], r["calibrated_z_thresh"])
+                    # Stored as (z_threshold, std_floor) — the order
+                    # _get_threshold_and_floor unpacks. It was (floor, z), which
+                    # made every promoted scope use its std floor as the z limit.
+                    new_calibs[r["scope_key"]] = (r["calibrated_z_thresh"], r["calibrated_floor"])
                 self.calibrated_thresholds = new_calibs
                 logger.info(f"[Watchdog] Loaded {len(new_calibs)} active calibrations into memory.")
         except Exception as e:
@@ -349,7 +348,10 @@ class AnomalyWatchdog:
 
         # Deduce eq_type
         eq_id_lower = eq_id.lower() if eq_id else ""
-        if "ch" in eq_id_lower:
+        # Pumps first: "pchwp"/"schwp"/"chwp" contain "ch" and were classed as chillers.
+        if "pump" in eq_id_lower or any(p in eq_id_lower for p in ("pchwp", "schwp", "chwp", "cdwp")):
+            eq_type = "pump"
+        elif eq_id_lower.startswith("ch") or "chiller" in eq_id_lower:
             eq_type = "chiller"
         elif "ahu" in eq_id_lower:
             eq_type = "ahu"
@@ -357,10 +359,8 @@ class AnomalyWatchdog:
             eq_type = "vav"
         elif "fcu" in eq_id_lower:
             eq_type = "fcu"
-        elif "ct" in eq_id_lower:
+        elif eq_id_lower.startswith("ct") or "tower" in eq_id_lower:
             eq_type = "ct"
-        elif "pump" in eq_id_lower or "pchwp" in eq_id_lower or "schwp" in eq_id_lower or "cdwp" in eq_id_lower:
-            eq_type = "pump"
         else:
             eq_type = "generic"
 

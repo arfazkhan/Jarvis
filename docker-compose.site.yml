@@ -1,0 +1,57 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# ARVIS — on-prem live building (BACnet/IP) deployment
+# ═══════════════════════════════════════════════════════════════════════════════
+# Usage (on the edge host on the BMS LAN, Linux):
+#   docker compose -f docker-compose.site.yml up -d
+#
+# Host networking is required: BACnet discovery uses UDP broadcast (Who-Is /
+# I-Am on 47808), which does not cross Docker's bridge network. That is why
+# this is a separate file rather than an override of docker-compose.yml, whose
+# services talk to each other by bridge-network service names.
+#
+# Required env (e.g. in .env next to this file):
+#   ARVIS_AUTH_SECRET, ARVIS_ADMIN_PASSWORD   — API auth (fails closed without)
+#   GROQ_API_KEY (and/or OPENAI_API_KEY)      — LLM layer (degrades without)
+# Site files:
+#   ./site/bms_config.yaml                     — bacnet.points / modbus.registers
+#   ./site/commissioning.yaml                  — design facts, zones, roles
+# ═══════════════════════════════════════════════════════════════════════════════
+
+services:
+  arvis:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: arvis-site
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - ARVIS_ENV=production
+      - ARVIS_MODE=${ARVIS_MODE:-bacnet}
+      - ARVIS_BMS_CONFIG=/app/site/bms_config.yaml
+      - ARVIS_COMMISSIONING_SPEC=/app/site/commissioning.yaml
+      - ARVIS_BUILDING_ID=${ARVIS_BUILDING_ID:-default}
+      - ARVIS_DB_PATH=/app/data/arvis_bms.db
+      - ARVIS_AUTH_SECRET=${ARVIS_AUTH_SECRET}
+      - ARVIS_ADMIN_PASSWORD=${ARVIS_ADMIN_PASSWORD}
+      - ARVIS_OPERATOR_PASSWORD=${ARVIS_OPERATOR_PASSWORD:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./site:/app/site:ro
+      - arvis-site-data:/app/data
+      - arvis-site-logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  arvis-site-data:
+    driver: local
+  arvis-site-logs:
+    driver: local
