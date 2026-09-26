@@ -463,6 +463,13 @@ class OpsCopilot:
         """Start the Ops Copilot"""
         logger.info("Starting ARVIS Ops Copilot...")
 
+        # Capture the running loop so sync adapter callbacks can schedule async
+        # work (e.g. persisting live meter readings) back onto it.
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
+
         if self._watchdog:
             try:
                 self._watchdog.db_conn = await self.database._get_async_connection()
@@ -1377,6 +1384,43 @@ class OpsCopilot:
                     equipment_id=point.equipment_id,
                     dp_pa=float(point.value),
                 )
+
+        # Route LIVE meter readings into energy/water analysis. Previously this
+        # only ran inside the simulator loop, so in bacnet/modbus mode the energy
+        # analyzer and water adapter never received live readings — dashboards had
+        # point values but energy/savings workflows had nothing.
+        try:
+            self._ingest_meter_point(point)
+        except Exception as _e:
+            logger.debug("Live meter ingest skipped for %s: %s", point.point_id, _e)
+
+    def _ingest_meter_point(self, point: BMSDataPoint) -> None:
+        """Meter-aware ingestion used by BOTH the live callback and the sim loop:
+        feed kW into the energy analyzer (+ best-effort DB persist) and m³ into the
+        water adapter."""
+        if point.value is None:
+            return
+        pid = (point.point_id or "").upper()
+        if "KW" in pid and getattr(self, "energy_analyzer", None) is not None:
+            reading = EnergyReading(meter_id=point.equipment_id, value=point.value,
+                                    unit="kW", timestamp=point.timestamp)
+            self.energy_analyzer.add_reading(reading)
+            # Best-effort async persist for the dashboard (from a sync adapter
+            # thread — schedule onto the main loop if we have one).
+            _loop = getattr(self, "_loop", None)
+            _db = getattr(self, "database", None)
+            if _loop is not None and _db is not None:
+                try:
+                    if _loop.is_running():
+                        asyncio.run_coroutine_threadsafe(
+                            _db.save_energy_reading(meter_id=point.equipment_id,
+                                                    value=point.value, unit="kW",
+                                                    timestamp=point.timestamp), _loop)
+                except Exception:
+                    pass
+        if "TOTAL_M3" in pid and getattr(self, "water_adapter", None) is not None:
+            self.water_adapter.ingest_reading(meter_id="MAIN", value_m3=point.value,
+                                              timestamp=point.timestamp)
 
     async def _measure_pending_outcomes(self) -> None:
         """
