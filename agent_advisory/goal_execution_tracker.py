@@ -281,7 +281,13 @@ class GoalExecutionTracker:
         Read-only: reads MAIN_KWH_TOTAL from state engine.
         """
         try:
-            current_kw = self.bms_state.get_latest_value("MAIN_KWH_TOTAL")
+            # BMSStateEngine has no get_latest_value — the old call always threw
+            # and the goal silently failed to verify. Use the supported
+            # get_point_sync interface and read the point value.
+            current_kw = None
+            if hasattr(self.bms_state, "get_point_sync"):
+                _pt = self.bms_state.get_point_sync("MAIN_KWH_TOTAL")
+                current_kw = getattr(_pt, "value", None) if _pt else None
             if current_kw is None:
                 return False
             # Baseline estimate: if savings ~= 10% of current, goal is met

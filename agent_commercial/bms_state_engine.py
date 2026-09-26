@@ -36,20 +36,63 @@ _SOURCE_PRIORITY = {
 }
 
 
+def _as_utc(ts):
+    """Normalize a timestamp to tz-aware UTC. Naive timestamps are treated as
+    LOCAL wall-time (adapters use datetime.now()), never relabelled as UTC."""
+    if ts is None:
+        return None
+    from datetime import timezone as _tz
+    try:
+        return ts if getattr(ts, "tzinfo", None) else ts.astimezone(_tz.utc)
+    except Exception:
+        return None
+
+
+# A higher-priority value older than this is considered STALE and may be
+# superseded by a fresher lower-priority live reading.
+from datetime import timedelta as _timedelta
+_STALE_SUPERSEDE = _timedelta(minutes=15)
+
+
 def _source_priority_allows(existing, incoming, all_points_dict) -> bool:
     """
-    Return True if incoming point's source is >= existing source priority.
-    Logs a conflict and returns False otherwise. Also surfaces STATUS-field
-    conflicts across streams within the same session.
+    Decide whether `incoming` may replace `existing`, using source priority AND
+    freshness — never priority alone.
+
+    - An OLDER same-source packet may NOT replace a newer one (late/out-of-order).
+    - A higher-priority but STALE value (older than 15 min) may be superseded by
+      a fresher lower-priority live reading — fresh live must beat stale historian.
     """
     existing_src = (getattr(existing, "source", None) or "").upper() or None
     incoming_src = (getattr(incoming, "source", None) or "").upper() or None
-    # Without source metadata we can't enforce priority; allow update.
+    ex_ts = _as_utc(getattr(existing, "timestamp", None))
+    in_ts = _as_utc(getattr(incoming, "timestamp", None))
+
+    # Same-source ordering: never let an OLDER packet overwrite a newer value.
+    if existing_src == incoming_src and ex_ts and in_ts and in_ts < ex_ts:
+        return False
+
+    # Without source metadata we can't enforce priority; keep the ordering rule
+    # above and otherwise allow the update.
     if existing_src is None or incoming_src is None:
         return True
     ex_rank = _SOURCE_PRIORITY.get(existing_src, 99)
     in_rank = _SOURCE_PRIORITY.get(incoming_src, 99)
     if in_rank > ex_rank:
+        # Lower-priority incoming. Allow ONLY if the existing high-priority value
+        # is stale and the incoming is fresher — a fresh live reading must win
+        # over a days-old historian value.
+        if ex_ts and in_ts and in_ts > ex_ts:
+            from datetime import timezone as _tz
+            from datetime import datetime as _dt
+            _now = _dt.now(_tz.utc)
+            if (_now - ex_ts) > _STALE_SUPERSEDE:
+                logger.info(
+                    f"[BMS] Fresh {incoming_src} supersedes STALE {existing_src} on "
+                    f"{getattr(incoming, 'point_id', '?')} "
+                    f"(existing aged {round((_now-ex_ts).total_seconds()/60,1)} min)"
+                )
+                return True
         # Detect STATUS-field conflict for richer log
         eq = getattr(incoming, "equipment_id", "") or getattr(existing, "equipment_id", "")
         if "STATUS" in (getattr(incoming, "point_id", "") or "").upper() and existing.value != incoming.value:
