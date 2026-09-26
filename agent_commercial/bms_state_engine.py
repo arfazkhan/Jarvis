@@ -756,6 +756,10 @@ class BMSStateEngine:
                             "value": p.value,
                             "unit": p.unit or "",
                             "timestamp": p.timestamp.isoformat() if p.timestamp else datetime.now().isoformat(),
+                            # Preserve provenance so a restored value can't silently
+                            # become a GOOD live BACnet reading after restart.
+                            "source": getattr(p, "source", None),
+                            "quality": getattr(getattr(p, "quality", None), "value", None),
                         })
 
                 alarms_data = []
@@ -850,6 +854,22 @@ class BMSStateEngine:
                     unit=pt_data.get("unit", ""),
                     timestamp=datetime.fromisoformat(pt_data["timestamp"]) if pt_data.get("timestamp") else datetime.now(),
                 )
+                # Restore original provenance — never upgrade a restored value to a
+                # GOOD live BACnet reading. Its old timestamp already keeps it stale
+                # until a fresh reading arrives.
+                _src = pt_data.get("source")
+                if _src is not None:
+                    try:
+                        point.source = _src
+                    except Exception:
+                        pass
+                _q = pt_data.get("quality")
+                if _q is not None:
+                    try:
+                        from agent_commercial.bms_data_model import PointQuality
+                        point.quality = PointQuality(_q)
+                    except Exception:
+                        pass
                 self._points[point.point_id] = point
                 if point.equipment_id and point.equipment_id in self._equipment:
                     eq = self._equipment[point.equipment_id]

@@ -50,9 +50,19 @@ def require_active_state(func: Callable):
             logger.error(f"BLOCKED ACTION {func.__name__}: System is in RED state (Kill Switch Active).")
             return {"error": "System is in SAFETY LOCKDOWN (Red Mode). Action denied."}
             
-        # In Yellow mode, we might add logic here to require extra confirmation
+        # YELLOW (caution) mode requires EXPLICIT confirmation — enforce it at the
+        # action boundary rather than only logging. Callers pass confirmed=True
+        # (or confirm=True) to proceed; otherwise the action is held.
         if controller.state == SystemActiveState.YELLOW:
-            logger.info(f"Action {func.__name__} allowed with CAUTION (Yellow Mode).")
-            
+            if not (kwargs.get("confirmed") is True or kwargs.get("confirm") is True):
+                logger.warning(f"HELD ACTION {func.__name__}: YELLOW (caution) mode requires confirmation.")
+                return {
+                    "error": "System is in CAUTION (Yellow) mode. This action requires "
+                             "explicit operator confirmation.",
+                    "requires_confirmation": True,
+                    "action": func.__name__,
+                }
+            logger.info(f"Action {func.__name__} allowed in YELLOW mode WITH confirmation.")
+
         return await func(*args, **kwargs)
     return wrapper

@@ -219,8 +219,14 @@ elif ARVIS_VERTICAL == "COMMERCIAL":
     app.include_router(knowledge.router, prefix="/api/v1/knowledge", tags=["Knowledge"])
     app.include_router(sensors.router, prefix="/api/v1/sensors", tags=["Sensors"])
     app.include_router(learning.router, prefix="/api/v1/learning", tags=["Learning"])
-    app.include_router(omega_router)
-    app.include_router(demo_router)
+    # Simulation + demo routers — never mounted on a real building. Disabled in
+    # production unless ARVIS_ENABLE_DEMO is explicitly set (matches the
+    # commercial app's gate).
+    import os as _os
+    if _os.getenv("ARVIS_ENABLE_DEMO", "").lower() in ("1", "true", "yes") \
+            or _os.getenv("ARVIS_ENV", "development").lower() != "production":
+        app.include_router(omega_router)
+        app.include_router(demo_router)
 
 # Shared / Admin
 app.include_router(admin.router, prefix="/api/v1/admin", tags=["Admin"])
