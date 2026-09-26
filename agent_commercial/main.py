@@ -625,8 +625,19 @@ class OpsCopilot:
             logger.info("[TerminalAdvisory] Escalation loop started (checks every 1h, threshold 4h)")
 
         # Fix 4: FDD VAE bootstrap — 30s delayed so BMS data flows first
-        self._tasks.append(asyncio.create_task(self._fdd_bootstrap_task()))
-        logger.info("[ML-FDD] FDD bootstrap task scheduled (fires in 30s)")
+        # FDD bootstrap generates SYNTHETIC training rows (jitter around defaults).
+        # That is fine for a demo, but a real building must NOT get models
+        # "trained" on fabricated history — they should read insufficient-history
+        # until real observations accrue. Only bootstrap in simulator/demo.
+        import os as _os
+        _allow_synth = self.mode == "simulator" or \
+            _os.getenv("ARVIS_ENABLE_DEMO", "").lower() in ("1", "true", "yes")
+        if _allow_synth:
+            self._tasks.append(asyncio.create_task(self._fdd_bootstrap_task()))
+            logger.info("[ML-FDD] FDD bootstrap task scheduled (fires in 30s)")
+        else:
+            logger.info("[ML-FDD] Synthetic FDD bootstrap DISABLED (live mode) — "
+                        "models use real history only.")
 
         logger.info(f"Ops Copilot started! API available at http://localhost:{self.api_port}/api/docs")
     

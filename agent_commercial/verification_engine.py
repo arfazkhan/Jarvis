@@ -32,6 +32,7 @@ class VerificationStatus(Enum):
     FAILED = "failed"              # No improvement - suspected ghost maintenance
     PENDING = "pending"            # Waiting for post-maintenance data
     NO_DATA = "no_data"            # Insufficient sensor data
+    INCONCLUSIVE = "inconclusive"  # Non-comparable conditions (shutdown, NaN, stale)
     UNKNOWN = "unknown"            # No physics model for this task type
 
 
@@ -60,8 +61,8 @@ class VerificationResult:
             "status": self.status.value,
             "confidence": round(self.confidence, 2),
             "metric_name": self.metric_name,
-            "value_before": round(self.value_before, 2) if self.value_before else None,
-            "value_after": round(self.value_after, 2) if self.value_after else None,
+            "value_before": round(self.value_before, 2) if self.value_before is not None else None,
+            "value_after": round(self.value_after, 2) if self.value_after is not None else None,
             "improvement_pct": round(self.improvement_pct * 100, 1),
             "expected_improvement_pct": round(self.expected_improvement_pct * 100, 1),
             "message": self.message,
@@ -74,6 +75,7 @@ class VerificationResult:
             VerificationStatus.VERIFIED: "✅",
             VerificationStatus.WEAK: "⚠️",
             VerificationStatus.FAILED: "❌",
+            VerificationStatus.INCONCLUSIVE: "❔",
             VerificationStatus.PENDING: "⏳",
             VerificationStatus.NO_DATA: "📊",
             VerificationStatus.UNKNOWN: "❓",
@@ -307,6 +309,33 @@ class MaintenanceVerifier:
                 message=f"Insufficient data: '{metric_key}' not available in pre or post snapshots."
             )
         
+        # Guard: measurements must be finite. NaN/inf → inconclusive, NOT a
+        # "failed" work verdict (which wrongly blames the contractor).
+        import math as _math
+        if not (isinstance(val_before, (int, float)) and isinstance(val_after, (int, float))
+                and _math.isfinite(val_before) and _math.isfinite(val_after)):
+            return VerificationResult(
+                work_order_id=work_order_id, equipment_id=equipment_id, task_type=task_type,
+                status=VerificationStatus.INCONCLUSIVE, confidence=0.0, metric_name=metric_key,
+                value_before=val_before, value_after=val_after, improvement_pct=0.0,
+                expected_improvement_pct=rule.min_improvement_pct,
+                message=f"Inconclusive: non-finite reading for '{metric_key}' (NaN/inf).")
+
+        # Guard: a decrease-metric collapsing to ~zero is more likely EQUIPMENT
+        # SHUTDOWN than successful work (e.g. filter pressure 250→0 Pa when the
+        # fan stopped). Without run-status confirming operation, don't count it
+        # as verified — return inconclusive.
+        if (rule.expected_direction == "decrease" and val_before and
+                abs(val_after) <= max(0.02 * abs(val_before), 1e-6)):
+            return VerificationResult(
+                work_order_id=work_order_id, equipment_id=equipment_id, task_type=task_type,
+                status=VerificationStatus.INCONCLUSIVE, confidence=0.0, metric_name=metric_key,
+                value_before=val_before, value_after=val_after, improvement_pct=0.0,
+                expected_improvement_pct=rule.min_improvement_pct,
+                message=(f"Inconclusive: '{metric_key}' fell to ~zero ({val_after}), which "
+                         "usually means the equipment stopped rather than the work succeeding. "
+                         "Re-check under comparable running conditions."))
+
         # Calculate improvement
         if rule.expected_direction == "decrease":
             # Lower is better (pressure drop, vibration, temperature)
