@@ -50,11 +50,15 @@ class GSASAuditReadinessChecker:
             warnings.append("Survey Manager is offline. Cannot verify IE survey compliance.")
             
         # 4. Data Completeness & Evidence
-        # In a real system, we'd check if utility bills and waste logs exist for the trailing 12 months
-        # Mocking the check based on standard BMS properties
+        # Required evidence = utility bills + waste logs for the trailing 12 months.
+        # This is not yet validated against real records, so it must BLOCK
+        # readiness — an unverified evidence base cannot be declared audit-ready.
         metrics = getattr(self.reporter, 'bms_state', None)
         if not metrics:
-            warnings.append("BMS state is not connected to reporter. Cannot verify data completeness.")
+            blocking_issues.append("BMS state not connected — cannot verify 12-month data completeness.")
+        blocking_issues.append(
+            "Required evidence (12-month utility bills + waste logs) is not yet "
+            "validated against source records; readiness is preliminary.")
             
         # Calculate Readiness Score
         # Readiness score is informational only. Use is_audit_ready for pass/fail.
@@ -75,6 +79,10 @@ class GSASAuditReadinessChecker:
         return {
             "audit_readiness_score": round(score, 1),
             "is_audit_ready": len(blocks) == 0,
+            "preliminary": True,
+            "note": ("Preliminary self-assessment — NOT a GSAS certification. "
+                     "Required evidence records and reporting periods are not fully "
+                     "validated against official scheme requirements."),
             "blocking_issues": blocks,
-            "warnings": warnings
+            "warnings": warnings,
         }
