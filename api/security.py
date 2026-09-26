@@ -125,9 +125,13 @@ async def get_api_key(
     )
 
 
-async def get_admin_key(api_key_header: str = Security(api_key_header)) -> str:
-    """Validate Admin-level API Key (requires admin role)."""
-    key = await get_api_key(api_key_header)
+async def get_admin_key(key: str = Depends(get_api_key)) -> str:
+    """Validate Admin-level API Key (requires admin role).
+
+    Resolve the credential through get_api_key via FastAPI DI — the old code
+    called get_api_key(api_key_header) positionally, but that function's first
+    parameter is the Request, so the key never resolved and valid admin keys got
+    403. DI passes the real request/header/bearer correctly."""
     role = _resolve_role(key)
 
     if role != Role.ADMIN:

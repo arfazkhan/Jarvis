@@ -148,9 +148,12 @@ class EnergyHandlerMixin:
         try:
             total_kw = args.get("total_kw")
             if total_kw is None:
-                 # Try to get from state
-                 total_kw = 450 # Default
-                 
+                # Try to read a real live building-power total from state.
+                total_kw = self._live_total_kw() if hasattr(self, "_live_total_kw") else None
+            if total_kw is None:
+                # Never invent a load (was a hardcoded 450 kW). No reading → say so.
+                return {"available": False,
+                        "message": "No live building power reading available; cannot compute burn rate."}
             return get_current_burn_rate(float(total_kw))
         except Exception as e:
             logger.error(f"Error in get_burn_rate: {e}")
@@ -190,48 +193,48 @@ class EnergyHandlerMixin:
             ghost_operations = []
             total_waste = 0
             
+            skipped_no_evidence = 0
             for zone_config in zones:
                 zone_id = zone_config.get("zone_id")
-                
+
                 # Get current sensor values from database
                 zone = await db.get_zone_with_current_values(zone_id)
                 if not zone:
                     continue
-                
-                # Skip if we don't have CO2 data
+
+                # Require REAL usable evidence — never infer occupancy from
+                # fabricated default readings. Occupancy inference needs at least a
+                # CO2 reading and a known load basis; without them this zone is
+                # insufficient-data, NOT a ghost-space finding.
                 co2_ppm = zone.get("co2_ppm")
-                if co2_ppm is None:
-                    co2_ppm = 410  # Default to ambient if no sensor
-                
-                vav_pct = zone.get("vav_damper_pct")
-                if vav_pct is None:
-                    vav_pct = 50
-                    
+                zone_load = zone.get("load_kw")
+                if co2_ppm is None or zone_load is None:
+                    skipped_no_evidence += 1
+                    continue
+                vav_pct = zone.get("vav_damper_pct")   # optional refinements, only if present
                 light_on = zone.get("light_status")
-                if light_on is None:
-                    light_on = False
-                
+
                 # Estimate occupancy
                 estimate = sensor.estimate_occupancy(
                     zone_id=zone_id,
                     co2_ppm=co2_ppm,
                     vav_damper_pct=vav_pct,
-                    light_status=light_on,
+                    light_status=bool(light_on) if light_on is not None else None,
                 )
-                
+
                 # Check for ghost operation (scheduled occupied but actually empty)
                 now = datetime.now()
                 is_work_hours = now.weekday() < 5 and 8 <= now.hour < 18
                 schedule_status = "OCCUPIED" if is_work_hours else "UNOCCUPIED"
-                
+
                 ghost = sensor.detect_ghost_operation(
                     zone_id=zone_id,
                     zone_name=zone.get("name", zone_id),
                     schedule_status=schedule_status,
                     occupancy_estimate=estimate,
-                    zone_load_kw=zone.get("load_kw", 2.0),
+                    zone_load_kw=zone_load,
                 )
-                
+
                 if ghost:
                     ghost_operations.append({
                         "zone_id": ghost.zone_id,
@@ -240,18 +243,17 @@ class EnergyHandlerMixin:
                         "occupancy_probability": ghost.occupancy_probability,
                         "recommendation": ghost.recommendation,
                     })
-                    total_waste += ghost.waste_qar_per_hour * 24  # Daily waste
-            
+                    total_waste += ghost.waste_qar_per_hour * 24  # QAR/day
+
             return {
                 "ghost_operations": ghost_operations,
                 "zones_checked": len(zones),
+                "zones_insufficient_evidence": skipped_no_evidence,
                 "waste_estimate_qar_day": round(total_waste, 2),
-                "potential_monthly_savings": round(total_waste * 30, 2),
-                # Schema keys: ghost_spaces, total_ghost_count, total_waste_kwh_day,
-                # potential_savings_qar_month
                 "ghost_spaces": ghost_operations,
                 "total_ghost_count": len(ghost_operations),
-                "total_waste_kwh_day": round(total_waste, 2),
+                # QAR, not kWh — the old total_waste_kwh_day field mislabelled a
+                # currency value as energy; removed.
                 "potential_savings_qar_month": round(total_waste * 30, 2),
             }
         except Exception as e:

@@ -5,10 +5,18 @@ Equipment Tool Handlers
 Handlers for equipment-related BMS tools.
 """
 
+import os
 import logging
 from typing import Dict, Any
 
 logger = logging.getLogger("arvis.bms.tools.equipment")
+
+
+def _demo_enabled() -> bool:
+    """True ONLY when a demo build is explicitly requested. Any real deployment
+    must never emit scripted/illustrative figures — it returns unavailable when
+    there is no traceable record."""
+    return os.getenv("ARVIS_ENABLE_DEMO", "").lower() in ("1", "true", "yes")
 
 # Safe imports for modular standalone operation
 try:
@@ -640,33 +648,51 @@ class EquipmentHandlerMixin:
         }
 
     async def _handle_get_year_end_summary(self, args: Dict) -> Dict:
-        """Provide a consolidated year-end summary of ARVIS's performance."""
+        """Year-end performance summary.
+
+        These figures (adoption, avoided-failure value, realized savings) require
+        a full year of traceable operational records. Until those exist, a real
+        building must NOT be shown fabricated achievements — return unavailable.
+        The scripted narrative is served only in an explicit demo build.
+        """
+        if not _demo_enabled():
+            return {
+                "available": False,
+                "message": ("No year-end performance record available. Adoption, "
+                            "realized-savings and avoided-failure figures require "
+                            "traceable operational history that has not yet accrued."),
+            }
         return {
+            "demo": True,
             "adoption_rate": 0.67,
             "false_positives_count": 2.0,
             "fp_cost_qar": 18000.0,
             "unrealized_savings_qar": 340000.0,
             "catastrophic_save_value_qar": 620000.0,
             "honest_assessment": (
-                "Year 1 review shows 67% adoption rate (short of the 87% projection due to vendor approval friction). "
-                "Total of 2 false positives (CT-02 sensor noise and CH-02 motor harmonic) costing QAR 18,000. "
-                "However, the system successfully avoided a catastrophic bearing failure on CH-04, saving QAR 620,000 "
-                "in direct compressor replacement and downtime costs."
-            )
+                "[DEMO] Year 1 review shows 67% adoption rate. 2 false positives "
+                "costing QAR 18,000. Avoided a catastrophic bearing failure on CH-04, "
+                "saving QAR 620,000. (Illustrative demo figures — not measured.)"
+            ),
         }
 
     async def _handle_get_false_positive_cost_ledger(self, args: Dict) -> Dict:
-        """Provide the cost ledger comparing FP dispatches vs catastrophic saves."""
+        """FP-vs-catastrophic-save cost ledger. Requires real dispatch + outcome
+        records; returns unavailable on a real building until those exist."""
+        if not _demo_enabled():
+            return {
+                "available": False,
+                "message": ("No cost ledger available. False-positive and avoided-"
+                            "failure costs require traceable dispatch and outcome records."),
+            }
         return {
+            "demo": True,
             "cost_of_being_wrong_qar": 18000.0,
             "cost_of_missing_real_failure_min_qar": 380000.0,
             "cost_of_missing_real_failure_max_qar": 650000.0,
             "preventive_savings_qar": 620000.0,
             "expected_value_math": (
-                "Expected Value = (Probability of Fault * Avoided Cost) - (Probability of False Alarm * Analysis Cost). "
-                "Even at a 10% true positive rate, expected value is highly positive: "
-                "0.10 * QAR 500,000 (avg) = QAR 50,000 vs 0.90 * QAR 18,000 = QAR 16,200. "
-                "Net expected value per alert is positive QAR 33,800."
-            )
+                "[DEMO] Illustrative expected-value math — not from measured records."
+            ),
         }
 

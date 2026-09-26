@@ -513,12 +513,12 @@ class VirtualSATSensor:
             if airflow_m3h and airflow_m3h > 0:
                 inputs_used["airflow_m3h"] = airflow_m3h
                 m_dot_kg_s = (airflow_m3h * self.RHO_AIR) / 3600.0
-                delta_t = q_kw / (m_dot_kg_s * self.CP_AIR * 1000.0)
+                delta_t = q_kw / (m_dot_kg_s * self.CP_AIR)
                 confidence = 0.85
             else:
                 # Default to typical AHU airflow (5000 m³/h)
                 m_dot_kg_s = (5000 * self.RHO_AIR) / 3600.0
-                delta_t = q_kw / (m_dot_kg_s * self.CP_AIR * 1000.0)
+                delta_t = q_kw / (m_dot_kg_s * self.CP_AIR)
                 confidence = 0.65
 
             estimated_sat = mixed_air_temp_c - delta_t
