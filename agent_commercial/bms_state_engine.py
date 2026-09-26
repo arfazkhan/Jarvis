@@ -326,7 +326,19 @@ class BMSStateEngine:
                 logger.error(f"Point update callback error: {e}")
     
     def update_point_sync(self, point: BMSDataPoint) -> None:
-        """Synchronous version for BACnet polling thread"""
+        """Synchronous version for BACnet/live polling thread.
+
+        Must behave like update_point: honour point suppression AND emit
+        registered callbacks. The old version did neither, so a live value could
+        reach the store without its watchdog subscriber ever being notified, and
+        suppressed sensors were not excluded.
+        """
+        # Exclude suppressed/broken sensors from the digital twin state.
+        if hasattr(self, "suppressed_points") and point.point_id in self.suppressed_points:
+            from agent_commercial.bms_data_model import PointQuality
+            point.quality = PointQuality.BAD
+            return
+
         existing = self._points.get(point.point_id)
 
         # Fix 8: Source priority enforcement
@@ -355,7 +367,16 @@ class BMSStateEngine:
         
         self._stats["points_updated"] += 1
         self._stats["last_update"] = datetime.now()
-    
+
+        # Emit callbacks (watchdog + downstream consumers) with the canonical
+        # stored point — same delivery the async path guarantees.
+        canonical_point = self._points.get(point.point_id, point)
+        for callback in self._on_point_update:
+            try:
+                callback(canonical_point)
+            except Exception as e:
+                logger.error(f"Point update callback error (sync): {e}")
+
     async def get_point(self, point_id: str) -> Optional[BMSDataPoint]:
         """Get a data point by ID"""
         async with self._lock:
