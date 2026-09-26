@@ -359,6 +359,7 @@ class BACnetAdapter:
                     device_id=point_cfg["device_id"],
                     object_type=point_cfg["object_type"],
                     object_instance=point_cfg["object_instance"],
+                    property_name=point_cfg.get("property", "presentValue"),
                     point_id=point_cfg.get("point_id", f"point_{count}"),
                     point_name=point_cfg.get("name", ""),
                     equipment_id=point_cfg.get("equipment_id", ""),

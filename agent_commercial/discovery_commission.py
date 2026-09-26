@@ -31,6 +31,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from agent_commercial.semantics.point_roles import equipment_kind, suggest_role
+
 logger = logging.getLogger("arvis.discovery_commission")
 
 # Physics-gating design facts — ALWAYS require human confirmation (they gate
@@ -296,18 +298,13 @@ async def sweep_and_draft(
             points = []
         eqtype = getattr(getattr(eq, "equipment_type", ""), "value", str(getattr(eq, "equipment_type", "")))
         design = await infer_design_hybrid(eid, eqtype, points, llm)
+        kind = equipment_kind(eqtype, eid)
         draft_equipment.append({
             "id": eid,
             "type": eqtype,
             "name": getattr(eq, "name", eid),
             "location": getattr(eq, "location", ""),
-            "points": [
-                {"point_id": getattr(p, "point_id", ""),
-                 "name": getattr(p, "name", ""),
-                 "unit": getattr(p, "unit", ""),
-                 "point_type": str(getattr(getattr(p, "point_type", ""), "value", getattr(p, "point_type", "")) or "sensor")}
-                for p in points
-            ],
+            "points": [_draft_point(p, kind) for p in points],
             "design_attributes": design,
         })
 
@@ -339,6 +336,39 @@ async def sweep_and_draft(
         "equipment": draft_equipment,
         "zones": zones,
     }
+
+
+def _draft_point(p: Any, kind: str) -> Dict[str, Any]:
+    """Draft entry for one point, with a suggested canonical role.
+
+    Rule-based FDD only trusts roles that are explicit, so a suggestion is
+    kept at promotion only if it is an unambiguous suffix match
+    (role_needs_confirmation: false) or a human set role_confirmed: true.
+    """
+    pid = getattr(p, "point_id", "")
+    entry: Dict[str, Any] = {
+        "point_id": pid,
+        "name": getattr(p, "name", ""),
+        "unit": getattr(p, "unit", ""),
+        "point_type": str(getattr(getattr(p, "point_type", ""), "value",
+                                  getattr(p, "point_type", "")) or "sensor"),
+    }
+    role, conf = suggest_role(pid, kind)
+    if role is not None:
+        entry["role"] = role.value
+        entry["role_confidence"] = conf
+        entry["role_needs_confirmation"] = conf < 0.9
+        entry["role_confirmed"] = False
+    return entry
+
+
+def _promote_point(pt: Dict[str, Any]) -> Dict[str, Any]:
+    out = {k: v for k, v in pt.items()
+           if k not in ("role", "role_confidence", "role_needs_confirmation", "role_confirmed")}
+    if pt.get("role") and (pt.get("role_confirmed") is True
+                           or pt.get("role_needs_confirmation") is False):
+        out["role"] = pt["role"]
+    return out
 
 
 def write_draft(draft: Dict[str, Any], out_path: str | Path) -> Path:
@@ -382,7 +412,7 @@ def promote_draft(draft_path: str | Path, out_path: str | Path) -> Dict[str, Any
         if design_clean:
             eq_out["design_attributes"] = design_clean
         if e.get("points"):
-            eq_out["points"] = e["points"]
+            eq_out["points"] = [_promote_point(p) for p in e["points"] if isinstance(p, dict)]
         out["equipment"].append(eq_out)
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     Path(out_path).write_text(yaml.safe_dump(out, sort_keys=False), encoding="utf-8")

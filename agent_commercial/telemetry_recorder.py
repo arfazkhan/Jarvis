@@ -38,6 +38,10 @@ def _to_naive_local(ts: Optional[datetime]) -> datetime:
 class TelemetryRecorder:
     """Buffers accepted point updates and flushes them to ``data_points``."""
 
+    # Sources whose values are declared, not measured (e.g. a commissioning
+    # spec's snapshot `value:`) — never stored as telemetry history.
+    NON_MEASURED_SOURCES = frozenset({"commission"})
+
     def __init__(self, database: Any, flush_interval_s: float = 60.0,
                  max_buffer: int = 20000):
         self.database = database
@@ -51,6 +55,8 @@ class TelemetryRecorder:
 
     # ── Subscriber (sync — called from BMSStateEngine callbacks) ──────────────
     def on_point(self, point: Any) -> None:
+        if str(getattr(point, "source", "") or "").lower() in self.NON_MEASURED_SOURCES:
+            return
         value = getattr(point, "value", None)
         if isinstance(value, bool):
             value = 1.0 if value else 0.0

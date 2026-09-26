@@ -35,6 +35,7 @@ Schema (YAML):
             name: Supply Air Temp
             unit: C
             point_type: sensor           # PointType value
+            role: supply-air-temp        # optional canonical role (semantics.point_roles)
             value: 16.5
     zones:
       - zone_id: ZONE-28A
@@ -130,8 +131,12 @@ async def commission_building(
                 return t
         return PointType.SENSOR
 
+    from agent_commercial.semantics import get_role_registry
+    roles = get_role_registry(bms_state)
+
     building_id = spec.get("building_id", "default")
-    counts = {"equipment": 0, "points": 0, "zones": 0, "design_attributed": 0}
+    counts = {"equipment": 0, "points": 0, "zones": 0, "design_attributed": 0,
+              "roles_explicit": 0, "roles_invalid": 0}
 
     # ── Equipment + their points ──────────────────────────────────────────
     for eq in spec.get("equipment", []) or []:
@@ -178,6 +183,13 @@ async def commission_building(
         for pt in eq.get("points", []) or []:
             if not isinstance(pt, dict) or not pt.get("point_id"):
                 continue
+            if pt.get("role"):
+                try:
+                    roles.set_explicit(pt["point_id"], pt["role"], unit=pt.get("unit"))
+                    counts["roles_explicit"] += 1
+                except ValueError as err:
+                    counts["roles_invalid"] += 1
+                    logger.warning(f"[Commission] {err}")
             _val = pt.get("value")
             await bms_state.update_point(BMSDataPoint(
                 point_id=pt["point_id"],

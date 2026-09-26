@@ -96,8 +96,13 @@ def load_bms_config(path: str) -> Dict[str, Any]:
         return yaml.safe_load(fh) or {}
 
 
-def build_protocol_configs(cfg: Dict[str, Any]):
-    """Split a site config into (bacnet_config, modbus_config) for OpsCopilot."""
+def build_protocol_configs(cfg: Dict[str, Any], base_dir: str = "."):
+    """Split a site config into (bacnet_config, modbus_config) for OpsCopilot.
+
+    ``bacnet.registries`` may list VOLTTRON registry CSVs
+    ({csv, device_id, equipment_id, prefix?}); their rows are appended to
+    ``bacnet.points``. Relative CSV paths resolve against ``base_dir``.
+    """
     bacnet_cfg: Dict[str, Any] = {}
     b = cfg.get("bacnet") or {}
     if b:
@@ -105,7 +110,17 @@ def build_protocol_configs(cfg: Dict[str, Any]):
                     "discovery_timeout", "allow_offline"):
             if key in b:
                 bacnet_cfg[key] = b[key]
-        bacnet_cfg["points_config"] = {"points": list(b.get("points") or [])}
+        points = list(b.get("points") or [])
+        if b.get("registries"):
+            from agent_commercial.semantics.volttron_registry import load_volttron_registry
+            for reg in b["registries"]:
+                csv_path = reg["csv"]
+                if not os.path.isabs(csv_path):
+                    csv_path = os.path.join(base_dir, csv_path)
+                points.extend(load_volttron_registry(
+                    csv_path, device_id=reg["device_id"],
+                    equipment_id=reg["equipment_id"], point_prefix=reg.get("prefix")))
+        bacnet_cfg["points_config"] = {"points": points}
     modbus_cfg: Dict[str, Any] = dict(cfg.get("modbus") or {})
     return bacnet_cfg, modbus_cfg
 
@@ -540,6 +555,10 @@ class OpsCopilot:
         )
         self.state_engine.on_point_update(self.telemetry_recorder.on_point)
         self._tasks.append(self.telemetry_recorder.start())
+
+        # Explicit point roles declared in the site BMS config (bacnet.points /
+        # modbus.registers `role:`). The commissioning spec can add more below.
+        self._register_config_roles()
 
         # Warm-start: restore previous state from DB snapshot
         restored = await self.state_engine.restore_from_snapshot()
@@ -1448,6 +1467,24 @@ class OpsCopilot:
     # CALLBACKS
     # ═══════════════════════════════════════════════════════════════════════
     
+    def _register_config_roles(self) -> int:
+        """Register explicit `role:` entries from the site BMS config."""
+        from agent_commercial.semantics import get_role_registry
+        registry = get_role_registry(self.state_engine)
+        entries = list((self.bacnet_config.get("points_config") or {}).get("points") or [])
+        entries += list(self.modbus_config.get("registers") or [])
+        n = 0
+        for e in entries:
+            if isinstance(e, dict) and e.get("role") and e.get("point_id"):
+                try:
+                    registry.set_explicit(e["point_id"], e["role"], unit=e.get("unit"))
+                    n += 1
+                except ValueError as err:
+                    logger.warning(f"[Roles] {err}")
+        if n:
+            logger.info(f"[Roles] {n} explicit point roles from site config")
+        return n
+
     def _wire_adapter(self, adapter: Any) -> None:
         """Register _on_point_update on an adapter exactly once."""
         wired = self.__dict__.setdefault("_wired_adapters", set())
@@ -1840,7 +1877,8 @@ async def main(args):
             raise SystemExit(
                 "ARVIS_BMS_CONFIG is not set. Point it at the site BMS config "
                 "(bacnet.points / modbus.registers) before starting in live mode.")
-        bacnet_config, modbus_config = build_protocol_configs(load_bms_config(cfg_path))
+        bacnet_config, modbus_config = build_protocol_configs(
+            load_bms_config(cfg_path), base_dir=os.path.dirname(os.path.abspath(cfg_path)))
         logger.info(f"Loaded BMS config from {cfg_path}")
 
     copilot = OpsCopilot(
