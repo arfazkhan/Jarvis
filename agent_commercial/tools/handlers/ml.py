@@ -88,61 +88,111 @@ class MLHandlerMixin:
         }
     
     async def _handle_detect_equipment_faults(self, args: Dict) -> Dict:
-        """Use ML to detect equipment faults.
+        """Detect equipment faults with the rule-based FDD engine (ASHRAE G36
+        rules, see agent_commercial/fdd) over the equipment's stored telemetry.
 
         Canonical response schema (always present):
-          faults       : list  — detected fault dicts
-          health_score : float — 0-100 normalised equipment health
-          confidence   : float | None
+          faults / faults_detected : confirmed faults (each an FDD finding)
+          health_score : float | None — share of judged rules that passed (0–100);
+                         None when no rule could be judged
+          confidence   : None — rules are deterministic; each finding carries its
+                         own evidence (points used, fault hours, window)
           equipment_id : str
+          status       : fault | normal | unknown
         """
         equipment_id = args.get("equipment_id")
-        fault_type = args.get("fault_type")
+        fault_type = (args.get("fault_type") or "").lower()
 
         if not equipment_id:
             return {
                 "error": "equipment_id is required",
                 # Schema keys still present so callers never see KeyError
-                "faults": [],
-                "health_score": 0.0,
+                "faults": [], "faults_detected": [],
+                "health_score": None,
                 "confidence": None,
                 "equipment_id": None,
             }
 
-        predictive_engine = getattr(self, "predictive_engine", None)
-        if predictive_engine and hasattr(predictive_engine, "detect_faults"):
+        bms_state = getattr(self, "bms_state", None)
+        if bms_state is not None:
             try:
-                raw = await predictive_engine.detect_faults(
-                    equipment_id=equipment_id,
-                    fault_type=fault_type
-                )
-                # Normalise: engine may use legacy key names
-                if isinstance(raw, dict):
-                    # Alias legacy 'faults_detected' -> 'faults'
-                    if "faults" not in raw and "faults_detected" in raw:
-                        raw["faults"] = raw.pop("faults_detected")
-                    # Ensure both mandatory schema keys exist
-                    raw.setdefault("faults", [])
-                    raw.setdefault("health_score", 0.0)
-                    raw.setdefault("confidence", None)
-                    raw.setdefault("equipment_id", equipment_id)
-                return _inject_lineage(raw, "fdd_autoencoder", "vae+isolation_forest")
+                return _inject_lineage(
+                    await self._run_rule_fdd(bms_state, equipment_id, fault_type, args),
+                    "arvis_rule_fdd", "ashrae_g36_rules")
             except Exception as e:
-                logger.error(f"Error detecting faults for {equipment_id}: {e}")
+                logger.error(f"Rule-based FDD failed for {equipment_id}: {e}")
 
         # Guaranteed-schema fallback — no repair needed downstream
         return _inject_lineage({
-            "faults": [],
-            "health_score": 0.0,
+            "faults": [], "faults_detected": [],
+            "health_score": None,
             "confidence": None,
             "equipment_id": equipment_id,
             "ml_status": "unavailable",
             "fallback": True,
             "model_id": None,
             "status": "unknown",
-            "reason": "VAE fault detection model not loaded. Cannot confirm equipment normality.",
-            "required_for_ml": ["predictive_engine", "fdd_autoencoder"],
-        }, "fdd_autoencoder", "vae+isolation_forest")
+            "reason": "Rule-based FDD unavailable (no BMS state / telemetry store). "
+                      "Cannot confirm equipment normality.",
+            "required_for_ml": ["bms_state", "telemetry history"],
+        }, "arvis_rule_fdd", "ashrae_g36_rules")
+
+    async def _run_rule_fdd(self, bms_state, equipment_id: str, fault_type: str, args: Dict) -> Dict:
+        from agent_commercial.database import get_database
+        from agent_commercial.fdd import FDDEngine, Outcome
+        from agent_commercial.fdd.store import save_findings
+
+        hours = float(args.get("hours", 24))
+        engine = FDDEngine(poll_seconds=float(args.get("resample_seconds", 300)))
+        db = get_database()
+        findings = await engine.run_building(bms_state, db, hours=hours, equipment_ids=[equipment_id])
+        findings = [f for f in findings if f.equipment_id == equipment_id]
+        if findings:
+            await save_findings(db, findings)
+
+        def _match(f) -> bool:
+            if not fault_type:
+                return True
+            text = f"{f.rule_id} {f.title} {f.family} {f.summary}".lower()
+            return fault_type in text
+
+        def _compact(f) -> Dict[str, Any]:
+            return {"rule_id": f.rule_id, "fault_type": f.title, "family": f.family,
+                    "summary": f.summary, "headline": f.headline(),
+                    "fault_hours": f.fault_hours, "fault_pct": f.fault_pct,
+                    "first_fault": f.first_fault, "last_fault": f.last_fault,
+                    "points_used": f.points_used, "role_sources": f.role_sources,
+                    "root_cause_candidates": f.root_cause_candidates,
+                    "source_tool": f.source_tool, "origin": f.origin}
+
+        fails = [f for f in findings if f.outcome is Outcome.FAIL and _match(f)]
+        passed = [f for f in findings if f.outcome is Outcome.PASS]
+        judged = len(passed) + len([f for f in findings if f.outcome is Outcome.FAIL])
+        not_judged = [{"rule_id": f.rule_id, "outcome": f.outcome.value, "reason": f.reason}
+                      for f in findings if f.outcome in (Outcome.SKIP, Outcome.INVALID)]
+        faults = [_compact(f) for f in fails]
+        if not findings:
+            status = "unknown"
+            reason = f"No stored telemetry for {equipment_id} in the last {hours:g} h."
+        elif fails:
+            status, reason = "fault", ""
+        elif judged:
+            status, reason = "normal", ""
+        else:
+            status, reason = "unknown", "No rule could be judged (see not_evaluated)."
+        return {
+            "equipment_id": equipment_id, "status": status, "reason": reason,
+            "faults": faults, "faults_detected": faults,
+            "health_score": round(100.0 * len(passed) / judged, 1) if judged else None,
+            "confidence": None,
+            "rules_passed": [f.rule_id for f in passed],
+            "rules_failed": [f.rule_id for f in fails],
+            "not_evaluated": not_judged,
+            "invalid_sensors": sorted({r for f in findings for r in f.invalid_roles
+                                       if f.family == "sensor"}),
+            "window_hours": hours,
+            "method": "rule-based FDD — ASHRAE Guideline 36 rules (open-fdd port) + ARVIS Gulf rules",
+        }
     
     async def _handle_analyze_root_cause(self, args: Dict) -> Dict:
         """Use Bayesian Network for root cause analysis"""

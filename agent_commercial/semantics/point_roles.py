@@ -87,6 +87,7 @@ class PointRole(str, Enum):
     TERMINAL_AIRFLOW = "terminal-airflow"
     TERMINAL_AIRFLOW_SP = "terminal-airflow-sp"
     TERMINAL_DISCHARGE_TEMP = "terminal-discharge-temp"
+    TERMINAL_INLET_TEMP = "terminal-inlet-temp"
     REHEAT_VALVE = "reheat-valve"
     # ── Chilled water plant / district cooling ────────────────────────────
     CHW_SUPPLY_TEMP = "chw-supply-temp"
@@ -131,6 +132,7 @@ ROLE_QUANTITY: Dict[PointRole, Quantity] = {
     PointRole.OCCUPANCY: _Q.BINARY, PointRole.TERMINAL_DAMPER: _Q.FRACTION,
     PointRole.TERMINAL_AIRFLOW: _Q.AIRFLOW, PointRole.TERMINAL_AIRFLOW_SP: _Q.AIRFLOW,
     PointRole.TERMINAL_DISCHARGE_TEMP: _Q.TEMPERATURE, PointRole.REHEAT_VALVE: _Q.FRACTION,
+    PointRole.TERMINAL_INLET_TEMP: _Q.TEMPERATURE,
     PointRole.CHW_SUPPLY_TEMP: _Q.TEMPERATURE, PointRole.CHW_RETURN_TEMP: _Q.TEMPERATURE,
     PointRole.CHW_SUPPLY_TEMP_SP: _Q.TEMPERATURE, PointRole.CHW_DP: _Q.PRESSURE,
     PointRole.CHW_DP_SP: _Q.PRESSURE, PointRole.CHW_FLOW: _Q.WATERFLOW,
@@ -223,6 +225,7 @@ for _role, _names in {
     R.TERMINAL_DAMPER: ("VAV_DMPR", "DMPR_POS", "DAMPER_POS", "VAV_DAMPER"),
     R.TERMINAL_AIRFLOW_SP: ("AIRFLOW_SP", "FLOW_SP", "VAV_FLOW_SP"),
     R.REHEAT_VALVE: ("RHV", "RH_VLV", "REHEAT", "RHT_VLV", "REHEAT_VLV"),
+    R.TERMINAL_INLET_TEMP: ("INLET_TEMP", "INLET_T", "VAV_EAT", "ENT_AIR_T"),
     R.CHW_SUPPLY_TEMP: ("CHWST", "CHWS", "CHW_ST", "CHWS_T", "CHW_SUPPLY_TEMP"),
     R.CHW_RETURN_TEMP: ("CHWRT", "CHWR", "CHW_RT", "CHWR_T", "CHW_RETURN_TEMP"),
     R.CHW_SUPPLY_TEMP_SP: ("CHWST_SP", "CHWS_SP", "CHW_SP", "CHWST_STPT"),

@@ -47,7 +47,15 @@ ML_TOOLS = [
     },
     {
         "name": "detect_equipment_faults",
-        "description": "Use ML autoencoder to detect equipment faults from sensor data. Applies physics-constrained VAE and ASHRAE RP-1312 fault rules. Returns fault type, severity, confidence, and recommended action.",
+        "description": (
+            "Run the rule-based fault detection engine (ASHRAE Guideline 36 fault conditions "
+            "ported from open-fdd, plus ARVIS Gulf rules for FAHUs, chilled water and district "
+            "cooling) over the equipment's stored telemetry. Sensors are validated first; a rule "
+            "only reports a fault after it persists past its confirmation delay while the unit "
+            "was proven running. Returns confirmed faults with the exact points used, fault hours "
+            "and candidate root causes, the rules that passed, and the rules that could not be "
+            "judged with the reason (missing points, unit off, failed sensor, site parameter)."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
@@ -58,9 +66,13 @@ ML_TOOLS = [
                 },
                 "fault_type": {
                     "type": "string",
-                    "description": "Specific fault to check (optional): sensor_drift, valve_stuck, refrigerant_leak, heat_exchanger_fouling",
-                    "enum": ["sensor_drift", "valve_stuck", "refrigerant_leak", "heat_exchanger_fouling"],
-                    "examples": ["sensor_drift"]
+                    "description": "Optional text filter on rule id/title/family, e.g. 'valve', 'FC14', 'sensor', 'low ΔT'",
+                    "examples": ["valve"]
+                },
+                "hours": {
+                    "type": "number",
+                    "description": "Analysis window in hours (default 24)",
+                    "examples": [24]
                 }
             },
             "required": ["equipment_id"]

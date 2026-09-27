@@ -1,0 +1,5 @@
+# Test-only oracle for the rule-FDD port (tests/test_fdd_parity.py).
+# NOT a runtime dependency: ARVIS ships its own port in agent_commercial/fdd.
+# Pinned exactly — open-fdd ships breaking majors frequently.
+# Install without touching runtime pins:  pip install --no-deps -r requirements-dev-fdd.txt
+open-fdd==4.4.7

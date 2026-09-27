@@ -28,7 +28,10 @@ def handler():
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    # asyncio.run, not get_event_loop(): the implicit loop is gone once any
+    # earlier test has finished an asyncio.run(), which made these tests
+    # order-dependent.
+    return asyncio.run(coro)
 
 
 # ── Individual handler stubs ──────────────────────────────────────────────────

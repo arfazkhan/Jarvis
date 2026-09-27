@@ -1,0 +1,51 @@
+ARVIS rule-based FDD
+====================
+
+The fault-condition logic, thresholds, operational gates, confirmation
+(latching) math and PID-hunting detector in this package are ported from
+open-fdd (https://github.com/bbartling/open-fdd, PyPI "open-fdd" 4.4.7),
+which is distributed under the MIT License:
+
+    MIT License
+
+    Copyright (c) 2026
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files to deal in the
+    Software without restriction, including without limitation the rights to
+    use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies.
+
+open-fdd's rules implement fault conditions from ASHRAE Guideline 36.
+
+Changes made in the port (see each rule's docstring):
+  * All thresholds converted from °F / in.w.c. / cfm / gpm / psi to SI
+    (°C, Pa, m³/s, L/s). Inputs are role columns already converted to SI
+    by agent_commercial.semantics.
+  * Rules and gates use ARVIS canonical point roles.
+  * When no run-proof point exists (fan status/speed/command, pump or
+    chiller status), gated rules are SKIPPED instead of assuming the
+    equipment was running.
+  * Site-specific thresholds with no universal default (e.g. CHW-4 flow
+    limit) must be configured; the rule is skipped otherwise.
+  * Sensor-validation results invalidate dependent samples rather than
+    letting a failed sensor raise a mechanical fault.
+  * Economizer / outside-air rules only apply when the equipment's
+    commissioned design says it has an economizer.
+  * Each rule uses its own declared confirmation delay. (In open-fdd 4.4.7
+    a shared 5-minute `confirm_min` slider overrides every rule's declared
+    delay.)
+  * FC13 full-cooling threshold 0.95 (open-fdd ships 0.01 while labelling
+    it "GL36 99%"); FC13/FC14 treat a unit with no OA-damper point as having
+    no economizer, so "valve closed" is the coil-inactive state.
+  * FC1 requires the VFD speed signal (with only a status point open-fdd
+    reduces "fan at full speed" to "fan running").
+  * SV-RANGE mixed-air high limit 55 °C instead of 110 °F, for 100%-outdoor-
+    air units in hot climates.
+  * CHW-NOLOAD-1 redefined (chiller on while every mapped cooling valve is
+    closed); VAV-2 replaced by ZONE-SETBACK-1 (cooling setback); DC-DT-1 new.
+  * Rules that need a minimum data span (SCHED-247: 24 h) SKIP until they
+    have it.
+
+Parity with the original is tested in tests/test_fdd_parity.py against
+open-fdd 4.4.7 (requirements-dev-fdd.txt).

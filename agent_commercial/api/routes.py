@@ -434,6 +434,34 @@ def create_api(
         return {"access_token": access_token, "token_type": "bearer"}
 
     # ═══════════════════════════════════════════════════════════════════════
+    # RULE-BASED FDD
+    # ═══════════════════════════════════════════════════════════════════════
+
+    @app.get("/api/v1/fdd/rules")
+    async def list_fdd_rules():
+        """The FDD rule catalog: roles each rule needs, SI parameters, origin."""
+        from agent_commercial.fdd import RULES
+        return {"count": len(RULES), "rules": [r.to_dict() for r in RULES]}
+
+    @app.get("/api/v1/fdd/findings")
+    async def get_fdd_findings(equipment_id: Optional[str] = None, outcome: Optional[str] = None):
+        """Latest result per (equipment, rule): pass / fail / skip / invalid with reasons."""
+        from agent_commercial.database import get_database
+        from agent_commercial.fdd.store import latest_findings
+        rows = await latest_findings(get_database(), equipment_id=equipment_id, outcome=outcome)
+        ops = getattr(app.state, "ops_copilot", None)
+        return {"last_run": getattr(ops, "fdd_last_run", None), "count": len(rows), "findings": rows}
+
+    @app.post("/api/v1/fdd/run")
+    async def run_fdd_now(hours: float = 24.0,
+                          current_user: User = Depends(require_role(["admin", "operator"]))):
+        """Run a rule-FDD sweep now (normally runs on a schedule)."""
+        ops = getattr(app.state, "ops_copilot", None)
+        if ops is None or not hasattr(ops, "run_fdd_sweep"):
+            raise HTTPException(503, "FDD engine not running")
+        return await ops.run_fdd_sweep(hours=hours)
+
+    # ═══════════════════════════════════════════════════════════════════════
     # DASHBOARD ENDPOINTS
     # ═══════════════════════════════════════════════════════════════════════
     

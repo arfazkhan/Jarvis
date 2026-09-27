@@ -713,6 +713,21 @@ class OpsCopilot:
             )
             logger.info("[TerminalAdvisory] Escalation loop started (checks every 1h, threshold 4h)")
 
+        # Rule-based FDD sweep (ASHRAE G36 rules over stored telemetry). Reads only
+        # what the TelemetryRecorder persisted, so it is safe in every mode.
+        try:
+            from agent_commercial.fdd import FDDEngine
+            self.fdd_engine = FDDEngine(
+                poll_seconds=float(os.getenv("ARVIS_FDD_RESAMPLE_S", "300")),
+                allow_ungated=os.getenv("ARVIS_FDD_ALLOW_UNGATED", "").lower() in ("1", "true", "yes"),
+                params_by_rule=self._load_fdd_params(),
+            )
+            self.fdd_last_run: Dict[str, Any] = {}
+            self._tasks.append(asyncio.create_task(self._fdd_sweep_loop()))
+            logger.info(f"[FDD] Rule sweep started ({len(self.fdd_engine.rules)} rules)")
+        except Exception as _fdd_err:
+            logger.warning(f"[FDD] Rule sweep not started: {_fdd_err}")
+
         # Fix 4: FDD VAE bootstrap — 30s delayed so BMS data flows first
         # FDD bootstrap generates SYNTHETIC training rows (jitter around defaults).
         # That is fine for a demo, but a real building must NOT get models
@@ -1270,6 +1285,52 @@ class OpsCopilot:
                 break
             except Exception as e:
                 logger.error(f"[TerminalAdvisory] escalation loop error: {e}")
+
+    def _load_fdd_params(self) -> Dict[str, Dict[str, float]]:
+        """Site FDD parameters ({rule_id: {param: value}}) from ARVIS_FDD_PARAMS
+        (YAML/JSON) — e.g. CHW-4 flow_hi or the DC-DT-1 contract ΔT."""
+        path = os.getenv("ARVIS_FDD_PARAMS", "")
+        if not path:
+            return {}
+        cfg = load_bms_config(path)
+        return {str(k): dict(v or {}) for k, v in (cfg or {}).items()}
+
+    async def run_fdd_sweep(self, hours: Optional[float] = None) -> Dict[str, Any]:
+        """One rule-FDD pass over the building; persists findings and announces
+        newly confirmed faults on the event bus."""
+        from agent_commercial.fdd import Outcome
+        from agent_commercial.fdd.store import latest_findings, save_findings
+
+        hours = float(hours or os.getenv("ARVIS_FDD_WINDOW_H", "24"))
+        previous = {(f["equipment_id"], f["rule_id"]): f["outcome"]
+                    for f in await latest_findings(self.database)}
+        findings = await self.fdd_engine.run_building(self.state_engine, self.database, hours=hours)
+        run_id = await save_findings(self.database, findings) if findings else None
+        counts: Dict[str, int] = {}
+        for f in findings:
+            counts[f.outcome.value] = counts.get(f.outcome.value, 0) + 1
+        new_faults = [f for f in findings if f.outcome is Outcome.FAIL
+                      and previous.get((f.equipment_id, f.rule_id)) != "fail"]
+        if new_faults and self._event_bus is not None:
+            self._event_bus.publish({"type": "fdd_faults_confirmed", "payload": {
+                "run_id": run_id, "faults": [f.to_dict() for f in new_faults]}})
+        self.fdd_last_run = {"run_id": run_id, "at": datetime.now().isoformat(timespec="seconds"),
+                             "window_hours": hours, "counts": counts,
+                             "new_faults": [f.headline() for f in new_faults]}
+        logger.info(f"[FDD] sweep {run_id}: {counts}; {len(new_faults)} newly confirmed")
+        return self.fdd_last_run
+
+    async def _fdd_sweep_loop(self) -> None:
+        interval = float(os.getenv("ARVIS_FDD_INTERVAL_S", "900"))
+        await asyncio.sleep(min(interval, 120))   # let first telemetry land
+        while self._running:
+            try:
+                await self.run_fdd_sweep()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"[FDD] sweep failed: {e}")
+            await asyncio.sleep(interval)
 
     async def _calibration_loop(self) -> None:
         """Periodic threshold calibration background loop."""
