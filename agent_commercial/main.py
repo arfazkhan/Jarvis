@@ -107,7 +107,8 @@ def build_protocol_configs(cfg: Dict[str, Any], base_dir: str = "."):
     b = cfg.get("bacnet") or {}
     if b:
         for key in ("local_address", "port", "device_id", "poll_interval",
-                    "discovery_timeout", "allow_offline"):
+                    "discovery_timeout", "allow_offline", "max_per_request",
+                    "rediscover_interval", "read_timeout", "check_status_flags"):
             if key in b:
                 bacnet_cfg[key] = b[key]
         points = list(b.get("points") or [])
@@ -873,6 +874,10 @@ class OpsCopilot:
             local_address=self.bacnet_config.get("local_address", "0.0.0.0"),
             port=self.bacnet_config.get("port", 47808),
             device_id=self.bacnet_config.get("device_id", 999),
+            check_status_flags=bool(self.bacnet_config.get("check_status_flags", True)),
+            max_per_request=int(self.bacnet_config.get("max_per_request", 20)),
+            rediscover_interval_s=float(self.bacnet_config.get("rediscover_interval", 600)),
+            read_timeout_s=float(self.bacnet_config.get("read_timeout", 5.0)),
         )
 
         # Points first: a live connection that polls nothing must not start.

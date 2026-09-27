@@ -25,13 +25,24 @@ Register mapping config:
                 "unit": "°C",
                 "scale": 0.1,    # value * scale = engineering unit
                 "offset": 0.0,
+                "data_type": "uint16",   # uint16 | int16 | uint32 | int32 | float32
+                "word_order": "big",     # 32-bit: which register holds the high word
+                "byte_order": "big",     # byte order inside each 16-bit register
+                "poll_interval": 60,     # optional per-point interval (s)
             }
         ]
     }
+
+Meters and VFDs commonly publish 32-bit floats across two registers with
+vendor-specific word order ("CDAB" = word_order little); get it wrong and the
+reading is garbage, so it is explicit per point.
 """
 
 import asyncio
+import inspect
 import logging
+import math
+import struct
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any, Callable
@@ -45,6 +56,7 @@ except ImportError:
     PYMODBUS_AVAILABLE = False
     warnings.warn("pymodbus not installed. Run: pip install pymodbus")
 
+from agent_commercial.adapter_health import PointFreshness
 from agent_commercial.bms_data_model import (
     BMSDataPoint,
     PointType,
@@ -58,10 +70,14 @@ logger = logging.getLogger("arvis.bms.modbus")
 # DATA MODELS
 # ═══════════════════════════════════════════════════════════════════════════
 
+_REGISTER_COUNT = {"uint16": 1, "int16": 1, "uint32": 2, "int32": 2, "float32": 2}
+_STRUCT = {"uint32": ">I", "int32": ">i", "float32": ">f"}
+
+
 @dataclass
 class ModbusPoint:
     """Configuration for a single Modbus register point."""
-    register_type: str      # "holding" | "input" | "coil"
+    register_type: str      # "holding" | "input" | "coil" | "discrete"
     address: int            # Register address (0-based)
     point_id: str
     point_name: str = ""
@@ -71,10 +87,40 @@ class ModbusPoint:
     scale: float = 1.0      # Multiply raw value by this
     offset: float = 0.0     # Add to scaled value
     point_type: PointType = PointType.SENSOR
-    poll_interval_seconds: int = 30
+    data_type: str = "uint16"
+    word_order: str = "big"
+    byte_order: str = "big"
+    poll_interval_seconds: Optional[int] = None   # None → adapter interval
     last_polled: Optional[datetime] = None
 
-    def apply_scaling(self, raw_value: int) -> float:
+    def __post_init__(self):
+        if self.data_type not in _REGISTER_COUNT:
+            raise ValueError(f"unsupported data_type {self.data_type!r} for {self.point_id}")
+        if self.word_order not in ("big", "little") or self.byte_order not in ("big", "little"):
+            raise ValueError(f"word_order/byte_order must be big or little for {self.point_id}")
+
+    @property
+    def register_count(self) -> int:
+        return 1 if self.register_type in ("coil", "discrete") else _REGISTER_COUNT[self.data_type]
+
+    def decode(self, registers: List[int]) -> Optional[float]:
+        """Registers (16-bit words) → engineering value, or None if not a finite number."""
+        words = [int(w) & 0xFFFF for w in registers[: self.register_count]]
+        if len(words) < self.register_count:
+            return None
+        if self.byte_order == "little":
+            words = [((w & 0xFF) << 8) | (w >> 8) for w in words]
+        if self.register_count == 1:
+            raw = words[0] - 0x10000 if self.data_type == "int16" and words[0] & 0x8000 else words[0]
+        else:
+            if self.word_order == "little":
+                words = words[::-1]
+            raw = struct.unpack(_STRUCT[self.data_type], struct.pack(">HH", *words))[0]
+            if not math.isfinite(raw):
+                return None
+        return self.apply_scaling(raw)
+
+    def apply_scaling(self, raw_value) -> float:
         return float(raw_value) * self.scale + self.offset
 
 
@@ -134,11 +180,17 @@ class ModbusAdapter:
         self._poll_task: Optional[asyncio.Task] = None
         self._poll_interval = 30
         self._on_point_update: List[Callable[[BMSDataPoint], None]] = []
+        self._unit_kw: Optional[str] = None
+        self._last_value: Dict[str, float] = {}
+        self._freshness = PointFreshness()
+        self._reconnect_delay = 5.0
+        self._consecutive_failures = 0
 
         self.stats = {
             "reads_total": 0,
             "reads_success": 0,
             "reads_failed": 0,
+            "reconnects": 0,
             "last_read": None,
         }
 
@@ -178,83 +230,120 @@ class ModbusAdapter:
     def is_connected(self) -> bool:
         return self._is_connected
 
+    def _unit_kwarg(self) -> str:
+        """pymodbus renamed the unit keyword over releases (unit → slave → device_id).
+        Pick whichever the installed client accepts instead of hard-coding one —
+        a hard-coded `slave=` raises TypeError on pymodbus ≥ 3.9."""
+        if self._unit_kw is None:
+            try:
+                params = inspect.signature(self._client.read_holding_registers).parameters
+            except (TypeError, ValueError):
+                params = {}
+            self._unit_kw = next((k for k in ("device_id", "slave", "unit") if k in params), "device_id")
+        return self._unit_kw
+
     async def read_register(self, point: ModbusPoint) -> Optional[float]:
-        """Read a single Modbus register. Returns engineering-unit value or None."""
+        """Read a point's register(s). Returns engineering-unit value or None."""
         if not self._client or not self._is_connected:
             return None
-
+        fn = {"holding": "read_holding_registers", "input": "read_input_registers",
+              "coil": "read_coils", "discrete": "read_discrete_inputs"}.get(point.register_type)
+        if fn is None:
+            logger.warning(f"Unknown register type: {point.register_type}")
+            return None
+        self.stats["reads_total"] += 1
         try:
-            if point.register_type == "holding":
-                result = await self._client.read_holding_registers(
-                    address=point.address,
-                    count=1,
-                    slave=point.unit_id,
-                )
-            elif point.register_type == "input":
-                result = await self._client.read_input_registers(
-                    address=point.address,
-                    count=1,
-                    slave=point.unit_id,
-                )
-            elif point.register_type == "coil":
-                result = await self._client.read_coils(
-                    address=point.address,
-                    count=1,
-                    slave=point.unit_id,
-                )
-            else:
-                logger.warning(f"Unknown register type: {point.register_type}")
-                return None
-
+            result = await getattr(self._client, fn)(
+                address=point.address, count=point.register_count,
+                **{self._unit_kwarg(): point.unit_id})
             if result.isError():
                 self.stats["reads_failed"] += 1
-                self.stats["reads_total"] += 1
                 logger.debug(f"Modbus read error on {point.point_id}: {result}")
                 return None
-
-            raw = result.registers[0] if hasattr(result, "registers") else int(result.bits[0])
+            if point.register_type in ("coil", "discrete"):
+                value = point.apply_scaling(1 if result.bits[0] else 0)
+            else:
+                value = point.decode(list(result.registers))
+            if value is None:
+                self.stats["reads_failed"] += 1
+                return None
             self.stats["reads_success"] += 1
-            self.stats["reads_total"] += 1
             self.stats["last_read"] = datetime.now()
-            return point.apply_scaling(raw)
-
+            self._consecutive_failures = 0
+            return value
         except Exception as e:
             self.stats["reads_failed"] += 1
-            self.stats["reads_total"] += 1
+            self._consecutive_failures += 1
             logger.debug(f"Modbus read exception {point.point_id}: {e}")
             return None
+
+    def _datapoint(self, point: ModbusPoint, value: float, quality: PointQuality) -> BMSDataPoint:
+        return BMSDataPoint(
+            point_id=point.point_id, name=point.point_name, value=value, unit=point.unit,
+            timestamp=datetime.now(timezone.utc), source="modbus", equipment_id=point.equipment_id,
+            point_type=point.point_type, quality=quality)
 
     async def read_point(self, point: ModbusPoint) -> Optional[BMSDataPoint]:
         value = await self.read_register(point)
         if value is None:
             return None
+        self._last_value[point.point_id] = value
+        self._freshness.mark_ok(point.point_id)
+        return self._datapoint(point, value, PointQuality.GOOD)
 
-        return BMSDataPoint(
-            point_id=point.point_id,
-            name=point.point_name,
-            value=value,
-            unit=point.unit,
-            timestamp=datetime.now(timezone.utc),
-            source="modbus",
-            equipment_id=point.equipment_id,
-            point_type=point.point_type,
-            quality=PointQuality.GOOD,
-        )
+    def _interval(self, point: ModbusPoint) -> float:
+        return float(point.poll_interval_seconds or self._poll_interval)
 
-    async def read_all_points(self) -> List[BMSDataPoint]:
+    def _due(self, point: ModbusPoint, now: datetime) -> bool:
+        return point.last_polled is None or \
+            (now - point.last_polled).total_seconds() >= self._interval(point) - 0.5
+
+    async def read_all_points(self, only_due: bool = False) -> List[BMSDataPoint]:
         results = []
+        now = datetime.now()
         for point in self._points.values():
+            if only_due and not self._due(point, now):
+                continue
+            point.last_polled = now
             try:
                 dp = await self.read_point(point)
                 if dp:
                     results.append(dp)
-                    point.last_polled = datetime.now()
             except Exception as e:
                 logger.error(f"Error reading {point.point_id}: {e}")
+        # Points that stopped answering go STALE once (last value, clearly flagged).
+        for pid in self._freshness.newly_stale({p.point_id: self._interval(p) for p in self._points.values()}):
+            p = self._points[pid]
+            if pid in self._last_value:
+                results.append(self._datapoint(p, self._last_value[pid], PointQuality.STALE))
+            logger.warning(f"Modbus point {pid} is stale (no good read for "
+                           f"{self._freshness.stale_factor:g}× its poll interval)")
         return results
+
+    async def _ensure_connected(self) -> bool:
+        """Reconnect with exponential backoff after the link drops."""
+        client_up = bool(self._client is not None and getattr(self._client, "connected", self._is_connected))
+        if self._is_connected and client_up and self._consecutive_failures < max(3, len(self._points)):
+            return True
+        self._is_connected = False
+        try:
+            if self._client is not None:
+                self._client.close()
+        except Exception:
+            pass
+        ok = await self.connect()
+        self.stats["reconnects"] += 1
+        if ok:
+            self._reconnect_delay = 5.0
+            self._consecutive_failures = 0
+            return True
+        await asyncio.sleep(self._reconnect_delay)
+        self._reconnect_delay = min(self._reconnect_delay * 2, 300.0)
+        return False
 
     def add_point(self, point: ModbusPoint) -> None:
         self._points[point.point_id] = point
+        self._freshness.register(point.point_id)
 
     def load_points_from_config(self, config: Dict[str, Any]) -> int:
         """Load register map from config dict."""
@@ -262,18 +351,7 @@ class ModbusAdapter:
         default_unit_id = config.get("unit_id", self.unit_id)
         for reg in config.get("registers", []):
             try:
-                point = ModbusPoint(
-                    register_type=reg["register_type"],
-                    address=reg["address"],
-                    point_id=reg["point_id"],
-                    point_name=reg.get("point_name", reg["point_id"]),
-                    equipment_id=reg.get("equipment_id", ""),
-                    unit=reg.get("unit", ""),
-                    unit_id=reg.get("unit_id", default_unit_id),
-                    scale=float(reg.get("scale", 1.0)),
-                    offset=float(reg.get("offset", 0.0)),
-                )
-                self.add_point(point)
+                self.add_point(_point_from_config(reg, default_unit_id))
                 count += 1
             except (KeyError, ValueError) as e:
                 logger.warning(f"Invalid register config, skipping: {e}")
@@ -298,9 +376,13 @@ class ModbusAdapter:
             self._poll_task = None
 
     async def _poll_loop(self) -> None:
+        tick = max(1.0, min([self._poll_interval] + [
+            float(p.poll_interval_seconds) for p in self._points.values() if p.poll_interval_seconds]))
         while True:
             try:
-                points = await self.read_all_points()
+                await self._ensure_connected()
+                # Read even when the link is down: failed reads age points into STALE.
+                points = await self.read_all_points(only_due=True)
                 for point in points:
                     for cb in self._on_point_update:
                         try:
@@ -313,7 +395,7 @@ class ModbusAdapter:
                 raise
             except Exception as e:
                 logger.error(f"Modbus poll error: {e}")
-            await asyncio.sleep(self._poll_interval)
+            await asyncio.sleep(tick)
 
     def on_point_update(self, callback: Callable[[BMSDataPoint], None]) -> None:
         self._on_point_update.append(callback)
@@ -323,8 +405,27 @@ class ModbusAdapter:
             **self.stats,
             "is_connected": self._is_connected,
             "points_configured": len(self._points),
+            "stale_points": self._freshness.stale_points,
             "polling_active": self._poll_task is not None and not self._poll_task.done(),
         }
+
+
+def _point_from_config(reg: Dict[str, Any], default_unit_id: int) -> ModbusPoint:
+    return ModbusPoint(
+        register_type=reg["register_type"],
+        address=int(reg["address"]),
+        point_id=reg["point_id"],
+        point_name=reg.get("point_name", reg["point_id"]),
+        equipment_id=reg.get("equipment_id", ""),
+        unit=reg.get("unit", ""),
+        unit_id=int(reg.get("unit_id", default_unit_id)),
+        scale=float(reg.get("scale", 1.0)),
+        offset=float(reg.get("offset", 0.0)),
+        data_type=str(reg.get("data_type", "uint16")).lower(),
+        word_order=str(reg.get("word_order", "big")).lower(),
+        byte_order=str(reg.get("byte_order", "big")).lower(),
+        poll_interval_seconds=int(reg["poll_interval"]) if reg.get("poll_interval") else None,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════

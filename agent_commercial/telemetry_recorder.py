@@ -57,6 +57,9 @@ class TelemetryRecorder:
     def on_point(self, point: Any) -> None:
         if str(getattr(point, "source", "") or "").lower() in self.NON_MEASURED_SOURCES:
             return
+        q = getattr(point, "quality", None)
+        if str(getattr(q, "value", q) or "").lower() == "stale":
+            return      # an adapter re-announcing a silent point, not a new measurement
         value = getattr(point, "value", None)
         if isinstance(value, bool):
             value = 1.0 if value else 0.0
