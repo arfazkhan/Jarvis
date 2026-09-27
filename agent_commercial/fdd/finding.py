@@ -56,6 +56,8 @@ class FaultFinding:
     gate_source: str = ""
     metrics: Dict[str, Any] = field(default_factory=dict)
     root_cause_candidates: List[str] = field(default_factory=list)
+    impact: Dict[str, Any] = field(default_factory=dict)       # avoidable energy / cost
+    scores: Dict[str, Any] = field(default_factory=dict)       # energy / comfort / health 0–10
     origin: str = ""
     evaluated_at: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
 
@@ -93,6 +95,7 @@ class FaultFinding:
             "params": dict(self.params), "params_fingerprint": self.params_fingerprint,
             "gate_source": self.gate_source, "metrics": dict(self.metrics),
             "root_cause_candidates": list(self.root_cause_candidates),
+            "impact": dict(self.impact), "scores": dict(self.scores),
             "origin": self.origin, "source_tool": self.source_tool,
             "evaluated_at": self.evaluated_at,
         }

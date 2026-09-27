@@ -717,10 +717,13 @@ class OpsCopilot:
         # what the TelemetryRecorder persisted, so it is safe in every mode.
         try:
             from agent_commercial.fdd import FDDEngine
+            from agent_commercial.fdd.impact import SiteEconomics
+            _fdd_cfg = self._load_fdd_params()
             self.fdd_engine = FDDEngine(
                 poll_seconds=float(os.getenv("ARVIS_FDD_RESAMPLE_S", "300")),
                 allow_ungated=os.getenv("ARVIS_FDD_ALLOW_UNGATED", "").lower() in ("1", "true", "yes"),
-                params_by_rule=self._load_fdd_params(),
+                params_by_rule={k: v for k, v in _fdd_cfg.items() if not k.startswith("_")},
+                economics=SiteEconomics.from_dict(_fdd_cfg.get("_site")),
             )
             self.fdd_last_run: Dict[str, Any] = {}
             self._tasks.append(asyncio.create_task(self._fdd_sweep_loop()))
@@ -1287,8 +1290,9 @@ class OpsCopilot:
                 logger.error(f"[TerminalAdvisory] escalation loop error: {e}")
 
     def _load_fdd_params(self) -> Dict[str, Dict[str, float]]:
-        """Site FDD parameters ({rule_id: {param: value}}) from ARVIS_FDD_PARAMS
-        (YAML/JSON) — e.g. CHW-4 flow_hi or the DC-DT-1 contract ΔT."""
+        """Site FDD parameters from ARVIS_FDD_PARAMS (YAML/JSON):
+        {rule_id: {param: value}} — e.g. CHW-4 flow_hi, DC-DT-1 contract_min_dt —
+        plus `_site: {tariff_per_kwh, plant_cop, heating_cop, currency}` for cost."""
         path = os.getenv("ARVIS_FDD_PARAMS", "")
         if not path:
             return {}
@@ -1314,9 +1318,22 @@ class OpsCopilot:
         if new_faults and self._event_bus is not None:
             self._event_bus.publish({"type": "fdd_faults_confirmed", "payload": {
                 "run_id": run_id, "faults": [f.to_dict() for f in new_faults]}})
+
+        # Closed loop: re-check every recorded repair with the rule that fired.
+        from agent_commercial.fdd.closed_loop import recheck_pending
+        decided = await recheck_pending(
+            self.fdd_engine, self.state_engine, self.database,
+            min_running_hours=float(os.getenv("ARVIS_FDD_VERIFY_MIN_H", "24")))
+        if decided and self._event_bus is not None:
+            self._event_bus.publish({"type": "fdd_fix_verified", "payload": {
+                "verifications": [v.to_dict() for v in decided]}})
+
+        from agent_commercial.fdd.coverage import coverage_summary
         self.fdd_last_run = {"run_id": run_id, "at": datetime.now().isoformat(timespec="seconds"),
                              "window_hours": hours, "counts": counts,
-                             "new_faults": [f.headline() for f in new_faults]}
+                             "coverage": coverage_summary(findings),
+                             "new_faults": [f.headline() for f in new_faults],
+                             "fixes_decided": [f"{v.equipment_id} {v.rule_id}: {v.status}" for v in decided]}
         logger.info(f"[FDD] sweep {run_id}: {counts}; {len(new_faults)} newly confirmed")
         return self.fdd_last_run
 

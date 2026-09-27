@@ -2721,7 +2721,7 @@ class BMSLLMAgent:
                         "monthly_savings_qar": _save,
                         "excess_cooling_kw": _res.get("excess_cooling_kw"),
                         "excess_daily_kwh": _res.get("excess_daily_kwh"),
-                        "tariff_qar_kwh": (_pl.get("inputs", {}) or {}).get("tariff_qar_kwh"),
+                        "tariff_qar_kwh": (_pl.get("inputs", {}) or {}).get("tariff_per_kwh"),
                         "confidence": _pl.get("confidence"),
                         "why": _pl.get("why"),
                         "if_ignored": _pl.get("if_ignored"),

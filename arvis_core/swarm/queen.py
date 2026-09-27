@@ -617,18 +617,39 @@ class QueenCoordinator(BaseModel):
                                     if expected_mat is not None:
                                         try:
                                             _excess_dt = max(0.0, mat - expected_mat)  # °C the coil must remove due to leak
-                                            # Supply airflow: measured if present, else nominal AHU design (ASSUMPTION).
+                                            # Supply airflow must be MEASURED. The old code
+                                            # assumed 2.0 m³/s, a fixed 0.14 QAR/kWh and
+                                            # 12 h/day, and priced thermal kW at the
+                                            # electric tariff (no chiller COP) — a cost
+                                            # figure built from assumptions, not the site.
                                             _af = (
                                                 _get_val(_points.get("SA_FLOW")) or _get_val(_points.get("SUPPLY_FLOW"))
                                                 or _get_val(_points.get("SAF")) or _get_val(_points.get("AIRFLOW"))
                                             )
-                                            _af_assumed = _af is None
-                                            _airflow_m3s = float(_af) if _af else 2.0  # nominal mid-size AHU ~2.0 m³/s
-                                            _RHO, _CP, _RATE, _HRS = 1.2, 1.006, 0.14, 12  # kg/m³, kJ/kg·K, Kahramaa Tier-3 QAR/kWh, op-hrs/day
+                                            if _af is None:
+                                                logger.info(f"[Queen][CostDeriver] {_eq_id}: cost not quantifiable "
+                                                            f"— no measured supply airflow point")
+                                            _airflow_m3s = float(_af) if _af is not None else 0.0
+                                            _RHO, _CP = 1.2, 1.006  # kg/m³, kJ/kg·K (standard air)
+                                            import os as _os_cost
+                                            def _site_num(_k):
+                                                try:
+                                                    return float(_os_cost.getenv(_k, "") or "nan")
+                                                except ValueError:
+                                                    return float("nan")
+                                            _RATE = _site_num("ARVIS_TARIFF_PER_KWH")    # electricity, per kWh
+                                            _COP = _site_num("ARVIS_PLANT_COP")          # cooling kW per electric kW
+                                            _HRS = _site_num("ARVIS_OPERATING_HOURS_PER_DAY")
                                             _excess_kw = round(_airflow_m3s * _RHO * _CP * _excess_dt, 2)
-                                            _daily_kwh = round(_excess_kw * _HRS, 1)
-                                            _monthly_qar = round(_daily_kwh * 30.0 * _RATE, 0)
-                                            if _excess_kw > 0:
+                                            _elec_kw = (_excess_kw / _COP) if _COP == _COP and _COP > 0 else None
+                                            _cost_per_h = (round(_elec_kw * _RATE, 2)
+                                                           if _elec_kw is not None and _RATE == _RATE else None)
+                                            _daily_kwh = (round(_elec_kw * _HRS, 1)
+                                                          if _elec_kw is not None and _HRS == _HRS else None)
+                                            _monthly_qar = (round(_cost_per_h * _HRS * 30.0, 0)
+                                                            if _cost_per_h is not None and _HRS == _HRS else None)
+                                            _af_assumed = False
+                                            if _af is not None and _excess_kw > 0:
                                                 plan.evidence.add(Evidence(
                                                     source_tool="derived:cost",
                                                     raw_payload={
@@ -640,23 +661,30 @@ class QueenCoordinator(BaseModel):
                                                             "expected_mat_at_commanded_oa": round(expected_mat, 2),
                                                             "excess_delta_t_c": round(_excess_dt, 2),
                                                             "supply_airflow_m3s": round(_airflow_m3s, 2),
-                                                            "airflow_assumed": _af_assumed,
+                                                            "airflow_assumed": False,
                                                             "air_density_kg_m3": _RHO,
                                                             "cp_kj_kgk": _CP,
-                                                            "tariff_qar_kwh": _RATE,
-                                                            "operating_hours_day": _HRS,
+                                                            "tariff_per_kwh": _RATE if _RATE == _RATE else None,
+                                                            "plant_cop": _COP if _COP == _COP else None,
+                                                            "operating_hours_day": _HRS if _HRS == _HRS else None,
                                                         },
                                                         "result": {
                                                             "excess_cooling_kw": _excess_kw,
+                                                            "excess_electric_kw": round(_elec_kw, 2) if _elec_kw is not None else None,
+                                                            "cost_per_operating_hour": _cost_per_h,
                                                             "excess_daily_kwh": _daily_kwh,
                                                             "est_monthly_cost_qar": _monthly_qar,
                                                             "est_monthly_savings_qar": _monthly_qar,  # recovered if damper repaired
+                                                            "cost_note": (None if _monthly_qar is not None else
+                                                                          "set ARVIS_TARIFF_PER_KWH, ARVIS_PLANT_COP and "
+                                                                          "ARVIS_OPERATING_HOURS_PER_DAY to price this"),
                                                         },
                                                         "why": (
                                                             "Stuck-open OA damper pulls hot outdoor air past the commanded "
-                                                            "mix; the cooling coil burns extra chiller energy to hold supply "
-                                                            "temperature, costing ~QAR "
-                                                            f"{_monthly_qar:.0f}/month at the Tier-3 rate."
+                                                            "mix; the cooling coil removes an extra "
+                                                            f"{_excess_kw:.1f} kW of heat to hold supply temperature"
+                                                            + (f", costing ~QAR {_monthly_qar:.0f}/month at the site tariff."
+                                                               if _monthly_qar is not None else ".")
                                                         ),
                                                         "if_ignored": (
                                                             "Sustained energy waste continues every operating hour, the coil "
@@ -664,30 +692,33 @@ class QueenCoordinator(BaseModel):
                                                             "runtime/wear accumulates — the recoverable savings are lost until "
                                                             "the damper actuator is repaired."
                                                         ),
-                                                        "confidence": 0.6 if _af_assumed else 0.85,
+                                                        "confidence": 0.85,
                                                         "traceable": True,
                                                     },
                                                     node_name="CostDeriver",
                                                     freshness=FreshnessStatus.RECENT,
                                                     summary=(
-                                                        f"{_eq_id} derived cost: excess load {_excess_kw} kW → "
-                                                        f"~QAR {_monthly_qar:.0f}/month recoverable savings"
-                                                        + (" (airflow assumed)" if _af_assumed else "")
+                                                        f"{_eq_id} derived cost: excess cooling load {_excess_kw} kW"
+                                                        + (f" → ~QAR {_monthly_qar:.0f}/month recoverable savings"
+                                                           if _monthly_qar is not None else
+                                                           " (not priced: site tariff/COP/hours not configured)")
                                                     ),
                                                     equipment_id=_eq_id,
                                                     equipment_type=_eq_block.get("kind", ""),
                                                 ))
                                                 logger.info(
                                                     f"[Queen][CostDeriver] {_eq_id} excess={_excess_kw}kW "
-                                                    f"daily_kwh={_daily_kwh} savings=QAR{_monthly_qar:.0f}/mo "
-                                                    f"(airflow_assumed={_af_assumed})"
+                                                    f"daily_kwh={_daily_kwh} savings/mo={_monthly_qar}"
                                                 )
                                                 _emit("agent_log", {
                                                     "agent": "Strategic Agent",
                                                     "icon": "payments",
                                                     "colorClass": "text-emerald-500",
                                                     "text": f"Thermodynamic Cost derived for {_eq_id}",
-                                                    "subtext": f"Calculated excess load: {_excess_kw:.1f} kW | Daily waste: {_daily_kwh:.1f} kWh | Projected savings: QAR {_monthly_qar:.0f}/mo (confidence: {0.6 if _af_assumed else 0.85})"
+                                                    "subtext": (f"Excess cooling load: {_excess_kw:.1f} kW"
+                                                                + (f" | Projected savings: QAR {_monthly_qar:.0f}/mo"
+                                                                   if _monthly_qar is not None else
+                                                                   " | not priced (site economics not configured)"))
                                                 })
                                         except Exception as _cost_err:
                                             logger.warning(f"[Queen] Derived cost evidence skipped: {_cost_err}")

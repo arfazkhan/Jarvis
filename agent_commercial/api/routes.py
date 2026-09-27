@@ -452,6 +452,37 @@ def create_api(
         ops = getattr(app.state, "ops_copilot", None)
         return {"last_run": getattr(ops, "fdd_last_run", None), "count": len(rows), "findings": rows}
 
+    class RepairRequest(BaseModel):
+        equipment_id: str
+        rule_id: str
+        repaired_at: Optional[str] = None       # ISO time; default now
+        work_order_id: Optional[str] = None
+        note: str = ""
+        hypothesis: Optional[str] = None        # the cause this repair addressed
+
+    @app.post("/api/v1/fdd/repairs")
+    async def record_repair(req: RepairRequest,
+                            current_user: User = Depends(require_role(["admin", "operator"]))):
+        """Record a repair against a confirmed fault. ARVIS then re-runs that rule on
+        post-repair telemetry and marks the fix verified / failed / inconclusive."""
+        from agent_commercial.database import get_database
+        from agent_commercial.fdd.closed_loop import register_repair
+        try:
+            when = datetime.fromisoformat(req.repaired_at) if req.repaired_at else None
+            v = await register_repair(get_database(), req.equipment_id, req.rule_id,
+                                      repaired_at=when, work_order_id=req.work_order_id,
+                                      note=f"{req.note} (recorded by {current_user.username})".strip(),
+                                      hypothesis=req.hypothesis)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return v.to_dict()
+
+    @app.get("/api/v1/fdd/verifications")
+    async def list_fix_verifications(status: Optional[str] = None):
+        from agent_commercial.database import get_database
+        from agent_commercial.fdd.closed_loop import list_verifications
+        return [v.to_dict() for v in await list_verifications(get_database(), status=status)]
+
     @app.post("/api/v1/fdd/run")
     async def run_fdd_now(hours: float = 24.0,
                           current_user: User = Depends(require_role(["admin", "operator"]))):

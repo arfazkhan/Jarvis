@@ -22,6 +22,7 @@ import pandas as pd
 from agent_commercial.fdd.finding import FaultFinding, Outcome
 from agent_commercial.fdd.frame import EquipmentFrame, build_frame
 from agent_commercial.fdd.gates import resolve_active_mask
+from agent_commercial.fdd.impact import SiteEconomics, estimate_impact, priority_scores
 from agent_commercial.fdd.rules import RULES, RuleContext, RuleSpec
 from agent_commercial.fdd.rules.base import has
 from agent_commercial.fdd.timeseries import confirm_fault, hours_true
@@ -54,11 +55,13 @@ class FDDEngine:
     def __init__(self, rules: Sequence[RuleSpec] = RULES, *, poll_seconds: float = 300.0,
                  allow_ungated: bool = False,
                  params_by_rule: Optional[Dict[str, Dict[str, float]]] = None,
-                 enabled_rules: Optional[Iterable[str]] = None):
+                 enabled_rules: Optional[Iterable[str]] = None,
+                 economics: Optional[SiteEconomics] = None):
         self.rules = [r for r in rules if enabled_rules is None or r.id in set(enabled_rules)]
         self.poll_seconds = float(poll_seconds)
         self.allow_ungated = allow_ungated
         self.params_by_rule = params_by_rule or {}
+        self.economics = economics or SiteEconomics()
 
     # ── one equipment ─────────────────────────────────────────────────────
     def evaluate(self, ef: EquipmentFrame) -> List[FaultFinding]:
@@ -173,10 +176,18 @@ class FDDEngine:
         fault_h = hours_true(confirmed, self.poll_seconds)
         n_fault = int(confirmed.sum())
         idx = confirmed.index[confirmed]
+        fault_pct = round(100.0 * fault_h / active_h, 1) if active_h else 0.0
+        impact: Dict[str, Any] = {}
+        scores: Dict[str, Any] = {}
+        if n_fault:
+            window_h = (d.index.max() - d.index.min()).total_seconds() / 3600.0
+            impact = estimate_impact(rule.energy_impact, d, confirmed, self.poll_seconds,
+                                     self.economics, window_h)
+            scores = priority_scores(rule.id, fault_pct, impact)
         return self._finding(
             rule, ef, Outcome.FAIL if n_fault else Outcome.PASS,
             "" if n_fault else "no confirmed fault",
-            fault_hours=round(fault_h, 2), fault_pct=round(100.0 * fault_h / active_h, 1) if active_h else 0.0,
+            fault_hours=round(fault_h, 2), fault_pct=fault_pct, impact=impact, scores=scores,
             active_hours=round(active_h, 2), sample_count=int(active.sum()), fault_sample_count=n_fault,
             invalid_sample_count=invalid_n, invalid_roles=invalid_roles,
             first_fault=str(idx[0]) if n_fault else None, last_fault=str(idx[-1]) if n_fault else None,
