@@ -483,6 +483,41 @@ def create_api(
         from agent_commercial.fdd.closed_loop import list_verifications
         return [v.to_dict() for v in await list_verifications(get_database(), status=status)]
 
+    @app.get("/api/v1/fdd/cases")
+    async def list_fdd_cases(status: Optional[str] = None, equipment_id: Optional[str] = None):
+        """Diagnosis cases: ranked causes, answered evidence (auto / operator), next question."""
+        from agent_commercial.database import get_database
+        from agent_commercial.fdd.diagnosis import list_cases
+        return [c.to_dict() for c in await list_cases(get_database(), status=status,
+                                                     equipment_id=equipment_id)]
+
+    class CaseAnswer(BaseModel):
+        evidence_id: str
+        answer: Literal["yes", "no", "unevaluated"]
+
+    @app.post("/api/v1/fdd/cases/{case_id}/answer")
+    async def answer_fdd_case(case_id: int, req: CaseAnswer,
+                              current_user: User = Depends(require_role(["admin", "operator"]))):
+        """Answer a diagnosis question; the ranking updates immediately."""
+        from agent_commercial.database import get_database
+        from agent_commercial.fdd.diagnosis import answer_question
+        try:
+            case = await answer_question(get_database(), case_id, req.evidence_id, req.answer,
+                                         answered_by=current_user.username)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return case.to_dict()
+
+    @app.get("/api/v1/fdd/kb/{rule_id}")
+    async def get_fdd_kb(rule_id: str):
+        """A rule's diagnosis knowledge: hypotheses with repair track record, evidence items."""
+        from agent_commercial.database import get_database
+        from agent_commercial.fdd import RULES_BY_ID
+        from agent_commercial.fdd.diagnosis import load_kb
+        if rule_id not in RULES_BY_ID:
+            raise HTTPException(404, f"unknown rule {rule_id}")
+        return (await load_kb(get_database(), rule_id)).summary()
+
     @app.post("/api/v1/fdd/run")
     async def run_fdd_now(hours: float = 24.0,
                           current_user: User = Depends(require_role(["admin", "operator"]))):

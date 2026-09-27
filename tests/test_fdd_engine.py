@@ -219,6 +219,9 @@ def test_detect_equipment_faults_tool_returns_rule_findings(tmp_path, monkeypatc
     assert out["faults"][0]["points_used"]["supply-air-temp"] == "AHU-9/SAT"
     assert any(n["rule_id"] == "FC14" and n["outcome"] == "skip" for n in out["not_evaluated"])
     assert 0 < out["health_score"] < 100
+    diag = out["faults"][0]["diagnosis"]
+    assert diag["case_id"] is not None and diag["case_status"] == "open"
+    assert diag["ranked_causes"] and diag["answered_from_data"].get("G_PERSIST") == "yes"
     assert none["status"] == "unknown" and none["faults"] == [] and none["health_score"] is None
 
 
@@ -232,17 +235,22 @@ def test_sweep_announces_only_newly_confirmed_faults(tmp_path):
     db = BMSDatabase(db_path=str(tmp_path / "sweep.db"))
     ns = SimpleNamespace(fdd_engine=FDDEngine(poll_seconds=POLL), state_engine=BMSStateEngine(),
                          database=db, _event_bus=SimpleNamespace(publish=events.append))
+    ns._fdd_topology = lambda findings: OpsCopilot._fdd_topology(ns, findings)
 
     async def go():
-        await _seed_ahu(db)
-        first = await OpsCopilot.run_fdd_sweep(ns, hours=12)
-        second = await OpsCopilot.run_fdd_sweep(ns, hours=12)
-        await db.close()
-        return first, second
+        try:
+            await _seed_ahu(db)
+            first = await OpsCopilot.run_fdd_sweep(ns, hours=12)
+            second = await OpsCopilot.run_fdd_sweep(ns, hours=12)
+            return first, second
+        finally:
+            await db.close()      # an open aiosqlite thread would hang interpreter exit
 
     first, second = asyncio.run(go())
     assert len(events) == 1 and events[0]["type"] == "fdd_faults_confirmed"
-    assert [f["rule_id"] for f in events[0]["payload"]["faults"]] == ["AHU-SATDEV"]
+    fault = events[0]["payload"]["faults"][0]
+    assert fault["rule_id"] == "AHU-SATDEV" and len(events[0]["payload"]["faults"]) == 1
+    assert fault["case"]["status"] == "open" and fault["case"]["diagnosis"]["posterior"]
     assert first["counts"]["fail"] == 1 and second["new_faults"] == []
 
 

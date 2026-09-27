@@ -1315,15 +1315,29 @@ class OpsCopilot:
             counts[f.outcome.value] = counts.get(f.outcome.value, 0) + 1
         new_faults = [f for f in findings if f.outcome is Outcome.FAIL
                       and previous.get((f.equipment_id, f.rule_id)) != "fail"]
+
+        # Diagnosis: open / update / suppress cases and rank causes (ZandrEA method).
+        from agent_commercial.fdd.diagnosis import process_findings
+        parents, designs = await self._fdd_topology(findings)
+        cases = await process_findings(self.database, findings, parents=parents, designs=designs)
+        case_by_key = {(c.equipment_id, c.rule_id): c for c in cases}
+
         if new_faults and self._event_bus is not None:
             self._event_bus.publish({"type": "fdd_faults_confirmed", "payload": {
-                "run_id": run_id, "faults": [f.to_dict() for f in new_faults]}})
+                "run_id": run_id,
+                "faults": [{**f.to_dict(), "case": case_by_key[(f.equipment_id, f.rule_id)].to_dict()
+                            if (f.equipment_id, f.rule_id) in case_by_key else None}
+                           for f in new_faults]}})
 
-        # Closed loop: re-check every recorded repair with the rule that fired.
+        # Closed loop: re-check every recorded repair with the rule that fired, and
+        # let each verified / failed repair teach the diagnosis knowledge base.
         from agent_commercial.fdd.closed_loop import recheck_pending
+        from agent_commercial.fdd.diagnosis import learn_from_verification
         decided = await recheck_pending(
             self.fdd_engine, self.state_engine, self.database,
             min_running_hours=float(os.getenv("ARVIS_FDD_VERIFY_MIN_H", "24")))
+        for v in decided:
+            await learn_from_verification(self.database, v)
         if decided and self._event_bus is not None:
             self._event_bus.publish({"type": "fdd_fix_verified", "payload": {
                 "verifications": [v.to_dict() for v in decided]}})
@@ -1336,6 +1350,22 @@ class OpsCopilot:
                              "fixes_decided": [f"{v.equipment_id} {v.rule_id}: {v.status}" for v in decided]}
         logger.info(f"[FDD] sweep {run_id}: {counts}; {len(new_faults)} newly confirmed")
         return self.fdd_last_run
+
+    async def _fdd_topology(self, findings) -> tuple:
+        """(parent by equipment, design_attributes by equipment) for diagnosis."""
+        parents: Dict[str, str] = {}
+        designs: Dict[str, Dict[str, Any]] = {}
+        for eid in {f.equipment_id for f in findings}:
+            try:
+                eq = await self.state_engine.get_equipment(eid)
+            except Exception:
+                eq = None
+            if eq is None:
+                continue
+            if getattr(eq, "parent_equipment_id", None):
+                parents[eid] = eq.parent_equipment_id
+            designs[eid] = dict(getattr(eq, "design_attributes", None) or {})
+        return parents, designs
 
     async def _fdd_sweep_loop(self) -> None:
         interval = float(os.getenv("ARVIS_FDD_INTERVAL_S", "900"))

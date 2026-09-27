@@ -147,8 +147,20 @@ class MLHandlerMixin:
         db = get_database()
         findings = await engine.run_building(bms_state, db, hours=hours, equipment_ids=[equipment_id])
         findings = [f for f in findings if f.equipment_id == equipment_id]
+        cases = {}
         if findings:
             await save_findings(db, findings)
+            from agent_commercial.fdd.diagnosis import process_findings
+            eq = None
+            try:
+                eq = await bms_state.get_equipment(equipment_id)
+            except Exception:
+                eq = None
+            parent = getattr(eq, "parent_equipment_id", None)
+            touched = await process_findings(
+                db, findings, parents={equipment_id: parent} if parent else {},
+                designs={equipment_id: dict(getattr(eq, "design_attributes", None) or {})})
+            cases = {c.rule_id: c for c in touched}
 
         def _match(f) -> bool:
             if not fault_type:
@@ -157,12 +169,25 @@ class MLHandlerMixin:
             return fault_type in text
 
         def _compact(f) -> Dict[str, Any]:
+            case = cases.get(f.rule_id)
+            diag = (case.diagnosis if case else {}) or {}
             return {"rule_id": f.rule_id, "fault_type": f.title, "family": f.family,
                     "summary": f.summary, "headline": f.headline(),
                     "fault_hours": f.fault_hours, "fault_pct": f.fault_pct,
                     "first_fault": f.first_fault, "last_fault": f.last_fault,
                     "points_used": f.points_used, "role_sources": f.role_sources,
+                    "impact": f.impact, "scores": f.scores,
                     "root_cause_candidates": f.root_cause_candidates,
+                    "diagnosis": {
+                        "case_id": case.id if case else None,
+                        "case_status": case.status if case else None,
+                        "suppressed_by_case": case.suppressed_by if case else None,
+                        "ranked_causes": (diag.get("posterior") or [])[:4],
+                        "answered_from_data": {k: v for k, v in (case.answers if case else {}).items()
+                                               if (case.answer_sources.get(k, "")).startswith("auto")},
+                        "next_question_for_operator": diag.get("next_question"),
+                        "kb_bust": diag.get("kb_bust", False),
+                    },
                     "source_tool": f.source_tool, "origin": f.origin}
 
         fails = [f for f in findings if f.outcome is Outcome.FAIL and _match(f)]
