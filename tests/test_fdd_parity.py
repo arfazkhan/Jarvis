@@ -182,7 +182,9 @@ def _ours(rule_id, si, kind, eq_id, design=None):
     rules = [RULES_BY_ID[rule_id]]
     if rule_id != "SV-RANGE":
         rules.insert(0, RULES_BY_ID["SV-RANGE"])
-    eng = FDDEngine(rules, poll_seconds=POLL)
+    # ARVIS requires the site's ventilation minimum; compare using open-fdd's defaults.
+    eng = FDDEngine(rules, poll_seconds=POLL, params_by_rule={
+        "OA-1": {"min_oa_frac": 0.15}, "ECON-4": {"oa_min_pct": 21.0}})
     return next(f for f in eng.evaluate(ef) if f.rule_id == rule_id)
 
 

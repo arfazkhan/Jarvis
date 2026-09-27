@@ -483,7 +483,9 @@ RULES = [
              energy_impact="excess_outdoor_air"),
     RuleSpec("OA-1", "Outdoor-air fraction too low", "ahu", _AHU,
              (MAT, RAT, OAT, R.SUPPLY_FAN_STATUS), oa_low,
-             params=(Param("min_oa_frac", 0.15, "frac", "Minimum OA fraction"),
+             # The ventilation minimum is the unit's design (open-fdd assumes 15%) —
+             # a guessed minimum flags every unit designed below it.
+             params=(Param("min_oa_frac", None, "frac", "Design minimum OA fraction (site)"),
                      Param("oat_rat_guard", 2.2 * F_DELTA, "°C", "Minimum |RAT−OAT|")),
              confirm_seconds=900, gate=_FAN_GATE(), origin="open-fdd OA-1",
              summary="Estimated outdoor-air fraction is below the ventilation minimum.",
@@ -506,7 +508,7 @@ RULES = [
              energy_impact="excess_outdoor_air"),
     RuleSpec("ECON-4", "Estimated outdoor-air fraction low", "ahu", _AHU, (MAT, RAT, OAT, FAN_ANY),
              econ_low_oa,
-             params=(Param("oa_min_pct", 21.0, "%", "Minimum OA percentage"),
+             params=(Param("oa_min_pct", None, "%", "Design minimum OA percentage (site)"),
                      Param("oat_rat_guard", 2.2 * F_DELTA, "°C", "Minimum |RAT−OAT|")),
              confirm_seconds=600, gate=_FAN_GATE(), origin="open-fdd ECON-4",
              summary="Estimated outdoor-air percentage is below the ventilation minimum.",

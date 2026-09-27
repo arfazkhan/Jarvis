@@ -26,8 +26,9 @@ Changes made in the port (see each rule's docstring):
   * When no run-proof point exists (fan status/speed/command, pump or
     chiller status), gated rules are SKIPPED instead of assuming the
     equipment was running.
-  * Site-specific thresholds with no universal default (e.g. CHW-4 flow
-    limit) must be configured; the rule is skipped otherwise.
+  * Site-specific thresholds with no universal default (CHW-4 flow limit,
+    OA-1 / ECON-4 design minimum outdoor-air fraction) must be configured;
+    the rule is skipped otherwise.
   * Sensor-validation results invalidate dependent samples rather than
     letting a failed sensor raise a mechanical fault.
   * Economizer / outside-air rules only apply when the equipment's
