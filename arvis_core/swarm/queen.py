@@ -243,9 +243,18 @@ class QueenCoordinator(BaseModel):
         """
         Main entry point for dealing with the swarm.
         Returns a dict: {"advice": str, "context": Dict, "plan": InvestigationPlan}
+
+        Each investigation runs in its own task so its metering binding (see
+        agent_unified/metering.py) covers every node, verifier and synthesis call it
+        makes, and never leaks into — or absorbs spend from — a concurrent investigation.
         """
+        return await asyncio.create_task(self._execute_swarm(query, context, channel))
+
+    async def _execute_swarm(self, query: str, context: Optional[Dict[str, Any]], channel: str) -> Dict[str, Any]:
         from arvis_core.plan import InvestigationPlan, Budget
+        from agent_unified.metering import bind_investigation
         plan = InvestigationPlan(query=query, budget=Budget())
+        bind_investigation(plan.id, plan.budget)
         logger.info(f"[Queen] ══ SWARM START ══ plan={plan.id} query='{query[:80]}'")
 
         # Live demo stream helper — non-blocking, error-swallowed lifecycle events.

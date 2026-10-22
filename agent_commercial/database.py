@@ -2206,7 +2206,7 @@ class BMSDatabase:
     async def flush_llm_usage(self, plan_id: str, budget=None) -> int:
         """Drain _LLM_USAGE_LOG into llm_usage table and update investigation_plans totals."""
         from agent_unified.llm import drain_usage_log
-        entries = drain_usage_log()
+        entries = drain_usage_log(plan_id=plan_id)   # only this investigation's calls
         if not entries:
             return 0
 

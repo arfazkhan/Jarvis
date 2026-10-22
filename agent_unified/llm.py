@@ -211,11 +211,37 @@ def _compute_bedrock_cost(model_id: str, input_tokens: int, output_tokens: int) 
     return (input_tokens * pricing[0] + output_tokens * pricing[1]) / 1_000_000
 
 
-def drain_usage_log() -> List[Dict[str, Any]]:
-    """Drain and return all accumulated LLM usage entries. Thread-safe for single event loop."""
+def _meter_usage(usage, channel: str) -> None:
+    """Record one LLM call: charge the active investigation's budget and log it for persistence.
+
+    Every adapter calls this, so spend is counted regardless of provider or caller
+    (node turn, depth planner, synthesis, verifier). See agent_unified/metering.py.
+    """
+    if usage is None:
+        return
+    from datetime import datetime as _dt
+    from agent_unified.metering import charge
+    plan_id = charge(usage.input_tokens, usage.output_tokens, usage.cost_usd)
+    _LLM_USAGE_LOG.append({
+        "plan_id": plan_id or "",
+        "model_id": usage.model_id,
+        "channel": channel,
+        "input_tokens": usage.input_tokens,
+        "output_tokens": usage.output_tokens,
+        "cost_usd": usage.cost_usd,
+        "timestamp": _dt.utcnow().isoformat(),
+    })
+
+
+def drain_usage_log(plan_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Drain accumulated LLM usage entries — only this investigation's when plan_id is given,
+    so concurrent investigations never absorb each other's spend. Single event loop safe."""
     global _LLM_USAGE_LOG
-    entries = _LLM_USAGE_LOG[:]
-    _LLM_USAGE_LOG = []
+    if plan_id is None:
+        entries, _LLM_USAGE_LOG = _LLM_USAGE_LOG[:], []
+        return entries
+    entries = [e for e in _LLM_USAGE_LOG if e.get("plan_id") == plan_id]
+    _LLM_USAGE_LOG = [e for e in _LLM_USAGE_LOG if e.get("plan_id") != plan_id]
     return entries
 
 def _robust_extract(content: str) -> tuple[List[str], str]:
@@ -1106,14 +1132,7 @@ class UnifiedLLM(BaseModel):
             cost_usd=cost_usd,
         )
 
-        _LLM_USAGE_LOG.append({
-            "model_id": model_id,
-            "channel": channel,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "cost_usd": cost_usd,
-            "timestamp": _dt.utcnow().isoformat(),
-        })
+        _meter_usage(usage_info, channel)
 
         return Message.assistant_message(
             content=text,
@@ -1327,11 +1346,27 @@ class UnifiedLLM(BaseModel):
                     except Exception as e:
                         logger.debug(f"Failed to broadcast {stream_as}: {e}")
             
-            return Message.assistant_message(content=content, tool_calls=tool_calls if tool_calls else None)
-            
+            # Token usage from the OpenAI-compatible response (K2-Think, Groq, OpenAI,
+            # OpenRouter…). Without this, investigations on these providers were never
+            # charged and the budget's token cap could not trigger. Cost stays 0.0 —
+            # there is no reliable price table for these endpoints; the token cap binds.
+            from agent_unified.schema import UsageInfo
+            _u = getattr(response, "usage", None)
+            usage_info = None
+            if _u is not None:
+                usage_info = UsageInfo(
+                    input_tokens=int(getattr(_u, "prompt_tokens", 0) or 0),
+                    output_tokens=int(getattr(_u, "completion_tokens", 0) or 0),
+                    model_id=str(model),
+                    cost_usd=0.0,
+                )
+                _meter_usage(usage_info, channel)
+
+            return Message.assistant_message(content=content, tool_calls=tool_calls if tool_calls else None, usage=usage_info)
+
         except Exception as e:
             error_str = str(e)
-            
+
             # ═══ GROQ tool_use_failed RECOVERY ═══
             # Groq sometimes generates tool calls in XML format:
             #   <function=search_knowledge_base {"query": "...", "top_k": 5}</function>

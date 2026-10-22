@@ -2310,7 +2310,9 @@ class BMSLLMAgent:
                     _budget = getattr(_investigation_plan, "budget", None)
                     await self.db.flush_llm_usage(plan_id=_plan_id, budget=_budget)
                 except Exception as _flush_err:
-                    logger.debug(f"[CostMeter] flush_llm_usage failed (non-fatal): {_flush_err}")
+                    # Non-fatal for the answer, but it must be visible: a silently failing
+                    # flush is how every investigation ended up recorded at $0 / 0 tokens.
+                    logger.warning(f"[CostMeter] flush_llm_usage failed for plan={_plan_id}: {_flush_err}")
 
             # ── Structured investigation result for demo UI (screens 3 & 4) ──
             # Self-contained: derives only from primitives guaranteed in scope.

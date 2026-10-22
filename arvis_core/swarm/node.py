@@ -183,6 +183,20 @@ class SwarmNode(BaseModel):
         turn: int = 0
 
         while turn < HARD_CEILING:
+            # Shared investigation budget: once it is spent, stop exploring and go
+            # straight to one synthesis call. (Previously only tool execution stopped
+            # and the loop kept making LLM calls up to HARD_CEILING.)
+            if plan is not None and not plan.check_budget():
+                if turn == 0:
+                    # Nothing gathered yet: a synthesis call would only invite an
+                    # ungrounded answer. Report "no findings" and spend nothing.
+                    logger.warning(f"[Node: {self.name}] Investigation budget already exhausted — skipping this agent.")
+                    return {
+                        "response": Message(role="assistant", content=f"[{self.name}] No findings: the investigation budget was spent before this agent ran."),
+                        "history": messages,
+                    }
+                logger.warning(f"[Node: {self.name}] Investigation budget exhausted before turn {turn} — synthesizing.")
+                break
             try:
                 if tools_def:
                     response = await self.llm.ask_tool(
@@ -199,12 +213,8 @@ class SwarmNode(BaseModel):
                         channel=self.llm_channel,
                     )
 
-                if plan is not None and response.usage:
-                    plan.budget.record_llm_call(
-                        input_tokens=response.usage.input_tokens,
-                        output_tokens=response.usage.output_tokens,
-                        cost_usd=response.usage.cost_usd,
-                    )
+                # LLM spend is charged to the investigation by the LLM layer itself
+                # (agent_unified/metering.py), not here.
 
                 # Natural exit — LLM decided it has enough
                 if not response.tool_calls:
@@ -261,12 +271,13 @@ class SwarmNode(BaseModel):
                 })
 
                 made_progress_this_turn = False
+                budget_stop = False
 
                 if not valid_tool_calls:
                     logger.info(f"[Node: {self.name}] No valid tool calls — treating as natural exit after {turn} turns.")
                     return {"response": response, "history": messages}
 
-                for tool_call in valid_tool_calls:
+                for _call_idx, tool_call in enumerate(valid_tool_calls):
                     tool_name = tool_call.function.name
                     args_str = tool_call.function.arguments
                     logger.info(f"[Node: {self.name}] Turn {turn}/{planned_turns}: calling {tool_name}")
@@ -379,12 +390,16 @@ class SwarmNode(BaseModel):
                     # ── Budget check (if plan provided) ─────────────────────
                     if plan is not None and not plan.check_budget():
                         logger.warning(f"[Node: {self.name}] Budget exhausted — forcing synthesis.")
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "name": tool_name,
-                            "content": "BUDGET EXHAUSTED: Cannot execute more tools. Synthesize from evidence collected so far.",
-                        })
+                        # Every tool call the model issued needs a result, or the next
+                        # request (the synthesis call) is rejected by Bedrock.
+                        for _pending in valid_tool_calls[_call_idx:]:
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": _pending.id,
+                                "name": _pending.function.name,
+                                "content": "BUDGET EXHAUSTED: Cannot execute more tools. Synthesize from evidence collected so far.",
+                            })
+                        budget_stop = True
                         break
 
                     # ── Execute tool ──────────────────────────────────────────
@@ -510,6 +525,9 @@ class SwarmNode(BaseModel):
                         "content": tool_content,
                     })
 
+                if budget_stop:
+                    break
+
                 # ── Stagnation check ──────────────────────────────────────────
                 if consecutive_errors >= STAGNATION_LIMIT:
                     logger.warning(f"[Node: {self.name}] Stagnated after {consecutive_errors} errors. Forcing synthesis.")
@@ -548,12 +566,6 @@ class SwarmNode(BaseModel):
             messages=messages, system_msgs=system_msgs, channel=self.llm_channel,
             tools=tools_def or None,
         )
-        if plan is not None and final_response.usage:
-            plan.budget.record_llm_call(
-                input_tokens=final_response.usage.input_tokens,
-                output_tokens=final_response.usage.output_tokens,
-                cost_usd=final_response.usage.cost_usd,
-            )
         return {"response": final_response, "history": messages}
 
     async def _llm_plan_depth(self, query: str) -> int:

@@ -15,6 +15,8 @@ This replaces the prompt-text "mental Todo List" with code state.
 from __future__ import annotations
 
 import json
+import os
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -41,24 +43,49 @@ class PlanStatus(Enum):
     BUDGET_EXHAUSTED = "budget_exhausted"
 
 
+def _env_num(name: str, default: float) -> float:
+    try:
+        return float(os.environ[name])
+    except (KeyError, ValueError):
+        return default
+
+
 @dataclass
 class Budget:
-    """Per-investigation resource budget shared across all swarm nodes."""
-    max_tool_calls: int = 24
-    max_tokens: int = 500000
-    max_wall_seconds: float = 120.0
-    max_cost_usd: float = 1.00
+    """Per-investigation resource budget shared across all swarm nodes.
+
+    Limits are per site via env (ARVIS_BUDGET_MAX_TOOL_CALLS / _TOKENS / _WALL_SECONDS
+    / _COST_USD). LLM spend is charged by the LLM layer (agent_unified/metering.py)
+    for every provider and caller; tool calls by the tool handler.
+
+    The wall clock is a runaway guard, not a pace target: measured investigations
+    run p50 ≈ 300 s, p90 ≈ 430 s, so the default sits above normal work (600 s)
+    and stops only the outliers (one run took ~2 h).
+    """
+    max_tool_calls: int = field(default_factory=lambda: int(_env_num("ARVIS_BUDGET_MAX_TOOL_CALLS", 24)))
+    max_tokens: int = field(default_factory=lambda: int(_env_num("ARVIS_BUDGET_MAX_TOKENS", 500000)))
+    max_wall_seconds: float = field(default_factory=lambda: _env_num("ARVIS_BUDGET_MAX_WALL_SECONDS", 600.0))
+    max_cost_usd: float = field(default_factory=lambda: _env_num("ARVIS_BUDGET_MAX_COST_USD", 1.00))
     used_tool_calls: int = 0
     used_tokens: int = 0
     used_wall_seconds: float = 0.0
     used_cost_usd: float = 0.0
+    # Monotonic start; restored budgets resume from their recorded elapsed time.
+    _t0: float = field(default_factory=time.monotonic, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        self._t0 = time.monotonic() - self.used_wall_seconds
 
     @property
     def tool_calls_remaining(self) -> int:
         return max(0, self.max_tool_calls - self.used_tool_calls)
 
+    def _tick(self) -> None:
+        self.used_wall_seconds = time.monotonic() - self._t0
+
     @property
     def exhausted(self) -> bool:
+        self._tick()
         return (
             self.used_tool_calls >= self.max_tool_calls
             or self.used_tokens >= self.max_tokens
@@ -77,6 +104,7 @@ class Budget:
         self.used_cost_usd += cost_usd
 
     def to_dict(self) -> Dict[str, Any]:
+        self._tick()
         return {
             "tool_calls": f"{self.used_tool_calls}/{self.max_tool_calls}",
             "tokens": f"{self.used_tokens}/{self.max_tokens}",
@@ -86,6 +114,7 @@ class Budget:
         }
 
     def to_raw_dict(self) -> Dict[str, Any]:
+        self._tick()
         return {
             "max_tool_calls": self.max_tool_calls,
             "max_tokens": self.max_tokens,
@@ -100,10 +129,10 @@ class Budget:
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "Budget":
         return cls(
-            max_tool_calls=d.get("max_tool_calls", 24),
-            max_tokens=d.get("max_tokens", 500000),
-            max_wall_seconds=d.get("max_wall_seconds", 120.0),
-            max_cost_usd=d.get("max_cost_usd", 1.00),
+            max_tool_calls=d.get("max_tool_calls", int(_env_num("ARVIS_BUDGET_MAX_TOOL_CALLS", 24))),
+            max_tokens=d.get("max_tokens", int(_env_num("ARVIS_BUDGET_MAX_TOKENS", 500000))),
+            max_wall_seconds=d.get("max_wall_seconds", _env_num("ARVIS_BUDGET_MAX_WALL_SECONDS", 600.0)),
+            max_cost_usd=d.get("max_cost_usd", _env_num("ARVIS_BUDGET_MAX_COST_USD", 1.00)),
             used_tool_calls=d.get("used_tool_calls", 0),
             used_tokens=d.get("used_tokens", 0),
             used_wall_seconds=d.get("used_wall_seconds", 0.0),
