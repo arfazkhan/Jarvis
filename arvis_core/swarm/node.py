@@ -7,6 +7,7 @@ that focuses on a specific domain using specific tools.
 import hashlib
 import json
 import logging
+import os
 from typing import Dict, Any, List, Optional, Set
 from pydantic import BaseModel, Field
 
@@ -14,6 +15,52 @@ from agent_unified.llm import UnifiedLLM
 from agent_unified.schema import Message
 
 logger = logging.getLogger("arvis.swarm.node")
+
+# ── Context guard ────────────────────────────────────────────────────────────
+# One oversized tool result, or a long run of them, must not push an agent call
+# past the model's context window (logs show calls failing at ~195k tokens).
+# Every full result is kept in the plan's evidence ledger at the tool boundary;
+# only the copy in the agent's own conversation is bounded. Deterministic — no
+# extra LLM call.
+MAX_TOOL_RESULT_CHARS = int(os.getenv("ARVIS_MAX_TOOL_RESULT_CHARS", "40000"))     # ≈ 11k tokens
+MAX_TOOL_HISTORY_CHARS = int(os.getenv("ARVIS_MAX_TOOL_HISTORY_CHARS", "240000"))  # ≈ 70k tokens
+
+
+def _fit_tool_result(content: str) -> str:
+    """Bound a single tool result, saying plainly that the view is partial."""
+    if len(content) <= MAX_TOOL_RESULT_CHARS:
+        return content
+    return (
+        content[:MAX_TOOL_RESULT_CHARS]
+        + f"\n\n[TRUNCATED: {len(content) - MAX_TOOL_RESULT_CHARS} of {len(content)} characters not shown. "
+        "The full result is kept in the evidence ledger. Do not conclude that anything is absent because "
+        "it is not shown here; call a narrower tool (a specific equipment or point) for detail.]"
+    )
+
+
+def _compact_tool_history(messages: List[Dict]) -> int:
+    """Shrink the oldest tool results to stubs once the conversation's tool output exceeds
+    MAX_TOOL_HISTORY_CHARS. The latest turn's results are never touched; message ids and
+    roles are kept, so tool_use / tool_result pairing stays valid. Returns stubs written."""
+    tool_idx = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+    total = sum(len(str(messages[i].get("content") or "")) for i in tool_idx)
+    if total <= MAX_TOOL_HISTORY_CHARS:
+        return 0
+    asst = [i for i, m in enumerate(messages) if m.get("role") == "assistant"]
+    latest_turn = asst[-1] if asst else len(messages)
+    compacted = 0
+    for i in tool_idx:
+        if total <= MAX_TOOL_HISTORY_CHARS or i > latest_turn:
+            break
+        content = str(messages[i].get("content") or "")
+        if content.startswith("[COMPACTED"):
+            continue
+        stub = (f"[COMPACTED: earlier {messages[i].get('name', 'tool')} result ({len(content)} characters) "
+                "removed to save context; its full data is in the evidence ledger.]")
+        total -= len(content) - len(stub)
+        messages[i] = {**messages[i], "content": stub}
+        compacted += 1
+    return compacted
 
 class SwarmNode(BaseModel):
     """
@@ -197,6 +244,9 @@ class SwarmNode(BaseModel):
                     }
                 logger.warning(f"[Node: {self.name}] Investigation budget exhausted before turn {turn} — synthesizing.")
                 break
+            _n_compacted = _compact_tool_history(messages)
+            if _n_compacted:
+                logger.info(f"[Node: {self.name}] Compacted {_n_compacted} earlier tool result(s) to stay within context.")
             try:
                 if tools_def:
                     response = await self.llm.ask_tool(
@@ -470,6 +520,9 @@ class SwarmNode(BaseModel):
                         result = {"error": str(e)}
                         consecutive_errors += 1
 
+                    # Bound what enters the conversation (full result is in the evidence ledger)
+                    tool_content = _fit_tool_result(tool_content)
+
                     # ── Empty retrieval detection (prevent Memory_Agent spin) ─────
                     if isinstance(result, dict) and not result.get("error"):
                         _is_retrieval_empty = (
@@ -560,6 +613,7 @@ class SwarmNode(BaseModel):
             f"[Node: {self.name}] Forcing synthesis (turn={turn}, planned={planned_turns}, "
             f"ceiling={HARD_CEILING}, errors={consecutive_errors})."
         )
+        _compact_tool_history(messages)
         messages.append({"role": "user", "content": "Please synthesize a final proposal based on your observations so far."})
         # Pass tools_def so Bedrock includes toolConfig (required when history has tool blocks)
         final_response = await self.llm.ask(

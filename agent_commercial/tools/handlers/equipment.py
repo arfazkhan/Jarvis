@@ -332,6 +332,7 @@ class EquipmentHandlerMixin:
             eq_summary = (
                 snapshot.get("equipment_summary")
                 or snapshot.get("equipment_counts")
+                or snapshot.get("equipment_by_status")   # what BMSStateEngine.get_snapshot() actually returns
                 or {}
             )
             if not eq_summary:
@@ -354,16 +355,24 @@ class EquipmentHandlerMixin:
                     if isinstance(a, dict) and str(a.get("severity", "")).lower() == "critical"
                 )
 
-            snapshot.setdefault("equipment_summary", eq_summary or {})
-            snapshot.setdefault("active_alarm_count", active_ct)
-            snapshot.setdefault("critical_alarm_count", crit_ct)
-            snapshot.setdefault("energy_today_kwh", snapshot.get("energy_kwh") or 0.0)
-            snapshot.setdefault("energy_cost_today_qar", snapshot.get("energy_cost_qar") or 0.0)
-            snapshot.setdefault("gsas_score", snapshot.get("gsas") or 0.0)
-            snapshot.setdefault("pending_insights", snapshot.get("insights") or [])
+            # Return the overview this tool promises, not the raw snapshot. The snapshot's
+            # current_values holds every point value in the building; passing it through
+            # put tens of thousands of tokens into one tool result and pushed agent calls
+            # past the model's context window. Point values belong to the point/equipment
+            # tools, alarm detail to get_active_alarms.
             from datetime import datetime as _dt
-            snapshot.setdefault("timestamp", _dt.now().isoformat())
-            return snapshot
+            return {
+                "equipment_summary": eq_summary or {},
+                "equipment_count": snapshot.get("equipment_count"),
+                "point_count": snapshot.get("point_count"),
+                "active_alarm_count": active_ct,
+                "critical_alarm_count": crit_ct,
+                "energy_today_kwh": snapshot.get("energy_today_kwh") or snapshot.get("energy_kwh") or 0.0,
+                "energy_cost_today_qar": snapshot.get("energy_cost_today_qar") or snapshot.get("energy_cost_qar") or 0.0,
+                "gsas_score": snapshot.get("gsas_score") or snapshot.get("gsas") or 0.0,
+                "pending_insights": snapshot.get("pending_insights") or snapshot.get("insights") or [],
+                "timestamp": snapshot.get("timestamp") or _dt.now().isoformat(),
+            }
 
         return {"error": "Dashboard overview not supported by current state engine"}
 

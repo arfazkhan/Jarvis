@@ -225,12 +225,19 @@ class TestDashboardOverview:
     
     @pytest.mark.asyncio
     async def test_happy_path(self, equipment_handler):
-        """Test dashboard overview."""
-        equipment_handler.bms_state.get_snapshot = AsyncMock(return_value={"status": "all_green"})
-        
+        """Returns the overview its response_schema promises — not raw snapshot keys.
+        (Passing the snapshot through put every point value into the agent's context.)"""
+        equipment_handler.bms_state.get_snapshot = AsyncMock(return_value={
+            "equipment_by_status": {"running": 5},
+            "current_values": {"AHU-1/sat": 13.0},
+            "active_alarm_count": 0,
+        })
+
         result = await equipment_handler._handle_get_dashboard_overview({})
-        
-        assert result["status"] == "all_green"
+
+        assert result["equipment_summary"] == {"running": 5}
+        assert result["active_alarm_count"] == 0
+        assert "current_values" not in result
 
 if __name__ == "__main__":
     import sys
