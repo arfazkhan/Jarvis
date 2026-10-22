@@ -1,0 +1,2 @@
+# Shell scripts run on Linux edge hosts — never convert to CRLF
+*.sh text eol=lf
