@@ -9,12 +9,24 @@
 # this is a separate file rather than an override of docker-compose.yml, whose
 # services talk to each other by bridge-network service names.
 #
+# Host networking also means every port binds on every interface — including the
+# BMS LAN. So the API listens on loopback only, and the sole way in is the nginx
+# TLS proxy on the management interface (ARVIS_MGMT_IP). Apply the host firewall
+# too: deploy/site/firewall.sh.
+#
 # Required env (e.g. in .env next to this file):
 #   ARVIS_AUTH_SECRET, ARVIS_ADMIN_PASSWORD   — API auth (fails closed without)
+#   ARVIS_MGMT_IP                             — management-network IP of this box
+#                                               (operators reach https://<it>)
+#   ARVIS_EGRESS_ALLOW                        — hosts the site approved for outbound
+#                                               traffic, e.g. the LLM endpoint. Empty
+#                                               = nothing leaves the LAN (rules engine
+#                                               still runs; LLM features degrade).
 #   GROQ_API_KEY (and/or OPENAI_API_KEY)      — LLM layer (degrades without)
 # Site files:
 #   ./site/bms_config.yaml                     — bacnet.points / modbus.registers
 #   ./site/commissioning.yaml                  — design facts, zones, roles
+#   ./nginx/ssl/cert.pem, key.pem              — TLS certificate for the proxy
 # ═══════════════════════════════════════════════════════════════════════════════
 
 services:
@@ -33,6 +45,9 @@ services:
       - ARVIS_COMMISSIONING_SPEC=/app/site/commissioning.yaml
       - ARVIS_BUILDING_ID=${ARVIS_BUILDING_ID:-default}
       - ARVIS_DB_PATH=/app/data/arvis_bms.db
+      - ARVIS_API_HOST=127.0.0.1
+      - ARVIS_EGRESS_POLICY=enforce
+      - ARVIS_EGRESS_ALLOW=${ARVIS_EGRESS_ALLOW:-}
       - ARVIS_AUTH_SECRET=${ARVIS_AUTH_SECRET}
       - ARVIS_ADMIN_PASSWORD=${ARVIS_ADMIN_PASSWORD}
       - ARVIS_OPERATOR_PASSWORD=${ARVIS_OPERATOR_PASSWORD:-}
@@ -44,11 +59,25 @@ services:
       - arvis-site-data:/app/data
       - arvis-site-logs:/app/logs
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 60s
+
+  # The only way in: TLS on the management interface, rate-limited login.
+  proxy:
+    image: nginx:1.27-alpine
+    container_name: arvis-site-proxy
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - ARVIS_MGMT_IP=${ARVIS_MGMT_IP:?set ARVIS_MGMT_IP to this box's management-network IP}
+    volumes:
+      - ./nginx/site.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - arvis
 
 volumes:
   arvis-site-data:

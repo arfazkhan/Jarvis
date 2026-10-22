@@ -1563,9 +1563,11 @@ class OpsCopilot:
         except Exception:
             pass
 
+        # On a site the box has host networking, so 0.0.0.0 would expose the API on the
+        # BMS LAN too. docker-compose.site.yml binds it to loopback behind TLS nginx.
         config = uvicorn.Config(
             self.api_app,
-            host="0.0.0.0",
+            host=os.getenv("ARVIS_API_HOST", "0.0.0.0"),
             port=self.api_port,
             log_level="info",
         )
@@ -1977,6 +1979,11 @@ class OpsCopilot:
 
 async def main(args):
     """Main entry point"""
+    # Outbound policy first, before any client (LLM, CAFM, Bedrock…) is constructed.
+    from agent_commercial.egress_policy import install_from_env
+    if install_from_env() is None and os.getenv("ARVIS_ENV", "development").lower() == "production":
+        logger.warning("[Egress] ARVIS_EGRESS_POLICY is off in production — this box can reach any "
+                       "internet host. On a building site set ARVIS_EGRESS_POLICY=enforce.")
     bacnet_config: Dict[str, Any] = {}
     modbus_config: Dict[str, Any] = {}
     if args.mode in ("bacnet", "modbus"):

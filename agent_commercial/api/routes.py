@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Dict, List, Optional, Any, Literal
 from datetime import datetime, timedelta
+import os
 import uuid
 from enum import Enum
 import logging
@@ -2838,10 +2839,11 @@ def create_api(
 # STANDALONE SERVER
 # ═══════════════════════════════════════════════════════════════════════════
 
-def run_server(host: str = "0.0.0.0", port: int = 8000):
+def run_server(host: Optional[str] = None, port: int = 8000):
     """Run the API server standalone"""
     import uvicorn
-    
+    host = host or os.getenv("ARVIS_API_HOST", "0.0.0.0")
+
     # Create app with no engines (for testing)
     app = create_api()
     
