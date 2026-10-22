@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from agent_unified.llm import UnifiedLLM
 from agent_unified.schema import Message
+from arvis_core.decision.reflector import decide_reflection
 
 logger = logging.getLogger("arvis.swarm.node")
 
@@ -226,6 +227,7 @@ class SwarmNode(BaseModel):
         }
         consecutive_errors: int = 0
         consecutive_empty: int = 0        # early exit when retrieval tools return no data
+        reflected_tools: Set[str] = set() # tools already granted their one reflective retry
         nudged: bool = False              # soft-nudge sent at most once
         turn: int = 0
 
@@ -322,6 +324,18 @@ class SwarmNode(BaseModel):
 
                 made_progress_this_turn = False
                 budget_stop = False
+                stop_exploring = False   # repeated empty results: stop tools, synthesize
+
+                def _answer_pending(pending):
+                    # Every tool call the model issued needs a result, or the next
+                    # request is rejected (Bedrock pairs toolUse with toolResult).
+                    for _p in pending:
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": _p.id,
+                            "name": _p.function.name,
+                            "content": "NOT RUN: repeated empty results — synthesize from evidence collected so far.",
+                        })
 
                 if not valid_tool_calls:
                     logger.info(f"[Node: {self.name}] No valid tool calls — treating as natural exit after {turn} turns.")
@@ -533,7 +547,25 @@ class SwarmNode(BaseModel):
                             or result.get("results") == []
                         )
                         if _is_retrieval_empty:
-                            consecutive_empty += 1
+                            # Reflector: the tool says WHY it is empty; decide whether
+                            # one reworded search is worth it or "no past experience"
+                            # is the answer. A sanctioned retry is not counted as spin.
+                            _decision = await decide_reflection(
+                                result.get("retrieval"),
+                                query=str(args.get("query") or args.get("situation") or ""),
+                                already_reflected=tool_name in reflected_tools,
+                                budget_ok=plan is None or plan.check_budget(),
+                            )
+                            if _decision is not None:
+                                tool_content += _decision.note
+                                logger.info("REFLECTOR_CASE " + json.dumps({
+                                    "node": self.name, "tool": tool_name, "args": args,
+                                    "retrieval": result.get("retrieval"), "decision": _decision.to_dict(),
+                                }, default=str))
+                                if _decision.retry:
+                                    reflected_tools.add(tool_name)
+                            if _decision is None or not _decision.retry:
+                                consecutive_empty += 1
                             if consecutive_empty >= 2:
                                 logger.info(f"[Node: {self.name}] Early exit: {consecutive_empty} consecutive empty retrieval results.")
                                 messages.append({
@@ -542,6 +574,8 @@ class SwarmNode(BaseModel):
                                     "name": tool_name,
                                     "content": tool_content,
                                 })
+                                _answer_pending(valid_tool_calls[_call_idx + 1:])
+                                stop_exploring = True
                                 break
                         else:
                             consecutive_empty = 0
@@ -562,6 +596,8 @@ class SwarmNode(BaseModel):
                                 "name": tool_name,
                                 "content": tool_content,
                             })
+                            _answer_pending(valid_tool_calls[_call_idx + 1:])
+                            stop_exploring = True
                             break
 
                     # ── Error hint injection ──────────────────────────────────
@@ -578,7 +614,7 @@ class SwarmNode(BaseModel):
                         "content": tool_content,
                     })
 
-                if budget_stop:
+                if budget_stop or stop_exploring:
                     break
 
                 # ── Stagnation check ──────────────────────────────────────────

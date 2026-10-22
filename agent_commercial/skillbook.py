@@ -686,6 +686,11 @@ class BuildingSkillbook:
                 threshold=context.get("similarity_threshold", 0.3)
             )
             semantic_ids = [s[0] for s in similar]
+            if not semantic_ids:
+                # A semantic search was asked and nothing matched. That is the answer:
+                # falling through to the unfiltered SQL below returned the building's
+                # top skills by confidence, i.e. unrelated memories presented as relevant.
+                return []
             
         # 1.2: Database Query (SQL Filter)
         query = """
@@ -753,8 +758,13 @@ class BuildingSkillbook:
             reranked_skills = []
             for d in reranked_dicts:
                 s = Skill.from_dict(d)
-                # Override confidence with reranked score if significant
-                s.confidence = (s.confidence + d.get("rerank_score", 0)) / 2
+                # Blend in the reranker's score only when it produced one. When it
+                # failed (no local model, Bedrock unreachable — the norm on an
+                # egress-locked site) it returns the original order with no scores,
+                # and counting the missing score as 0 halved every skill's confidence,
+                # pushing all memories under the cite threshold.
+                if "rerank_score" in d:
+                    s.confidence = (s.confidence + float(d["rerank_score"])) / 2
                 reranked_skills.append(s)
             
             return reranked_skills
@@ -762,6 +772,87 @@ class BuildingSkillbook:
         # Default sort by adjusted confidence
         validated_skills.sort(key=lambda x: x.confidence, reverse=True)
         return validated_skills[:limit]
+
+    async def explain_empty(self, context: Dict[str, Any], dropped_off_scope: int = 0) -> Dict[str, Any]:
+        """Explain why a retrieval for `context` found nothing.
+
+        An empty answer means two different things: nothing to find (a new building),
+        or something relevant that the search missed (wording, a filter, a near-miss
+        score). The agent cannot tell these apart from an empty list; this store can.
+        The reflector decides whether to retry from these facts.
+
+        empty_reason, in order of precedence:
+          store_empty      no skills for this building at all
+          off_scope        related skills exist, but only for other equipment
+          filtered_out     a related skill exists but a filter (skill_type) excluded it
+          missed           qualifying skills exist but the search path did not return them
+          below_threshold  closest skills exist but scored under the threshold
+          no_candidates    skills exist, nothing scores against this query
+        """
+        import re as _re
+        await self.ensure_initialized()
+        async with self.get_db() as conn:
+            async with conn.execute(
+                "SELECT COUNT(*) FROM skills WHERE building_id = ? "
+                "AND status IN ('active', 'unverified', 'historical')", (self.building_id,)
+            ) as cur:
+                store_size = int((await cur.fetchone())[0])
+
+        query = context.get("situation_query") or context.get("query") or ""
+        threshold = float(context.get("similarity_threshold", 0.3))
+        type_filter = context.get("skill_type")
+        eq_filter = context.get("equipment_id")
+        diag: Dict[str, Any] = {
+            "store_size": store_size,
+            "threshold": threshold,
+            "filters": {k: v for k, v in (("equipment_id", eq_filter), ("skill_type", type_filter)) if v},
+            "best_score": None,
+            "near_misses": [],
+            "dropped_off_scope": int(dropped_off_scope or 0),
+        }
+        if store_size == 0:
+            diag["empty_reason"] = "store_empty"
+            return diag
+
+        # Without the embedding model there are no scores to reason from — say so
+        # rather than report "no_candidates" as if the store had been searched.
+        diag["semantic_available"] = bool(self.matcher.is_available)
+        nearest = self.matcher.nearest(query, top_k=3) if (query and self.matcher.is_available) else []
+        if nearest:
+            ids = [sid for sid, _ in nearest]
+            async with self.get_db() as conn:
+                async with conn.execute(
+                    f"SELECT skill_id, title, equipment_id, skill_type FROM skills WHERE skill_id IN "
+                    f"({','.join('?' * len(ids))})", ids
+                ) as cur:
+                    meta = {r[0]: r for r in await cur.fetchall()}
+            for sid, score in nearest:
+                m = meta.get(sid)
+                if m:
+                    diag["near_misses"].append({"skill_id": sid, "title": m[1], "equipment_id": m[2],
+                                                "skill_type": m[3], "score": round(score, 3)})
+            diag["best_score"] = diag["near_misses"][0]["score"] if diag["near_misses"] else None
+
+        def _eqs(text: str) -> set:
+            return {_re.sub(r"[-_\s]", "", x).upper().replace("CHILLER", "CH")
+                    for x in _re.findall(r"\b(?:CH|AHU|VAV|FCU|MTR|CHILLER|PUMP|CT)\b[-_\s]?\d+", text or "", _re.I)}
+        target_eq = _eqs(query) | _eqs(str(eq_filter or ""))
+        related = [n for n in diag["near_misses"] if n["score"] >= threshold]
+        other_unit = [n for n in related if target_eq and n["equipment_id"] and not (_eqs(n["equipment_id"]) & target_eq)]
+        wrong_type = [n for n in related if type_filter and n["skill_type"] != type_filter and n not in other_unit]
+
+        if dropped_off_scope or (related and len(other_unit) == len(related)):
+            diag["empty_reason"] = "off_scope"
+        elif wrong_type:
+            diag["empty_reason"] = "filtered_out"
+        elif [n for n in related if n not in other_unit]:
+            # qualifying skills exist and should have been returned — a retrieval-path miss
+            diag["empty_reason"] = "missed"
+        elif diag["near_misses"]:
+            diag["empty_reason"] = "below_threshold"
+        else:
+            diag["empty_reason"] = "no_candidates"
+        return diag
 
     def _calculate_context_drift(self, signature: Dict[str, Any], current: Dict[str, Any]) -> float:
         """

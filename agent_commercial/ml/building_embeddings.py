@@ -262,8 +262,25 @@ class SemanticSkillMatcher:
             
         # Sort by RRF score
         hybrid_results = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
-        
+
         return hybrid_results[:top_k]
+
+    def nearest(self, query: str, top_k: int = 3) -> List[Tuple[str, float]]:
+        """Raw cosine similarity of the closest skills, with no threshold.
+
+        find_similar() drops everything under its threshold, so an empty answer
+        cannot say whether nothing related exists or something related narrowly
+        missed. This is the diagnostic view used to explain empty retrievals.
+        """
+        if not self.skill_embeddings:
+            return []
+        q = self.encode(query)
+        scored = []
+        for skill_id, emb in self.skill_embeddings.items():
+            denom = (np.linalg.norm(q) * np.linalg.norm(emb)) + 1e-8
+            scored.append((skill_id, float(np.dot(q, emb) / denom)))
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return scored[:top_k]
     
     def cluster_skills(self, n_clusters: int = 5) -> Dict[int, List[str]]:
         """

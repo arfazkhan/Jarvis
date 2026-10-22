@@ -361,11 +361,23 @@ class MLHandlerMixin:
                 })
             if _dropped:
                 logger.info(f"[ML] find_similar_skills equipment-scope: dropped {_dropped} off-equipment skill(s)")
-            return {
+            out = {
                 "skills": skills,
                 "total_matches": len(skills),
                 "query_embedding_used": used_embedding,
             }
+            if _dropped:
+                out["dropped_off_scope"] = _dropped
+            return out
+
+        async def _explained(result: Dict) -> Dict:
+            """An empty result says WHY it is empty, so the reflector can tell
+            'no past experience' from 'the search missed it'."""
+            if not result.get("skills"):
+                from agent_commercial.tools.handlers.sovereign import explain_empty_retrieval
+                result["retrieval"] = await explain_empty_retrieval(
+                    query, dropped_off_scope=result.get("dropped_off_scope", 0))
+            return result
 
         # Mem-8: Primary path — MemoryOrchestrator T5 (institutional)
         _mo = getattr(self, "memory_orchestrator", None)
@@ -387,7 +399,7 @@ class MLHandlerMixin:
                         for h in hits
                     ]
                     result = _normalize_skills_response(raw_results, True, "MemoryOrchestrator:T5")
-                    return _inject_lineage(result, "semantic_skill_matcher", "orchestrator_t5")
+                    return _inject_lineage(await _explained(result), "semantic_skill_matcher", "orchestrator_t5")
             except Exception as e:
                 logger.debug(f"find_similar_skills via orchestrator failed: {e}")
 
@@ -403,7 +415,7 @@ class MLHandlerMixin:
                     result = _normalize_skills_response(raw, True, "sentence-transformers")
                 else:
                     result = _normalize_skills_response([], True, "sentence-transformers")
-                return _inject_lineage(result, "semantic_skill_matcher", "sentence-transformers")
+                return _inject_lineage(await _explained(result), "semantic_skill_matcher", "sentence-transformers")
             except Exception as e:
                 logger.error(f"Error finding similar skills: {e}")
 
@@ -414,7 +426,7 @@ class MLHandlerMixin:
             _results = _matcher.find_similar(query=query, top_k=top_k)
             raw_results = [{"skill_id": sid, "score": float(score)} for sid, score in _results]
             result = _normalize_skills_response(raw_results, True, "SemanticSkillMatcher")
-            return _inject_lineage(result, "semantic_skill_matcher", "sentence-transformers")
+            return _inject_lineage(await _explained(result), "semantic_skill_matcher", "sentence-transformers")
         except Exception as _e:
             logger.debug(f"SemanticSkillMatcher fallback failed: {_e}")
 
@@ -449,15 +461,15 @@ class MLHandlerMixin:
                     f"{len(raw_results)} skill(s) for query={query[:60]!r}"
                 )
             result = _normalize_skills_response(raw_results, True, "local_skillbook_fallback")
-            return _inject_lineage(result, "semantic_skill_matcher", "local_skillbook")
+            return _inject_lineage(await _explained(result), "semantic_skill_matcher", "local_skillbook")
         except Exception as _sb_err:
             logger.warning(f"Local skillbook fallback failed: {_sb_err}")
 
-        return {
+        return await _explained({
             "skills": [],
             "total_matches": 0,
             "query_embedding_used": False,
-        }
+        })
     
     async def _handle_benchmark_building_ml(self, args: Dict) -> Dict:
         """Benchmark building using ML clustering"""

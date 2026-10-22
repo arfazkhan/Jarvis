@@ -6,9 +6,29 @@ Handlers for sovereign cognition layer tools.
 """
 
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 logger = logging.getLogger("arvis.bms.tools.sovereign")
+
+
+async def explain_empty_retrieval(query: str, equipment_id: Optional[str] = None,
+                                  skill_type: Optional[str] = None, dropped_off_scope: int = 0,
+                                  similarity_threshold: float = 0.2) -> Optional[Dict[str, Any]]:
+    """Ask the skillbook why a memory search came back empty (see BuildingSkillbook.explain_empty).
+    Attached to empty results as `retrieval`, so the agent's reflector can tell "nothing to find"
+    from "the search missed it". Returns None if the skillbook is unavailable."""
+    try:
+        from agent_commercial.skillbook import get_skillbook
+        sb = get_skillbook("default")
+        ctx: Dict[str, Any] = {"query": query, "situation_query": query, "similarity_threshold": similarity_threshold}
+        if equipment_id:
+            ctx["equipment_id"] = equipment_id
+        if skill_type:
+            ctx["skill_type"] = skill_type
+        return await sb.explain_empty(ctx, dropped_off_scope=dropped_off_scope)
+    except Exception as e:
+        logger.warning(f"[Sovereign] could not explain empty retrieval: {e}")
+        return None
 
 
 class SovereignHandlerMixin:
@@ -162,11 +182,13 @@ class SovereignHandlerMixin:
                 "query": query,
                 "skills": [],
                 "summary": {"total": 0, "note": "No matching patterns found in institutional memory"},
+                "retrieval": await explain_empty_retrieval(query, equipment_id, skill_type),
             }
 
         # Equipment-scope: drop institutional skills that name a DIFFERENT unit
         # than the one under investigation (a learned AHU-07 fault must not
         # surface for a chiller or another AHU). Equipment-agnostic skills kept.
+        _drop = 0
         try:
             import re as _re
             _eqre = _re.compile(r'\b(?:CH|AHU|VAV|FCU|MTR|CHILLER|PUMP|CT)\b[-_\s]?\d+', _re.IGNORECASE)
@@ -177,7 +199,6 @@ class SovereignHandlerMixin:
             _q_eq = _eqset(query) | _eqset(str(equipment_id or ""))
             if _q_eq and isinstance(results, list):
                 _kept = []
-                _drop = 0
                 for r in results:
                     _r_eq = _eqset(str(r.get("equipment_id") or "")) | _eqset(str(r.get("content") or "")) | _eqset(str(r.get("title") or ""))
                     if _r_eq and not (_r_eq & _q_eq):
@@ -194,6 +215,7 @@ class SovereignHandlerMixin:
             return {
                 "query": query, "skills": [],
                 "summary": {"total": 0, "note": "No on-equipment patterns in institutional memory"},
+                "retrieval": await explain_empty_retrieval(query, equipment_id, skill_type, dropped_off_scope=_drop),
             }
 
         # RAG reranker: cross-encoder post-pass to improve result ordering
@@ -213,6 +235,14 @@ class SovereignHandlerMixin:
         strong_results = [r for r in results if r.get("relevance", 0) >= _RETRIEVAL_THRESHOLD]
 
         if results and not strong_results:
+            # Matching memories exist but none is confident enough to cite. Rewording
+            # would find the same ones, so say so instead of looking like "nothing found".
+            _diag = await explain_empty_retrieval(query, equipment_id, skill_type, dropped_off_scope=_drop)
+            if _diag is not None:
+                _diag["empty_reason"] = "low_confidence"
+                _diag["low_confidence_matches"] = [
+                    {"title": r.get("title"), "equipment_id": r.get("equipment_id"),
+                     "relevance": round(float(r.get("relevance", 0)), 3)} for r in results[:3]]
             return {
                 "query": query,
                 "skills": [],
@@ -226,6 +256,7 @@ class SovereignHandlerMixin:
                     "abstain_reason": "weak_retrieval",
                     "max_relevance": max(r.get("relevance", 0) for r in results),
                 },
+                "retrieval": _diag,
             }
 
         return {
