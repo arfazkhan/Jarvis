@@ -26,6 +26,10 @@ Rules, in order (each appends a reason):
   calendar    quiet hours: anything not critical/safety → DIGEST; unoccupied
               (night/weekend/holiday): NOW→SOON, medium SOON→DIGEST
   handling    someone is already on it → one level down (never for safety)
+  preference  what the person asked for: mute → DROP, digest-only → at most DIGEST
+  normal      matches a learned "normal for this building" pattern → DROP
+  engagement  they consistently ignore/dismiss this kind → one level quieter for them
+              (the three above never apply to safety)
   rate        over ARVIS_OPS_MAX_PER_HOUR unprompted messages → DIGEST (not safety)
 
 No language-model calls in the decision itself.
@@ -105,6 +109,7 @@ class AttentionGate:
         self.gateway = gateway
         self.state_engine = state_engine
         self.advisories = advisories
+        self.learning = None                  # Learning (engagement, preferences, normals), when wired
         self.owner_cost = _env_float("ARVIS_OPS_OWNER_COST", 1000.0)
         self.max_per_hour = int(_env_float("ARVIS_OPS_MAX_PER_HOUR", 4))
         self.ack_min = _env_float("ARVIS_OPS_ACK_MIN", 15.0)
@@ -201,6 +206,26 @@ class AttentionGate:
                 d.level = _down(d.level)
                 d.because("already_handled", "; ".join(handled))
 
+        if self.learning is not None and not s.safety and d.level != "DROP":
+            pref = await self.learning.preference_for(person.number, s.kind, s.subject)
+            if pref and pref["mode"] == "mute":
+                d.level = "DROP"
+                return d.because("muted_by_person", pref.get("said") or f"{pref['scope_kind']} {pref['scope_value']}")
+            if pref and pref["mode"] == "digest" and d.level in ("NOW", "SOON"):
+                d.level = "DIGEST"
+                d.because("digest_by_person", pref.get("said") or f"{pref['scope_kind']} {pref['scope_value']}")
+            local = self.calendar.local(now)
+            normal = await self.learning.normal_for(s.kind, s.subject, self.calendar.day_type(now), local.hour)
+            if normal:
+                d.level = "DROP"
+                return d.because("learned_normal", f"#{normal['id']} {normal['hours']}")
+            if d.level in ("NOW", "SOON"):
+                e = await self.learning.engagement(person.number, s.kind)
+                if e["n"] >= 5 and e["p"] < 0.25:
+                    d.level = _down(d.level)
+                    d.because("low_engagement", f"{person.first_name} engaged with {e['engaged']} of {e['n']} "
+                                                f"'{s.kind}' messages lately")
+
         if not s.safety and d.level in ("NOW", "SOON"):
             if await self.store.proactive_count(person.number, 1.0) >= self.max_per_hour:
                 d.level = "DIGEST"
@@ -258,6 +283,7 @@ class AttentionGate:
                 await self.ledger.enqueue(s, person.number, "SOON", now + timedelta(minutes=1), now)
                 return
             await self.store.mark_told(person.number, s.topic, s.title)
+            await self._delivered(person, s.topic, s.kind, s.subject, msg_id, now)
             # Chase for an acknowledgement only where a person is needed now: safety,
             # critical, high alarms, losing sight of the building. A costly energy fault
             # is important but not something to escalate every 15 minutes.
@@ -277,6 +303,16 @@ class AttentionGate:
             return
         brief = self.calendar.next_hour(self.brief_hour, now)
         await self.ledger.enqueue(s, person.number, "DIGEST", brief, now)
+
+    async def _delivered(self, person: Person, topic: str, kind: str, subject: Optional[str],
+                         message_id: Optional[str], now: datetime) -> None:
+        if self.learning is None or kind.endswith(("cleared", "restored")):
+            return
+        try:
+            await self.learning.record_delivery(person.number, topic, kind, subject, message_id,
+                                                self.calendar.day_type(now), self.calendar.local(now).hour)
+        except Exception as e:
+            logger.warning(f"[Gate] engagement record failed: {e}")
 
     # ── acknowledgement ───────────────────────────────────────────────────
     async def acknowledge(self, topic: str, person: Person, note: str = "", now: Optional[datetime] = None) -> bool:
@@ -346,6 +382,8 @@ class AttentionGate:
             await self.ledger.mark([i.id for i in live], "sent", now)
             for it in live:
                 await self.store.mark_told(number, it.topic, it.title)
+                row = await self.ledger.get(it.topic)
+                await self._delivered(person, it.topic, it.kind, (row or {}).get("subject"), None, now)
 
     async def _authoritative_state(self, row: Dict[str, Any]) -> Optional[str]:
         """Acknowledged or cleared somewhere else (dashboard, the BMS)? Then stop chasing."""

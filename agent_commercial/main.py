@@ -844,11 +844,16 @@ class OpsCopilot:
                              situation=Situation(self.database, field_checks), engineer=engineer, gateway=gateway,
                              state_engine=self.state_engine,
                              advisories=getattr(self, "terminal_advisory_store", None))
+        from agent_commercial.ops_engineer.learning import Learning
+        learning = Learning(self.database)
         gateway.gate = gate
         engineer.gate = gate
         engineer.calendar = calendar
+        engineer.learning = learning
+        gate.learning = learning
         proactive = ProactiveEngineer(people=people, store=store, gateway=gateway, engineer=engineer,
                                       gate=gate, calendar=calendar, roles=roles)
+        proactive.learning = learning
         if self._event_bus is not None:
             proactive.attach(self._event_bus)
         self.ops_gate = gate
@@ -1498,8 +1503,14 @@ class OpsCopilot:
         decided = await recheck_pending(
             self.fdd_engine, self.state_engine, self.database,
             min_running_hours=float(os.getenv("ARVIS_FDD_VERIFY_MIN_H", "24")))
+        from agent_commercial.fdd.lessons import apply_verification
+        from agent_commercial.skillbook import get_skillbook
         for v in decided:
             await learn_from_verification(self.database, v)
+            try:   # …and the building's skillbook: a lesson that matures with every re-check
+                await apply_verification(self.database, get_skillbook(os.getenv("ARVIS_BUILDING_ID", "default")), v)
+            except Exception as e:
+                logger.warning(f"[Lessons] verification {getattr(v, 'id', '?')} not applied to skills: {e}")
         if decided and self._event_bus is not None:
             self._event_bus.publish({"type": "fdd_fix_verified", "payload": {
                 "verifications": [v.to_dict() for v in decided]}})

@@ -34,6 +34,7 @@ class ProactiveEngineer:
         self.gate = gate
         self.calendar = calendar
         self.roles = roles
+        self.learning = None                     # Learning: learned normals are announced in the brief
         self.brief_hour = int(os.getenv("ARVIS_OPS_BRIEF_HOUR", "7"))
         self.brief_latest = int(os.getenv("ARVIS_OPS_BRIEF_LATEST", "11"))
         self.owner_brief_day = os.getenv("ARVIS_OPS_OWNER_BRIEF_DAY", "Sunday")
@@ -52,9 +53,17 @@ class ProactiveEngineer:
                 summary = (await self.roles.before_investigation("", {}, None))["prompt"]
             except Exception as e:
                 logger.warning(f"[Ops] brief facts unavailable: {e}")
+        normals = []
+        if self.learning is not None:
+            try:
+                await self.learning.learn_normals()
+                normals = await self.learning.unannounced_normals()
+            except Exception as e:
+                logger.warning(f"[Ops] learning normals failed: {e}")
         weekly = local.strftime("%A") == self.owner_brief_day
         audience = list(self.people.by_role("fm")) + list(self.people.by_role("owner"))
         sent = 0
+        announced = False
         for person in audience:
             topic = f"brief:{day}"
             if await self.store.told(person.number, topic):
@@ -67,6 +76,10 @@ class ProactiveEngineer:
             facts = f"{self.calendar.describe(now)}\n{summary}"
             if held:
                 facts += "\nHeld for this brief:\n" + "\n".join(f"- {i.title}: {i.facts}" for i in held)
+            if normals and person.role == "fm":
+                facts += ("\nLearned as normal for this building (dismissed repeatedly at these times) — I'll stop "
+                          "flagging these; they can tell me to watch them again:\n" +
+                          "\n".join(f"- {n['kind']} on {n['subject']}, {n['day_type']}s {n['hours']}" for n in normals))
             purpose = ("give their morning brief: what needs attention today first, what happened overnight, "
                        "what is waiting on technicians" if person.role == "fm" else
                        "give their weekly brief: building health, costs being addressed, what was fixed")
@@ -77,7 +90,10 @@ class ProactiveEngineer:
             await self.gate.ledger.mark([i.id for i in held], "sent", now)
             for i in held:
                 await self.store.mark_told(person.number, i.topic, i.title)
+            announced = announced or (bool(normals) and person.role == "fm")
             sent += 1
+        if announced:
+            await self.learning.mark_announced([n["id"] for n in normals])
         return sent
 
     async def run(self, poll_seconds: int = 300) -> None:

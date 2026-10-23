@@ -219,6 +219,21 @@ class KnowledgeAgent(_Role):
                                                  s.equipment_id)
                 r.items.append(item)
 
+        # Facts the team confirmed in conversation ("AHU-07 serves level 3 west").
+        try:
+            from agent_commercial.ops_engineer.learning import Learning
+            for f in await Learning(self.o.database).facts(sorted(scope) or None, limit=limit):
+                if scope and f.subject and f.subject not in scope:
+                    continue
+                item = {"kind": "fact", "equipment_id": f.subject, "title": f.statement,
+                        "said_by": f.said_by_name, "said_at": f.said_at}
+                item["evidence_id"] = self._cite(r, plan, "knowledge:fact", item,
+                                                 f"Told by {f.said_by_name} ({f.said_at[:10]}): {f.statement}",
+                                                 f.subject)
+                r.items.append(item)
+        except Exception as e:
+            logger.debug(f"[Roles] building facts unavailable: {e}")
+
         # How earlier cases on these units ended.
         from agent_commercial.fdd.diagnosis import list_cases
         past = [c for c in await list_cases(self.o.database)
@@ -238,8 +253,9 @@ class KnowledgeAgent(_Role):
             if empty_diag:
                 r.items.append({"kind": "retrieval", "retrieval": empty_diag})
         else:
-            n_s = sum(1 for i in r.items if i["kind"] == "skill")
-            r.summary = f"{n_s} learned skill(s), {len(r.items) - n_s} resolved past case(s)."
+            n = {k: sum(1 for i in r.items if i["kind"] == k) for k in ("skill", "fact", "past_case")}
+            r.summary = (f"{n['skill']} learned skill(s), {n['fact']} fact(s) from the team, "
+                         f"{n['past_case']} resolved past case(s).")
         return r
 
 
@@ -461,6 +477,8 @@ class RoleOrchestrator:
                     desc = it.get("title") or f"{it.get('equipment_id')} {it.get('rule_id')}: {it.get('resolution')}"
                     if it.get("kind") == "retrieval":
                         continue
+                    if it.get("kind") == "fact":
+                        desc = f"(told by {it.get('said_by')}) {desc}"
                 elif role == "Verification_Agent":
                     desc = f"{it['equipment_id']} {it['rule_id']}: {it['status']} — {it['reason']}"
                 else:

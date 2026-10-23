@@ -98,6 +98,11 @@ class OpsGateway:
 
             reply = await self._acknowledgement(person, text, reply_to)
             if reply is not None:
+                await self._observe(person, text, reply_to, ack=True)
+                return reply
+
+            reply = await self._fact_confirmation(person, text)
+            if reply is not None:
                 return reply
 
             if await self._is_check_answer(person, text, reply_to):
@@ -110,7 +115,40 @@ class OpsGateway:
             await self.store.append(person.number, "person", text)
             reply = await self.engineer.respond(person, text)
             await self.send(person, reply)
+            await self._observe(person, text, reply_to, tools=getattr(self.engineer, "last_tools", {}).get(person.number))
             return reply
+
+    async def _observe(self, person: Person, text: str, reply_to: Optional[str], tools=None, ack: bool = False):
+        """Tell learning how the person reacted to what ARVIS sent them."""
+        learning = getattr(self.engineer, "learning", None)
+        if learning is None:
+            return
+        try:
+            await learning.observe(person.number, text, reply_to=reply_to, tools=tools, ack=ack)
+        except Exception as e:
+            logger.warning(f"[Ops] engagement observe failed: {e}")
+
+    async def _fact_confirmation(self, person: Person, text: str) -> Optional[str]:
+        """A short yes/no right after ARVIS read a fact back: save it or drop it (no LLM)."""
+        learning = getattr(self.engineer, "learning", None)
+        if learning is None or len(text) > _CHECK_REPLY_MAX_CHARS:
+            return None
+        from agent_commercial.field_checks import parse_answer
+        answer = parse_answer(text)
+        if answer not in ("yes", "no"):
+            return None
+        fact = await learning.pending_fact(person.number, within_hours=1.0)
+        if fact is None:
+            return None
+        await self.store.append(person.number, "person", text, kind="fact")
+        settled = await learning.settle_fact(fact.id, answer == "yes")
+        if answer == "yes":
+            await self.engineer.remember_confirmed_fact(settled)
+            reply = f"Saved — I'll remember that: {settled.statement}"
+        else:
+            reply = "OK, I won't save that."
+        await self.send(person, reply, kind="fact")
+        return reply
 
     async def _acknowledgement(self, person: Person, text: str, reply_to: Optional[str]) -> Optional[str]:
         """'on it' / 'seen' / 'تمام' to an alert awaiting acknowledgement: deterministic,

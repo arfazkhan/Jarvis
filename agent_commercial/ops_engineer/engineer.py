@@ -95,10 +95,35 @@ _TOOLS = [
                     "required": ["technician", "equipment_id"]}},
     {"name": "record_repair",
      "description": "Record that a repair was done on an equipment's open fault, so ARVIS re-checks it "
-                    "after enough running time and confirms whether it worked.",
+                    "after enough running time and confirms whether it worked. Say which likely cause was "
+                    "fixed (cause_fixed, in the diagnosis's words) — that is how the diagnosis learns.",
      "parameters": {"type": "object", "properties": {"equipment_id": {"type": "string"},
                                                      "rule_id": {"type": "string"},
+                                                     "cause_fixed": {"type": "string"},
                                                      "what_was_done": {"type": "string"}},
+                    "required": ["equipment_id"]}},
+    {"name": "set_preference",
+     "description": "Remember how the person wants to be told about something: mute (never, except "
+                    "safety), digest (morning brief only) or normal (undo). scope is all, equipment, or a kind: "
+                    "fault, repair, alarm, investigation, advisory, drift, monitoring, check. Confirm it back.",
+     "parameters": {"type": "object", "properties": {"scope": {"type": "string"},
+                                                     "equipment_id": {"type": "string"},
+                                                     "mode": {"type": "string", "enum": ["mute", "digest", "normal"]},
+                                                     "for_hours": {"type": "number"}},
+                    "required": ["scope", "mode"]}},
+    {"name": "list_preferences",
+     "description": "What the person has asked ARVIS to mute or keep for the brief.",
+     "parameters": {"type": "object", "properties": {}}},
+    {"name": "remember_fact",
+     "description": "The person told you a lasting fact about the building ('AHU-07 serves level 3 west', "
+                    "'the west zone runs hot in the afternoon'). Stage it, then read it back and ask them to "
+                    "confirm — it is saved only after they say yes.",
+     "parameters": {"type": "object", "properties": {"equipment_id": {"type": "string"},
+                                                     "fact": {"type": "string"}},
+                    "required": ["fact"]}},
+    {"name": "forget_normal",
+     "description": "Undo a learned 'normal for this building' pattern for an equipment, so ARVIS flags it again.",
+     "parameters": {"type": "object", "properties": {"equipment_id": {"type": "string"}},
                     "required": ["equipment_id"]}},
 ]
 
@@ -223,6 +248,8 @@ class OpsEngineer:
         self._tasks: Set[asyncio.Task] = set()
         self.gate = None          # AttentionGate (alerts, held items, decision log), when proactive messaging is on
         self.calendar = None      # BuildingCalendar
+        self.learning = None      # Learning (preferences, normals, facts, engagement)
+        self.last_tools: Dict[str, List[Dict[str, Any]]] = {}   # tools used in each person's last turn
 
     # ── context ───────────────────────────────────────────────────────────
     @staticmethod
@@ -262,6 +289,19 @@ class OpsEngineer:
                         f"{c.ref} {c.equipment_id} → {c.technician_name}: {c.question}" for c in pending[:6]))
             except Exception as e:
                 logger.warning(f"[Ops] field checks unavailable: {e}")
+        if self.learning is not None:
+            try:
+                eq = sorted(set(re.findall(r"\b[A-Za-z]{2,6}[-_ ]?\d{1,4}\b", focus_text)))
+                facts = await self.learning.facts([e.upper() for e in eq])
+                if facts:
+                    lines.append("Facts the team told me: " + "; ".join(
+                        f"{f.statement} (said by {f.said_by_name}, {f.said_at[:10]})" for f in facts))
+                prefs = await self.learning.preferences(person.number)
+                if prefs:
+                    lines.append("Their messaging preferences: " + "; ".join(
+                        f"{p['mode']} {p['scope_kind']} {p['scope_value']}".strip() for p in prefs))
+            except Exception as e:
+                logger.warning(f"[Ops] learning context unavailable: {e}")
         told = await self.store.notices_since(person.number, 24)
         if told:
             lines.append("Already told this person in the last 24 h: " + "; ".join(t["summary"] for t in told[-6:]))
@@ -281,6 +321,10 @@ class OpsEngineer:
             "- ARVIS is read-only: you cannot change setpoints or operate equipment. If asked, say who should and what to check.\n"
             "- For a 'why' that needs cross-system reasoning, call deep_investigation and tell them you're on it.\n"
             "- To settle a diagnosis from site, use ask_technician. When someone reports a repair done, use record_repair.\n"
+            "- If they tell you a lasting fact about the building, call remember_fact and read it back for a yes. "
+            "If they say how they want to be told about something ('only in the morning', 'stop telling me about "
+            "VAVs'), call set_preference and confirm it — safety alerts always come through.\n"
+            "- When a repair is reported, ask which cause was fixed if it isn't clear, and pass cause_fixed.\n"
             "- If they say they're on an alert you sent ('on it', 'handling it'), call acknowledge. If they ask why "
             "you did or didn't tell them about something, call explain and give the real reasons.\n"
             "- 'Did the reset/fix/change help?': find out when it happened (ask if they didn't say), then use "
@@ -293,6 +337,7 @@ class OpsEngineer:
 
     # ── a turn ────────────────────────────────────────────────────────────
     async def respond(self, person: Person, text: str) -> str:
+        self.last_tools[person.number] = []
         history = await self.store.recent(person.number, limit=12)
         focus = " ".join([t.text for t in history[-4:]] + [text])
         facts = await self._facts(person, focus)
@@ -362,6 +407,7 @@ class OpsEngineer:
                 except ValueError:
                     args = {}
                 out = await self._run_tool(person, tc.function.name, args)
+                self.last_tools.setdefault(person.number, []).append({"name": tc.function.name, "args": args})
                 outputs.append(out)
                 msgs.append({"role": "tool", "tool_call_id": tc.id, "name": tc.function.name, "content": out})
         # Out of rounds: one last answer without tools.
@@ -559,7 +605,7 @@ class OpsEngineer:
         return {"sent_to": tech.name, "ref": check.ref, "question": check.question, "status": check.status}
 
     async def _tool_record_repair(self, person: Person, equipment_id: str, rule_id: str = "",
-                                  what_was_done: str = "") -> Any:
+                                  what_was_done: str = "", cause_fixed: str = "") -> Any:
         if person.role not in ("fm", "technician"):
             return {"error": "repairs are recorded by the facilities manager or a technician"}
         from agent_commercial.fdd.closed_loop import register_repair
@@ -570,10 +616,73 @@ class OpsEngineer:
                 return {"error": f"{len(open_)} open faults on {equipment_id}; ask which one was repaired",
                         "open": [c.rule_id for c in open_]}
             rule_id = open_[0].rule_id
-        v = await register_repair(self.database, equipment_id, rule_id,
+        # Which likely cause did the repair address? Matched against the diagnosis's own causes, so that a
+        # verified repair teaches the diagnosis (without it, learn_from_verification has nothing to learn).
+        hypothesis = None
+        case = next((c for c in await list_cases(self.database, status="open", equipment_id=equipment_id)
+                     if c.rule_id == rule_id), None)
+        labels = [h["label"] for h in ((case.diagnosis or {}).get("posterior") or [])] if case else []
+        said = (cause_fixed or what_was_done or "").lower()
+        if said and labels:
+            words = {w for w in re.findall(r"[a-z]{4,}", said)}
+            scored = sorted(((len(words & set(re.findall(r"[a-z]{4,}", lab.lower()))), lab) for lab in labels),
+                            reverse=True)
+            if scored and scored[0][0] > 0 and (len(scored) == 1 or scored[0][0] > scored[1][0]):
+                hypothesis = scored[0][1]
+        if not hypothesis and len(labels) > 1 and not cause_fixed:
+            return {"error": "which cause was fixed? Ask them, then call again with cause_fixed",
+                    "likely_causes": labels[:4]}
+        v = await register_repair(self.database, equipment_id, rule_id, hypothesis=hypothesis or cause_fixed or None,
                                   note=f"reported on WhatsApp by {person.name}: {what_was_done}"[:500])
         return {"recorded": True, "verification_id": v.id, "equipment_id": equipment_id, "rule_id": rule_id,
+                "cause_fixed": hypothesis or cause_fixed or None,
                 "next": "ARVIS re-checks the fault after enough running time and reports whether the repair worked"}
+
+    async def _tool_set_preference(self, person: Person, scope: str, mode: str, equipment_id: str = "",
+                                   for_hours: Optional[float] = None) -> Any:
+        if self.learning is None:
+            return {"error": "preferences are not available on this site"}
+        scope = (scope or "").lower().rstrip("s")
+        scope_kind = "equipment" if equipment_id and scope in ("equipment", "") else scope
+        try:
+            pid = await self.learning.set_preference(person.number, scope_kind, equipment_id, mode,
+                                                     said=f"{mode} {scope} {equipment_id}".strip(),
+                                                     until_hours=for_hours)
+        except ValueError as e:
+            return {"error": str(e)}
+        return {"saved": True, "id": pid, "mode": mode, "scope": scope_kind, "equipment_id": equipment_id or None,
+                "for_hours": for_hours, "note": "safety alerts always come through"}
+
+    async def _tool_list_preferences(self, person: Person) -> Any:
+        if self.learning is None:
+            return {"preferences": []}
+        return {"preferences": await self.learning.preferences(person.number)}
+
+    async def _tool_remember_fact(self, person: Person, fact: str, equipment_id: str = "") -> Any:
+        if self.learning is None:
+            return {"error": "facts are not stored on this site"}
+        fid = await self.learning.propose_fact(equipment_id.upper() or None, fact, person.number, person.name)
+        return {"staged": True, "id": fid, "fact": fact, "equipment_id": equipment_id or None,
+                "next": "read it back to them and ask them to confirm with yes or no — it is saved only on yes"}
+
+    async def _tool_forget_normal(self, person: Person, equipment_id: str) -> Any:
+        if self.learning is None:
+            return {"error": "no learned patterns on this site"}
+        n = await self.learning.revoke_normal(equipment_id, f"whatsapp:{person.name}")
+        return {"revoked": n, "equipment_id": equipment_id,
+                "note": "I'll flag it again" if n else "there was no learned pattern for it"}
+
+    async def remember_confirmed_fact(self, fact: Any) -> None:
+        """A confirmed fact also goes to the building's skillbook, so investigations use it."""
+        try:
+            from agent_commercial.skillbook import get_skillbook
+            sb = get_skillbook(os.getenv("ARVIS_BUILDING_ID", "default"))
+            await sb.add_skill(skill_type="equipment_quirk", title=fact.statement[:120], description=fact.statement,
+                               equipment_id=fact.subject, confidence=0.7, created_by=f"whatsapp:{fact.said_by_name}",
+                               evidence={"source": "told by staff on WhatsApp", "fact_id": fact.id,
+                                         "said_at": fact.said_at})
+        except Exception as e:
+            logger.warning(f"[Ops] fact {fact.id} not added to the skillbook: {e}")
 
     # ── proactive phrasing ────────────────────────────────────────────────
     async def compose(self, person: Person, facts: str, purpose: str) -> str:
