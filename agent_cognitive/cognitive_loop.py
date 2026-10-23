@@ -93,10 +93,12 @@ class CognitiveLoop:
             from agent_commercial.predictive_maintenance import PredictiveMaintenanceEngine
             from agent_commercial.fleet_intelligence import FleetIntelligence
             
-            self._bms_state = BMSStateEngine()
-            self._alarm_engine = AlarmEngine()
-            self._energy_analyzer = EnergyAnalyzer()
-            self._pm_engine = PredictiveMaintenanceEngine()
+            # Keep engines injected via set_bms_engines (the live building). Creating new
+            # ones here replaced them with empty engines, so the loop analysed nothing.
+            self._bms_state = self._bms_state or BMSStateEngine()
+            self._alarm_engine = self._alarm_engine or AlarmEngine()
+            self._energy_analyzer = self._energy_analyzer or EnergyAnalyzer()
+            self._pm_engine = self._pm_engine or PredictiveMaintenanceEngine()
             self._fleet_intelligence = FleetIntelligence(building_ids=["default"])
 
             # Wire alarm-resolved → skillbook write (state machine, not LLM-optional)

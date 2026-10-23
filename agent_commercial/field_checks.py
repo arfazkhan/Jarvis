@@ -48,7 +48,8 @@ _DDL = """CREATE TABLE IF NOT EXISTS field_checks (
     technician TEXT NOT NULL, technician_name TEXT,
     status TEXT NOT NULL DEFAULT 'sent',     -- sent | answered | unsure | expired | failed
     answer TEXT, message_id TEXT, chain INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL, answered_at TEXT, error TEXT)"""
+    created_at TEXT NOT NULL, answered_at TEXT, error TEXT,
+    requested_by TEXT)                       -- who asked for it (number), told if it expires/fails"""
 _IDX = ("CREATE INDEX IF NOT EXISTS idx_field_checks_tech ON field_checks(technician, status)",
         "CREATE INDEX IF NOT EXISTS idx_field_checks_msg ON field_checks(message_id)",
         # inbound message ids already handled — webhooks are retried, answers must apply once
@@ -118,6 +119,7 @@ class FieldCheck:
     created_at: str
     answered_at: Optional[str]
     error: Optional[str]
+    requested_by: Optional[str] = None
 
     @property
     def ref(self) -> str:
@@ -138,7 +140,11 @@ class FieldCheckService:
         self.max_chain = int(max_chain if max_chain is not None else os.getenv("ARVIS_FIELD_CHECK_MAX_CHAIN", "4"))
         self._lock = asyncio.Lock()
         self._ignored: set = set()
-        self._follow_up: Optional[tuple] = None             # (case_id, chain) to ask after replying
+        self._follow_up: Optional[tuple] = None             # (case_id, chain, requested_by) to ask after replying
+        # on_change(check, status): a check expired unanswered or could not be delivered.
+        # main.py publishes it ("field_check_changed") so whoever asked hears about it.
+        self.on_change = None
+        self._migrated = False
 
     # ── storage ───────────────────────────────────────────────────────────
     async def _conn(self):
@@ -146,12 +152,18 @@ class FieldCheckService:
         await conn.execute(_DDL)
         for stmt in _IDX:
             await conn.execute(stmt)
+        if not self._migrated:                              # tables created before requested_by existed
+            async with conn.execute("PRAGMA table_info(field_checks)") as cur:
+                cols = {r[1] for r in await cur.fetchall()}
+            if "requested_by" not in cols:
+                await conn.execute("ALTER TABLE field_checks ADD COLUMN requested_by TEXT")
+            self._migrated = True
         return conn
 
     async def _rows(self, where: str = "", args: tuple = ()) -> List[FieldCheck]:
         conn = await self._conn()
         cols = ("id, case_id, equipment_id, rule_id, evidence_id, question, technician, technician_name, "
-                "status, answer, message_id, chain, created_at, answered_at, error")
+                "status, answer, message_id, chain, created_at, answered_at, error, requested_by")
         async with conn.execute(f"SELECT {cols} FROM field_checks {where} ORDER BY id", args) as cur:
             return [FieldCheck(*r) for r in await cur.fetchall()]
 
@@ -165,15 +177,31 @@ class FieldCheckService:
         await conn.execute(f"UPDATE field_checks SET {sets} WHERE id = ?", (*fields.values(), check_id))
         await conn.commit()
 
-    async def _expire(self) -> None:
+    async def _expire(self) -> List[FieldCheck]:
+        """Close unanswered checks past their TTL, and say so (on_change)."""
         cutoff = (datetime.now() - self.ttl).isoformat(timespec="seconds")
+        stale = await self._rows("WHERE status = 'sent' AND created_at < ?", (cutoff,))
+        if not stale:
+            return []
         conn = await self._conn()
         await conn.execute("UPDATE field_checks SET status='expired' WHERE status='sent' AND created_at < ?",
                            (cutoff,))
         await conn.commit()
+        for c in stale:
+            c.status = "expired"
+            self._changed(c, "expired")
+        return stale
+
+    def _changed(self, check: "FieldCheck", status: str) -> None:
+        if self.on_change is not None:
+            try:
+                self.on_change(check, status)
+            except Exception as e:
+                logger.error(f"[FieldCheck] on_change hook failed: {e}")
 
     # ── asking ────────────────────────────────────────────────────────────
-    async def request(self, case_id: int, technician: str, *, chain: int = 1) -> FieldCheck:
+    async def request(self, case_id: int, technician: str, *, chain: int = 1,
+                      requested_by: Optional[str] = None) -> FieldCheck:
         """Send the case's next question to a roster technician. Raises ValueError
         when there is nothing to ask (no such open case, no question left) or the
         technician is not on the roster."""
@@ -195,9 +223,10 @@ class FieldCheckService:
         conn = await self._conn()
         cur = await conn.execute(
             "INSERT INTO field_checks (case_id, equipment_id, rule_id, evidence_id, question, technician, "
-            "technician_name, status, chain, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "technician_name, status, chain, created_at, requested_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (case.id, case.equipment_id, case.rule_id, q["evidence_id"], q["question"], number,
-             self.roster[number], "sent", chain, datetime.now().isoformat(timespec="seconds")))
+             self.roster[number], "sent", chain, datetime.now().isoformat(timespec="seconds"),
+             normalize_number(requested_by) if requested_by else None))
         await conn.commit()
         check = (await self._rows("WHERE id = ?", (cur.lastrowid,)))[0]
         body = (f"ARVIS check — {case.equipment_id} (ref {check.ref})\n"
@@ -211,6 +240,7 @@ class FieldCheckService:
             await self._update(check.id, status="failed", error=f"{type(e).__name__}: {e}")
             check.status = "failed"
             logger.warning(f"[FieldCheck] {check.ref} to {number} not delivered: {e}")
+            self._changed(check, "failed")
         return check
 
     # ── answers ───────────────────────────────────────────────────────────
@@ -248,8 +278,8 @@ class FieldCheckService:
             reply = await self._apply(check, number, answer)
             await self._safe_send(number, reply)
             if self._follow_up:                             # acknowledgement first, then the next question
-                case_id, chain = self._follow_up
-                await self.request(case_id, number, chain=chain)
+                case_id, chain, requested_by = self._follow_up
+                await self.request(case_id, number, chain=chain, requested_by=requested_by)
             return reply
 
     async def _first_time(self, message_id: str) -> bool:
@@ -292,7 +322,7 @@ class FieldCheckService:
         nq = d.get("next_question")
         asked = {c.evidence_id for c in await self._rows("WHERE case_id = ?", (check.case_id,))}
         if nq and nq.get("evidence_id") not in asked and check.chain < self.max_chain:
-            self._follow_up = (check.case_id, check.chain + 1)   # sent after this acknowledgement
+            self._follow_up = (check.case_id, check.chain + 1, check.requested_by)   # sent after this ack
             msg += " One more check follows."
         elif nq:
             msg += " That's enough from site for now — an engineer will review the rest."
@@ -305,6 +335,8 @@ class FieldCheckService:
         for c in rows:
             await self._update(c.id, status="failed", error=error)
             logger.warning(f"[FieldCheck] {c.ref} to {c.technician} failed to deliver: {error}")
+            c.status, c.error = "failed", error
+            self._changed(c, "failed")
         return len(rows)
 
     async def _safe_send(self, to: str, body: str) -> None:

@@ -357,18 +357,13 @@ def create_api(
         # though data_source may read LIVE right after connect.
         fresh_points = 0
         try:
-            from datetime import datetime as _dt, timezone as _tz, timedelta as _td
-            _now = _dt.now(_tz.utc)
-            for _p in (getattr(bms, "_points", {}) or {}).values():
-                _ts = getattr(_p, "timestamp", None)
-                if _ts is None:
-                    continue
-                _ts = _ts if getattr(_ts, "tzinfo", None) else _ts.astimezone(_tz.utc)
-                if (_now - _ts) <= _td(minutes=15):
-                    fresh_points += 1
+            from types import SimpleNamespace as _NS
+            from agent_commercial.monitoring_health import assess_monitoring
+            fresh_points = assess_monitoring(_ops or _NS(state_engine=bms), fresh_minutes=15)["fresh_points"]
         except Exception:
             pass
         data_ready = fresh_points > 0
+        _watcher = getattr(_ops, "health_watcher", None)
 
         status_detail = {
             "status": "healthy" if (bms_ok and llm_ok) else "degraded",
@@ -376,6 +371,7 @@ def create_api(
             "bms_connected": bms_connected,
             "data_ready": data_ready,            # fresh readings actually arriving?
             "fresh_points": fresh_points,
+            "monitoring": getattr(_watcher, "state", "unwatched"),   # ok | degraded | blind | unknown
             "bms_state_engine": "up" if bms_ok else "down",
             "llm_agent": "up" if llm_ok else "down",
             "skillbook": "up" if getattr(app.state, "skillbook", None) else "absent",

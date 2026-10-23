@@ -506,7 +506,7 @@ class OpsEngineer:
                  if (c.diagnosis or {}).get("next_question")]
         if not cases:
             return {"error": f"no open diagnosis with a pending question for {equipment_id}"}
-        check = await self.field_checks.request(cases[0].id, tech.number)
+        check = await self.field_checks.request(cases[0].id, tech.number, requested_by=person.number)
         return {"sent_to": tech.name, "ref": check.ref, "question": check.question, "status": check.status}
 
     async def _tool_record_repair(self, person: Person, equipment_id: str, rule_id: str = "",

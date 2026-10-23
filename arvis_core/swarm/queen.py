@@ -1842,6 +1842,8 @@ class QueenCoordinator(BaseModel):
             "nodes_total": _nodes_total,
             "nodes_converged": _nodes_converged,
             "roles": getattr(plan, "role_reports", {}) or {},
+            "confidence": _confidence_val,
+            "abstained": _abstained_val,
         }
 
     def _verification_policy(self, risk_tier: int, query: str, advice: str, plan=None) -> Dict[str, Any]:

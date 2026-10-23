@@ -422,6 +422,7 @@ class OpsCopilot:
         try:
             from agent_commercial.terminal_advisory_store import TerminalAdvisoryStore
             self.terminal_advisory_store = TerminalAdvisoryStore()
+            self.terminal_advisory_store.on_fired = lambda adv: self._publish("terminal_advisory_fired", adv)
             # Wire into Queen so post-synthesis detection + pre-swarm injection work
             if hasattr(self.llm_agent, "queen") and self.llm_agent.queen:
                 self.llm_agent.queen.terminal_advisory_store = self.terminal_advisory_store
@@ -452,6 +453,9 @@ class OpsCopilot:
         # listens. (Lite mode used to have none, which silently disabled proactive messages.)
         from arvis_core.event_bus.event_bus import EventBus
         self._event_bus = EventBus()
+        # BMS alarms are news for whoever is on duty: put them on the bus.
+        self.state_engine.on_alarm(self._publish_alarm_raised)
+        self.state_engine.on_alarm_resolved(self._publish_alarm_cleared)
         if not self.lite_mode:
             try:
                 from agent_commercial.anomaly_watchdog import AnomalyWatchdog
@@ -487,15 +491,15 @@ class OpsCopilot:
                     event_bus=self._event_bus,
                     max_concurrent=2,
                     cooldown_per_equipment=300,
+                    watchdog=self._watchdog,
                 )
 
                 # Register watchdog on every point update
                 self.state_engine.on_point_update(self._watchdog.on_point_update)
                 # Register autonomous alarm investigation
                 self.state_engine.on_alarm(self._on_alarm_auto_investigate)
-                # Start the agent-decided watch loop (drift confirmation + post-maintenance
-                # verification — wake on telemetry change or the chosen window, re-investigate).
-                self._dispatcher.start_watch_loop()
+                # The watch service (drift confirmation + post-maintenance re-checks) is
+                # started in start(), inside the running event loop.
 
                 # Expose watchdog to the LLM agent so investigations can surface
                 # the real z-score for the equipment under analysis (demo screen 2/4).
@@ -750,6 +754,13 @@ class OpsCopilot:
             logger.warning(f"[FDD] Rule sweep not started: {_fdd_err}")
 
         self._start_ops_engineer()
+        if getattr(self, "_dispatcher", None):
+            self._dispatcher.start_watch_loop()
+
+        # Notice — and say — when ARVIS loses sight of the building.
+        from agent_commercial.monitoring_health import MonitoringHealthWatcher
+        self.health_watcher = MonitoringHealthWatcher(self, self._publish)
+        self._tasks.append(asyncio.create_task(self.health_watcher.run()))
 
         # Fix 4: FDD VAE bootstrap — 30s delayed so BMS data flows first
         # FDD bootstrap generates SYNTHETIC training rows (jitter around defaults).
@@ -768,6 +779,21 @@ class OpsCopilot:
 
         logger.info(f"Ops Copilot started! API available at http://localhost:{self.api_port}/api/docs")
     
+    def _publish(self, event_type: str, payload: Dict[str, Any]) -> None:
+        """Put an event on the process event bus (never raises)."""
+        if getattr(self, "_event_bus", None) is None:
+            return
+        try:
+            self._event_bus.publish({"type": event_type, "payload": payload})
+        except Exception as e:
+            logger.error(f"[Events] publish {event_type} failed: {e}")
+
+    def _publish_alarm_raised(self, alarm) -> None:
+        self._publish("bms_alarm_raised", {"alarm": alarm.to_dict()})
+
+    def _publish_alarm_cleared(self, event: Dict[str, Any]) -> None:
+        self._publish("bms_alarm_cleared", (event or {}).get("payload") or {})
+
     def _start_ops_engineer(self) -> None:
         """ARVIS on WhatsApp (agent_commercial/ops_engineer): needs a configured
         Evolution API instance and a site roster (ARVIS_PEOPLE). Absent either,
@@ -789,6 +815,8 @@ class OpsCopilot:
 
         roster = {**load_roster(), **people.technician_roster()}
         field_checks = FieldCheckService(self.database, transport, roster=roster)
+        field_checks.on_change = lambda check, status: self._publish(
+            "field_check_changed", {**check.to_dict(), "status": status})
         _fc._service = field_checks                          # the API's field-check routes use the same one
         store = ConversationStore(self.database)
         roles = getattr(self, "role_orchestrator", None) or RoleOrchestrator(self.state_engine, self.database)
@@ -978,6 +1006,12 @@ class OpsCopilot:
 
         # Wire the ingestion callback BEFORE polling so no first-cycle reads are lost.
         self._wire_adapter(self.bacnet_adapter)
+        # The BMS's own alarms (statusFlags inAlarm) become ARVIS alarms. Called from
+        # the polling task, i.e. inside the running loop.
+        self.bacnet_adapter.on_alarm(
+            lambda alarm: asyncio.get_running_loop().create_task(self.state_engine.add_alarm(alarm)))
+        self.bacnet_adapter.on_alarm_cleared(
+            lambda alarm_id: asyncio.get_running_loop().create_task(self.state_engine.resolve_alarm(alarm_id)))
 
         # Start polling — start_polling is async; the old call didn't await it,
         # so live polling never actually ran while _bms_connected read True.
@@ -1422,6 +1456,8 @@ class OpsCopilot:
             counts[f.outcome.value] = counts.get(f.outcome.value, 0) + 1
         new_faults = [f for f in findings if f.outcome is Outcome.FAIL
                       and previous.get((f.equipment_id, f.rule_id)) != "fail"]
+        cleared = [f for f in findings if f.outcome is Outcome.PASS
+                   and previous.get((f.equipment_id, f.rule_id)) == "fail"]
 
         # Diagnosis: open / update / suppress cases and rank causes (ZandrEA method).
         from agent_commercial.fdd.diagnosis import process_findings
@@ -1435,6 +1471,11 @@ class OpsCopilot:
                 "faults": [{**f.to_dict(), "case": case_by_key[(f.equipment_id, f.rule_id)].to_dict()
                             if (f.equipment_id, f.rule_id) in case_by_key else None}
                            for f in new_faults]}})
+
+        if cleared:
+            self._publish("fdd_fault_cleared", {"run_id": run_id, "cleared": [
+                {"equipment_id": f.equipment_id, "rule_id": f.rule_id, "title": f.title,
+                 "headline": f.headline()} for f in cleared]})
 
         # Closed loop: re-check every recorded repair with the rule that fired, and
         # let each verified / failed repair teach the diagnosis knowledge base.

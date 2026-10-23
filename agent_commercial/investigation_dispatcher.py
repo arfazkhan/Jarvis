@@ -3,13 +3,15 @@ Investigation Dispatcher
 ========================
 
 Converts anomaly events (from AnomalyWatchdog) and alarm callbacks into
-autonomous Queen swarm investigations. Broadcasts results to SSE "monitor"
-channel. Archives to episodic memory.
+autonomous Queen swarm investigations. Publishes each conclusion on the event bus
+("investigation_concluded" — the WhatsApp engineer decides who needs to know) and
+to the dashboard's SSE "monitor" channel. Archives to episodic memory.
 
 Subscribes to EventBus "anomaly_detected" events.
 Also accepts direct alarm callbacks for critical/high severity.
 
-Rate-limited: max 2 concurrent investigations, 5-min per-equipment cooldown.
+Rate-limited: max 2 concurrent investigations, 5-min per-equipment cooldown, and a
+daily cap (ARVIS_DISPATCH_MAX_PER_DAY) — each one is a full multi-agent LLM run.
 Same Queen.execute_swarm path as operator queries — identical verification.
 """
 
@@ -41,13 +43,19 @@ class InvestigationDispatcher:
         event_bus=None,
         max_concurrent: int = 2,
         cooldown_per_equipment: int = 300,
+        watchdog=None,
     ):
         self.queen = queen
         self.bms_state = bms_state
         self.sse = sse_broadcaster
         self.memory = memory_orchestrator
         self.event_bus = event_bus
+        self.watchdog = watchdog                 # repeat evidence for drift confirmation
         self._max_concurrent = max_concurrent
+        import os as _os
+        self._max_per_day = int(_os.getenv("ARVIS_DISPATCH_MAX_PER_DAY", "48"))
+        self._day = ""
+        self._today = 0
         self._cooldown = cooldown_per_equipment
         self._active = 0
         self._last_investigation: Dict[str, float] = {}
@@ -107,11 +115,17 @@ class InvestigationDispatcher:
                 logger.debug(f"[Dispatcher] drift-watch schedule failed: {e}")
             return None
 
-        if not self._should_dispatch(eq_id):
+        ok, why = self._dispatch_check(eq_id)
+        if not ok:
+            if why in ("busy", "daily_cap"):
+                # Not dropped: watch it, and investigate later if it is still happening.
+                try:
+                    await self.schedule_drift_confirmation(anomaly)
+                except Exception as e:
+                    logger.debug(f"[Dispatcher] deferral watch failed: {e}")
             return None
 
-        self._stats["total_dispatched"] += 1
-        self._last_investigation[eq_id] = time.time()
+        self._count_dispatch(eq_id)
         self._active += 1
 
         try:
@@ -120,7 +134,9 @@ class InvestigationDispatcher:
 
             result = await self._run_swarm(query, context)
             if result:
-                await self._broadcast_anomaly_result(anomaly, result)
+                await self._publish_result("anomaly", anomaly.equipment_id, result,
+                                           point_id=anomaly.point_id, severity=anomaly.severity,
+                                           z_score=anomaly.z_score, deviation_pct=anomaly.deviation_pct)
                 await self._archive(anomaly.equipment_id, result)
             return result
 
@@ -136,11 +152,10 @@ class InvestigationDispatcher:
         """Dispatch swarm investigation for a BMS alarm (bypasses watchdog)."""
         eq_id = getattr(alarm, "equipment_id", "unknown")
 
-        if not self._should_dispatch(eq_id):
+        if not self._dispatch_check(eq_id)[0]:
             return None
 
-        self._stats["total_dispatched"] += 1
-        self._last_investigation[eq_id] = time.time()
+        self._count_dispatch(eq_id)
         self._active += 1
 
         try:
@@ -149,7 +164,9 @@ class InvestigationDispatcher:
 
             result = await self._run_swarm(query, context)
             if result:
-                await self._broadcast_alarm_result(alarm, result)
+                sev = getattr(alarm, "severity", None)
+                await self._publish_result("alarm", eq_id, result, alarm_id=getattr(alarm, "alarm_id", ""),
+                                           severity=getattr(sev, "value", str(sev)) if sev else None)
                 await self._archive(eq_id, result)
             return result
 
@@ -197,35 +214,57 @@ class InvestigationDispatcher:
             est_seconds=hours * 3600.0, kind="post_maintenance")
 
     async def _watch_recheck(self, watch, changed: bool, due: bool):
-        """Re-investigate a watched signal on wake. Returns (resolved|wait, payload)."""
-        if not self.queen:
-            return ("resolved", {"note": "no queen — watch closed"})
-        why = "value moved" if changed else "observation window elapsed"
+        """A watch's window is up. Drift: confirmed only if the watchdog flagged the same
+        point again and again during the window — then (and only then) a full
+        investigation. Post-maintenance: re-investigate whether the fix held.
+        Returns ("resolved", payload)."""
+        import os as _os
+        if watch.kind == "drift_confirm":
+            repeats = self._repeats(watch)
+            need = int(_os.getenv("ARVIS_DRIFT_MIN_REPEATS", "3"))
+            if repeats < need:
+                self._publish("drift_watch_outcome", {"status": "cleared", "equipment_id": watch.equipment_id,
+                                                      "point_id": watch.point_id, "repeats": repeats,
+                                                      "reason": watch.reason})
+                return ("resolved", {"status": "cleared", "repeats": repeats})
+            self._publish("drift_watch_outcome", {"status": "confirmed", "equipment_id": watch.equipment_id,
+                                                  "point_id": watch.point_id, "repeats": repeats,
+                                                  "reason": watch.reason})
+            why = f"deviation repeated {repeats}x over the watch window"
+        else:
+            why = "observation window elapsed"
+        if not self._dispatch_check(watch.equipment_id, cooldown=False)[0]:
+            return ("resolved", {"status": "not_investigated", "why": "no capacity"})
+        self._count_dispatch(watch.equipment_id)
         query = (
             f"AUTONOMOUS WATCH RE-CHECK ({watch.kind}): {watch.reason}. "
             f"Trigger: {why}. Re-assess {watch.equipment_id}/{watch.point_id} against current "
-            f"telemetry — is the condition real and sustained (escalate), resolved (close), or "
-            f"still developing (keep watching)?")
+            f"telemetry — is the condition real and sustained, or resolved?")
         ctx = {"autonomous": True, "trigger": f"watch_{watch.kind}",
                "watch_equipment": watch.equipment_id, "watch_point": watch.point_id}
         ctx.update(await self._get_equipment_readings(watch.equipment_id))
-        result = await self._run_swarm(query, ctx)
+        self._active += 1
+        try:
+            result = await self._run_swarm(query, ctx)
+        finally:
+            self._active -= 1
         if result:
             await self._archive(watch.equipment_id, result)
-            if self.sse:
-                try:
-                    await self.sse.broadcast(event_type="autonomous_advisory",
-                        payload={"trigger": f"watch_{watch.kind}", "equipment_id": watch.equipment_id,
-                                 "point_id": watch.point_id, "advisory": result.get("advice", "")},
-                        channel="monitor")
-                except Exception:
-                    pass
-        # One re-check per watch by default — the swarm's advisory is the outcome.
-        return ("resolved", {"woke_on": why, "advice": (result or {}).get("advice", "")[:200]})
+            await self._publish_result(f"watch_{watch.kind}", watch.equipment_id, result, point_id=watch.point_id)
+        return ("resolved", {"status": "investigated", "woke_on": why,
+                             "advice": (result or {}).get("advice", "")[:200]})
+
+    def _repeats(self, watch) -> int:
+        """How many times the watchdog flagged this point since the watch began."""
+        if self.watchdog is None or not hasattr(self.watchdog, "get_recent_anomalies"):
+            return 0
+        minutes = max(1, int((time.time() - watch.created_at.timestamp()) / 60) + 1)
+        return sum(1 for a in self.watchdog.get_recent_anomalies(minutes)
+                   if a.point_id == watch.point_id and a.timestamp >= watch.created_at)
 
     def start_watch_loop(self):
-        """Start the background sleep/wake loop (call once at boot)."""
-        if self._watch_task is not None:
+        """Start the background watch service (call from inside the running loop)."""
+        if self._watch_task is not None and not self._watch_task.done():
             return
         try:
             self._watch_task = asyncio.ensure_future(
@@ -268,21 +307,37 @@ class InvestigationDispatcher:
     # INTERNAL HELPERS
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _should_dispatch(self, eq_id: str) -> bool:
+    def _dispatch_check(self, eq_id: str, cooldown: bool = True):
+        """(ok, reason). Reasons: cooldown | busy | daily_cap | no_queen."""
         now = time.time()
-        last = self._last_investigation.get(eq_id, 0)
-        if (now - last) < self._cooldown:
+        if cooldown and (now - self._last_investigation.get(eq_id, 0)) < self._cooldown:
             self._stats["suppressed_cooldown"] += 1
             logger.debug(f"[Dispatcher] Cooldown active for {eq_id}, skipping")
-            return False
+            return False, "cooldown"
         if self._active >= self._max_concurrent:
             self._stats["suppressed_concurrency"] += 1
-            logger.debug(f"[Dispatcher] Max concurrent ({self._max_concurrent}) reached, skipping")
-            return False
+            logger.debug(f"[Dispatcher] Max concurrent ({self._max_concurrent}) reached, deferring")
+            return False, "busy"
+        today = time.strftime("%Y-%m-%d")
+        if today != self._day:
+            self._day, self._today = today, 0
+        if self._today >= self._max_per_day:
+            self._stats.setdefault("suppressed_daily_cap", 0)
+            self._stats["suppressed_daily_cap"] += 1
+            logger.warning(f"[Dispatcher] daily investigation cap ({self._max_per_day}) reached")
+            return False, "daily_cap"
         if not self.queen:
             logger.warning("[Dispatcher] Queen not available, skipping investigation")
-            return False
-        return True
+            return False, "no_queen"
+        return True, ""
+
+    def _should_dispatch(self, eq_id: str) -> bool:
+        return self._dispatch_check(eq_id)[0]
+
+    def _count_dispatch(self, eq_id: str) -> None:
+        self._stats["total_dispatched"] += 1
+        self._last_investigation[eq_id] = time.time()
+        self._today += 1
 
     def _build_anomaly_query(self, anomaly: AnomalyEvent) -> str:
         return (
@@ -357,44 +412,35 @@ class InvestigationDispatcher:
             logger.error(f"[Dispatcher] Swarm execution failed: {e}")
             return None
 
-    async def _broadcast_anomaly_result(self, anomaly: AnomalyEvent, result: Dict) -> None:
-        if not self.sse:
+    def _publish(self, event_type: str, payload: Dict) -> None:
+        if self.event_bus is None:
             return
         try:
-            await self.sse.broadcast(
-                event_type="autonomous_advisory",
-                payload={
-                    "trigger": "anomaly",
-                    "point_id": anomaly.point_id,
-                    "equipment_id": anomaly.equipment_id,
-                    "deviation_pct": anomaly.deviation_pct,
-                    "z_score": anomaly.z_score,
-                    "severity": anomaly.severity,
-                    "advisory": result.get("advice", ""),
-                    "timestamp": anomaly.timestamp.isoformat(),
-                },
-                channel="monitor",
-            )
+            self.event_bus.publish({"type": event_type, "payload": payload})
         except Exception as e:
-            logger.error(f"[Dispatcher] SSE broadcast failed: {e}")
+            logger.error(f"[Dispatcher] publish {event_type} failed: {e}")
 
-    async def _broadcast_alarm_result(self, alarm, result: Dict) -> None:
-        if not self.sse:
-            return
-        try:
-            await self.sse.broadcast(
-                event_type="autonomous_advisory",
-                payload={
-                    "trigger": "alarm",
-                    "alarm_id": getattr(alarm, "alarm_id", ""),
-                    "equipment_id": getattr(alarm, "equipment_id", ""),
-                    "advisory": result.get("advice", ""),
-                    "timestamp": str(getattr(alarm, "timestamp", "")),
-                },
-                channel="monitor",
-            )
-        except Exception as e:
-            logger.error(f"[Dispatcher] SSE broadcast (alarm) failed: {e}")
+    async def _publish_result(self, trigger: str, equipment_id: str, result: Dict, **extra) -> None:
+        """The conclusion of an autonomous investigation, to whoever needs it: the event
+        bus (WhatsApp engineer) and the dashboard's monitor stream. (The SSE call used to
+        pass payload= to a method that takes data=, and the broadcaster was never set,
+        so these conclusions reached nobody.)"""
+        ctx = result.get("context") or {}
+        payload = {
+            "trigger": trigger, "equipment_id": equipment_id,
+            "advice": result.get("advice", ""),
+            "confidence": result.get("confidence"), "abstained": bool(result.get("abstained")),
+            "plan_id": getattr(result.get("plan"), "id", None),
+            "terminal_advisories": ctx.get("_terminal_advisories_fired") or [],
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            **{k: v for k, v in extra.items() if v is not None},
+        }
+        self._publish("investigation_concluded", payload)
+        if self.sse:
+            try:
+                await self.sse.broadcast("autonomous_advisory", payload, channel="monitor")
+            except Exception as e:
+                logger.error(f"[Dispatcher] SSE broadcast failed: {e}")
 
     async def _archive(self, equipment_id: str, result: Dict) -> None:
         """Archive investigation result to episodic memory."""

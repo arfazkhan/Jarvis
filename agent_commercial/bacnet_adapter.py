@@ -125,6 +125,7 @@ class BACnetPoint:
     point_type: PointType = PointType.SENSOR
     poll_interval_seconds: Optional[int] = None    # None → adapter interval
     last_polled: Optional[datetime] = None
+    alarm_severity: str = "medium"                 # severity of this point's BMS alarm (site config)
 
     @property
     def bacnet_address(self) -> str:
@@ -171,6 +172,14 @@ class BACnetAdapter:
         self._poll_interval = 30
         self._on_point_update: List[Callable[[BMSDataPoint], None]] = []
         self._on_alarm: List[Callable[[Alarm], None]] = []
+        self._on_alarm_cleared: List[Callable[[str], None]] = []
+        # inAlarm edge detection: point_id → consecutive reads with the bit set / clear,
+        # and the alarm currently open for the point.
+        self._alarm_set_reads: Dict[str, int] = {}
+        self._alarm_clear_reads: Dict[str, int] = {}
+        self._open_alarm: Dict[str, str] = {}
+        import os as _os
+        self._alarm_confirm_reads = max(1, int(_os.getenv("ARVIS_BACNET_ALARM_CONFIRM_READS", "2")))
 
         self.stats = {
             "reads_total": 0,
@@ -355,6 +364,8 @@ class BACnetAdapter:
             return None
         if quality is None:
             quality = quality_from_status_flags(flags) if self.check_status_flags else PointQuality.GOOD
+        if self.check_status_flags:
+            self._track_in_alarm(cfg, flags, float_val)
         self._last_value[cfg.point_id] = float_val
         self._freshness.mark_ok(cfg.point_id)
         return BMSDataPoint(
@@ -480,6 +491,7 @@ class BACnetAdapter:
                     unit=point_cfg.get("unit", ""),
                     poll_interval_seconds=(int(point_cfg["poll_interval"])
                                            if point_cfg.get("poll_interval") else None),
+                    alarm_severity=str(point_cfg.get("alarm_severity", "medium")),
                 )
                 self.add_point(point)
                 count += 1
@@ -533,6 +545,53 @@ class BACnetAdapter:
 
     def on_alarm(self, callback: Callable[[Alarm], None]) -> None:
         self._on_alarm.append(callback)
+
+    def on_alarm_cleared(self, callback: Callable[[str], None]) -> None:
+        """callback(alarm_id) when a point's inAlarm flag clears."""
+        self._on_alarm_cleared.append(callback)
+
+    def _track_in_alarm(self, cfg: BACnetPoint, flags: Any, value: float) -> None:
+        """The BMS's own alarm state, from the inAlarm bit of statusFlags (already read
+        with every value — no extra traffic, still read-only). An alarm opens after the
+        bit is set on `ARVIS_BACNET_ALARM_CONFIRM_READS` consecutive reads and clears the
+        same way, so a flickering bit does not flood anyone."""
+        try:
+            in_alarm = bool(int(list(flags)[0]))
+        except (TypeError, ValueError, IndexError):
+            return                                    # flags unavailable: no claim either way
+        pid = cfg.point_id
+        if in_alarm:
+            self._alarm_clear_reads[pid] = 0
+            self._alarm_set_reads[pid] = self._alarm_set_reads.get(pid, 0) + 1
+            if pid in self._open_alarm or self._alarm_set_reads[pid] < self._alarm_confirm_reads:
+                return
+            try:
+                severity = AlarmSeverity(str(cfg.alarm_severity).lower())
+            except ValueError:
+                severity = AlarmSeverity.MEDIUM
+            alarm = Alarm(
+                alarm_id=f"bacnet:{pid}:{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}",
+                source_point_id=pid, equipment_id=cfg.equipment_id, severity=severity,
+                message=f"BMS reports {cfg.point_name or pid} in alarm ({value:g} {cfg.unit})".strip())
+            self._open_alarm[pid] = alarm.alarm_id
+            for cb in self._on_alarm:
+                try:
+                    cb(alarm)
+                except Exception as e:
+                    logger.error(f"BACnet alarm callback error: {e}")
+        else:
+            self._alarm_set_reads[pid] = 0
+            if pid not in self._open_alarm:
+                return
+            self._alarm_clear_reads[pid] = self._alarm_clear_reads.get(pid, 0) + 1
+            if self._alarm_clear_reads[pid] < self._alarm_confirm_reads:
+                return
+            alarm_id = self._open_alarm.pop(pid)
+            for cb in self._on_alarm_cleared:
+                try:
+                    cb(alarm_id)
+                except Exception as e:
+                    logger.error(f"BACnet alarm-cleared callback error: {e}")
 
     def get_stats(self) -> Dict[str, Any]:
         return {

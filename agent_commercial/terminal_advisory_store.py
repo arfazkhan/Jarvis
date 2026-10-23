@@ -144,6 +144,9 @@ class TerminalAdvisoryStore:
                 db_path = str(Path(__file__).parent / "data" / "arvis_bms.db")
         self.db_path = db_path
         self._conn: Optional[aiosqlite.Connection] = None
+        # Called with the advisory (dict) when a NEW advisory fires — not on a dedupe
+        # bump. main.py publishes it on the event bus as "terminal_advisory_fired".
+        self.on_fired = None
 
     async def _get_conn(self) -> aiosqlite.Connection:
         if self._conn is not None:
@@ -297,6 +300,15 @@ class TerminalAdvisoryStore:
                 f"[TerminalAdvisory] FIRED {advisory_id} eq={equipment_id} "
                 f"type={advisory_type} severity={severity} conf={confidence:.2f}"
             )
+            if self.on_fired is not None:
+                try:
+                    self.on_fired({"advisory_id": advisory_id, "building_id": building_id,
+                                   "equipment_id": equipment_id, "advisory_type": advisory_type,
+                                   "severity": severity, "title": title, "message": message,
+                                   "evidence_ids": list(evidence_ids or []), "confidence": confidence,
+                                   "source_plan_id": source_plan_id})
+                except Exception as e:
+                    logger.error(f"[TerminalAdvisory] on_fired hook failed: {e}")
             return advisory_id
         except Exception as e:
             logger.error(f"[TerminalAdvisory] fire failed: {e}")
