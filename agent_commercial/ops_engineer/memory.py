@@ -35,8 +35,11 @@ class Turn:
 
 
 class ConversationStore:
-    def __init__(self, database: Any):
+    def __init__(self, database: Any, clock=None):
         self.database = database
+        # One notion of "now" for everything that reads these timestamps (gate, situation).
+        # Naive local wall-clock by default; injectable so behaviour over time can be replayed.
+        self.clock = clock or datetime.now
 
     async def _conn(self):
         conn = await self.database._get_async_connection()
@@ -44,9 +47,8 @@ class ConversationStore:
             await conn.execute(stmt)
         return conn
 
-    @staticmethod
-    def _now() -> str:
-        return datetime.now().isoformat(timespec="seconds")
+    def _now(self) -> str:
+        return self.clock().isoformat(timespec="seconds")
 
     async def append(self, number: str, speaker: str, text: str, kind: str = "chat",
                      meta: Optional[Dict[str, Any]] = None) -> None:
@@ -58,7 +60,7 @@ class ConversationStore:
     async def recent(self, number: str, limit: int = 12, max_age_h: float = 72.0) -> List[Turn]:
         """The last turns of this person's thread, oldest first. Old turns age out:
         a conversation from last week is not context for this morning."""
-        cutoff = (datetime.now() - timedelta(hours=max_age_h)).isoformat(timespec="seconds")
+        cutoff = (self.clock() - timedelta(hours=max_age_h)).isoformat(timespec="seconds")
         conn = await self._conn()
         async with conn.execute(
                 "SELECT speaker, text, kind, created_at FROM ops_turns WHERE number = ? AND created_at >= ? "
@@ -91,14 +93,14 @@ class ConversationStore:
         await conn.commit()
 
     async def notices_since(self, number: str, hours: float) -> List[Dict[str, str]]:
-        cutoff = (datetime.now() - timedelta(hours=hours)).isoformat(timespec="seconds")
+        cutoff = (self.clock() - timedelta(hours=hours)).isoformat(timespec="seconds")
         conn = await self._conn()
         async with conn.execute("SELECT topic, sent_at, summary FROM ops_notices WHERE number = ? AND sent_at >= ? "
                                 "ORDER BY sent_at", (number, cutoff)) as cur:
             return [{"topic": r[0], "sent_at": r[1], "summary": r[2]} for r in await cur.fetchall()]
 
     async def proactive_count(self, number: str, hours: float = 1.0) -> int:
-        cutoff = (datetime.now() - timedelta(hours=hours)).isoformat(timespec="seconds")
+        cutoff = (self.clock() - timedelta(hours=hours)).isoformat(timespec="seconds")
         conn = await self._conn()
         async with conn.execute("SELECT COUNT(*) FROM ops_turns WHERE number = ? AND speaker = 'arvis' "
                                 "AND kind = 'proactive' AND created_at >= ?", (number, cutoff)) as cur:

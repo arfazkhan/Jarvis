@@ -71,6 +71,14 @@ _TOOLS = [
                                                      "minutes_ago": {"type": "integer"},
                                                      "at": {"type": "string", "description": "HH:MM local"}},
                     "required": ["equipment_id"]}},
+    {"name": "acknowledge",
+     "description": "The person says they (or someone) are on an alert you sent — record it so you stop "
+                    "chasing and escalating. Optionally name the equipment it was about.",
+     "parameters": {"type": "object", "properties": {"subject": {"type": "string"}}}},
+    {"name": "explain",
+     "description": "Why you did or did not message about something (e.g. 'why didn't you tell me about "
+                    "AHU-07?'): your recorded decisions and their reasons.",
+     "parameters": {"type": "object", "properties": {"subject": {"type": "string"}}, "required": ["subject"]}},
     {"name": "open_cases",
      "description": "Open diagnosis cases: ranked likely causes and the question that would settle them.",
      "parameters": {"type": "object", "properties": {"equipment_id": {"type": "string"}}}},
@@ -213,6 +221,8 @@ class OpsEngineer:
         self.building_name = building_name or os.getenv("ARVIS_BUILDING_NAME", "the building")
         self.max_rounds = max_rounds
         self._tasks: Set[asyncio.Task] = set()
+        self.gate = None          # AttentionGate (alerts, held items, decision log), when proactive messaging is on
+        self.calendar = None      # BuildingCalendar
 
     # ── context ───────────────────────────────────────────────────────────
     @staticmethod
@@ -224,7 +234,19 @@ class OpsEngineer:
             return datetime.now().astimezone()          # always timezone-aware
 
     async def _facts(self, person: Person, focus_text: str) -> str:
-        lines = [f"Local time: {self._local_now():%A %d %B %Y, %H:%M}"]
+        lines = [f"Local time: {self.calendar.describe() if self.calendar else f'{self._local_now():%A %d %B %Y, %H:%M}'}"]
+        if self.gate is not None:
+            try:
+                alerts = await self.gate.ledger.open_alerts(person.number)
+                if alerts:
+                    lines.append("Alerts you sent them that nobody has acknowledged yet: " +
+                                 "; ".join(a["title"] for a in alerts[:5]))
+                held = await self.gate.ledger.pending_for(person.number)
+                if held:
+                    lines.append(f"Held for them (next brief / later today): " +
+                                 "; ".join(f"{i.title} [{i.level}]" for i in held[:6]))
+            except Exception as e:
+                logger.warning(f"[Ops] attention context unavailable: {e}")
         if self.roles is not None:
             try:
                 dossier = await self.roles.before_investigation(focus_text, {}, None)
@@ -259,6 +281,8 @@ class OpsEngineer:
             "- ARVIS is read-only: you cannot change setpoints or operate equipment. If asked, say who should and what to check.\n"
             "- For a 'why' that needs cross-system reasoning, call deep_investigation and tell them you're on it.\n"
             "- To settle a diagnosis from site, use ask_technician. When someone reports a repair done, use record_repair.\n"
+            "- If they say they're on an alert you sent ('on it', 'handling it'), call acknowledge. If they ask why "
+            "you did or didn't tell them about something, call explain and give the real reasons.\n"
             "- 'Did the reset/fix/change help?': find out when it happened (ask if they didn't say), then use "
             "change_since on the affected points (with the setpoint as target when you know it) and alarm_changes "
             "on the equipment. Report what actually happened, with the times and minutes the tools give you.\n"
@@ -461,6 +485,31 @@ class OpsEngineer:
                 new.append({**item, "raised_at": _hhmm(trig, tz)})
         return {"equipment_id": equipment_id, "action_at": _hhmm(since, tz), "cleared_since": cleared,
                 "still_active": active, "raised_since": new}
+
+    async def _tool_acknowledge(self, person: Person, subject: str = "") -> Any:
+        if self.gate is None:
+            return {"error": "no alerts are tracked on this site"}
+        alerts = await self.gate.ledger.open_alerts(person.number)
+        if subject:
+            alerts = [a for a in alerts if subject.lower().replace(" ", "") in
+                      (a["title"] + a["topic"]).lower().replace(" ", "")] or alerts
+        if not alerts:
+            return {"acknowledged": [], "note": "no open alerts awaiting their acknowledgement"}
+        done = []
+        for a in alerts[:1] if subject else alerts:
+            await self.gate.acknowledge(a["topic"], person)
+            done.append(a["title"])
+        return {"acknowledged": done}
+
+    async def _tool_explain(self, person: Person, subject: str) -> Any:
+        if self.gate is None:
+            return {"error": "no decision log on this site"}
+        rows = await self.gate.ledger.decisions_about(subject.strip(), person.number)
+        if not rows:
+            return {"subject": subject, "decisions": [], "note": "nothing about it reached me for you"}
+        return {"subject": subject, "decisions": [
+            {"when": r["decided_at"], "what": r["topic"], "decision": r["level"],
+             "why": [f"{x['code']}: {x['detail']}" for x in r["reasons"]]} for r in rows]}
 
     async def _tool_open_cases(self, person: Person, equipment_id: str = "") -> Any:
         from agent_commercial.fdd.diagnosis import list_cases

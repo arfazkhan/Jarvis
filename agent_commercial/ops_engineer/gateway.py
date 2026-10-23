@@ -37,6 +37,7 @@ class OpsGateway:
         self.store = store
         self.engineer = engineer
         self.field_checks = field_checks
+        self.gate = None                       # AttentionGate, when proactive messaging is on
         self._locks: Dict[str, asyncio.Lock] = {}
         self._ignored: set = set()
         self._tasks: set = set()
@@ -95,6 +96,10 @@ class OpsGateway:
                 await self.send(person, reply)
                 return reply
 
+            reply = await self._acknowledgement(person, text, reply_to)
+            if reply is not None:
+                return reply
+
             if await self._is_check_answer(person, text, reply_to):
                 await self.store.append(person.number, "person", text, kind="check")
                 reply = await self.field_checks.on_message(person.number, text, reply_to=reply_to)
@@ -106,6 +111,25 @@ class OpsGateway:
             reply = await self.engineer.respond(person, text)
             await self.send(person, reply)
             return reply
+
+    async def _acknowledgement(self, person: Person, text: str, reply_to: Optional[str]) -> Optional[str]:
+        """'on it' / 'seen' / 'تمام' to an alert awaiting acknowledgement: deterministic,
+        so it works with the language model down. Stops the escalation ladder and
+        acknowledges the underlying BMS alarm or advisory too."""
+        if self.gate is None:
+            return None
+        from agent_commercial.ops_engineer.attention import parse_ack
+        if not parse_ack(text):
+            return None
+        alerts = await self.gate.ledger.open_alerts(person.number)
+        if not alerts:
+            return None
+        target = next((a for a in alerts if reply_to and a["message_id"] == reply_to), alerts[0])
+        await self.store.append(person.number, "person", text, kind="ack")
+        await self.gate.acknowledge(target["topic"], person, note=text)
+        reply = f"Thanks {person.first_name} — noted, I'll stop chasing: {target['title']}."
+        await self.send(person, reply, kind="ack")
+        return reply
 
     async def _is_check_answer(self, person: Person, text: str, reply_to: Optional[str]) -> bool:
         if self.field_checks is None or person.role != "technician":

@@ -25,7 +25,6 @@ from agent_commercial.ops_engineer.engineer import OpsEngineer, ungrounded_numbe
 from agent_commercial.ops_engineer.gateway import OpsGateway
 from agent_commercial.ops_engineer.memory import ConversationStore
 from agent_commercial.ops_engineer.people import People
-from agent_commercial.ops_engineer.proactive import ProactiveEngineer
 from agent_commercial.role_agents import RoleOrchestrator
 from agent_unified.schema import Function, Message, ToolCall
 
@@ -266,80 +265,7 @@ async def test_deep_investigation_reports_back_when_done(site):
     assert "82% likely" in site.phone.to(SARA)[1]                                   # grounded in the result
 
 
-# ── speaking up ──────────────────────────────────────────────────────────────
-def _proactive(site, llm, hour=10):
-    eng, gw = site.build(llm)
-    eng._local_now = lambda: datetime(2026, 10, 25, hour, 0)                        # a Sunday
-    return ProactiveEngineer(people=site.people, store=site.store, gateway=gw, engineer=eng, roles=site.roles)
-
-
-def _fault_event(cost):
-    return {"faults": [dict(_f("AHU-07", "FC13", cost=cost).to_dict(), case={"diagnosis": {
-        "posterior": [{"label": "CHW valve not opening", "p": 0.61}],
-        "next_question": {"question": "Is the CHW valve actuator moving when commanded?"}}})]}
-
-
-@pytest.mark.asyncio
-async def test_new_fault_is_told_to_the_fm_and_owner_once(site):
-    pro = _proactive(site, ScriptedLLM(
-        say("Heads-up Sara: AHU-07 can't hold supply air at full cooling — about QAR 1,200 avoidable, "
-            "most likely the CHW valve not opening (61%). Want me to ask Ali to check the actuator?"),
-        say("Omar — a costly issue on AHU-07 (about QAR 1,200 avoidable). The team has it.")))
-    assert await pro.on_faults(_fault_event(1200.0)) == 2
-    assert "Want me to ask Ali" in site.phone.to(SARA)[0] and site.phone.to(OMAR)
-    assert await pro.on_faults(_fault_event(1200.0)) == 0                          # same fault: silence
-    assert len(site.phone.sent) == 2
-
-
-@pytest.mark.asyncio
-async def test_small_faults_skip_the_owner_and_quiet_hours_hold_them(site):
-    pro = _proactive(site, ScriptedLLM(say("Sara, small one on AHU-07: about QAR 50 avoidable.")))
-    assert await pro.on_faults(_fault_event(50.0)) == 1 and site.phone.to(OMAR) == []
-
-    night = _proactive(site, ScriptedLLM(), hour=23)
-    await site.store.forget_topic("fault:AHU-07:FC13")
-    assert await night.on_faults(_fault_event(50.0)) == 0                           # waits for the morning
-
-
-@pytest.mark.asyncio
-async def test_composed_message_with_made_up_figures_falls_back_to_facts(site):
-    pro = _proactive(site, ScriptedLLM(say("AHU-07 is wasting QAR 75,000 a year!")))
-    await pro.on_faults(_fault_event(50.0))
-    msg = site.phone.to(SARA)[0]
-    assert "75,000" not in msg and "Newly confirmed fault" in msg
-
-
-@pytest.mark.asyncio
-async def test_hourly_cap(site, monkeypatch):
-    monkeypatch.setenv("ARVIS_OPS_MAX_PER_HOUR", "1")
-    pro = _proactive(site, ScriptedLLM(say("one"), say("two")))
-    ev2 = {"faults": [dict(_f("FAHU-1", "FC14", cost=10.0).to_dict(), case={})]}
-    assert await pro.on_faults(_fault_event(10.0)) == 1
-    assert await pro.on_faults(ev2) == 0
-
-
-@pytest.mark.asyncio
-async def test_repair_outcome_and_recurrence_is_news_again(site):
-    pro = _proactive(site, ScriptedLLM(say("AHU-07 fault, QAR 50."),
-                                       say("Sara, the AHU-07 repair worked — no fault in the re-check."),
-                                       say("Ali, the AHU-07 repair worked — nice job freeing that valve."),
-                                       say("AHU-07 fault is back, QAR 50.")))
-    await pro.on_faults(_fault_event(50.0))
-    assert await pro.on_fixes({"verifications": [{"id": 3, "equipment_id": "AHU-07", "rule_id": "FC13",
-                                                  "status": "verified", "reason": "no fault in 24 h",
-                                                  "note": "reported on WhatsApp by Ali: valve freed"}]}) == 2
-    assert "repair worked" in site.phone.to(ALI)[0]                                 # the technician hears too
-    assert await pro.on_faults(_fault_event(50.0)) == 1                             # it came back → tell again
-
-
-@pytest.mark.asyncio
-async def test_morning_brief_once_a_day_owner_on_sunday(site):
-    await save_findings(site.db, [_f("AHU-07", "FC13", cost=1200.0)])
-    pro = _proactive(site, ScriptedLLM(say("Morning Sara — one thing first today: AHU-07."),
-                                       say("Weekly: AHU-07 is the one costly issue; the team is on it.")))
-    assert await pro.morning_brief() == 2
-    assert await pro.morning_brief() == 0
-    assert "AHU-07" in site.phone.to(SARA)[0] and site.phone.to(OMAR)
+# (Speaking up unprompted — the attention gate — is tested in tests/test_attention_gate.py.)
 
 
 # ── transport ────────────────────────────────────────────────────────────────

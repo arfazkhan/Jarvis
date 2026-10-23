@@ -809,8 +809,12 @@ class OpsCopilot:
         from agent_commercial.ops_engineer import set_gateway
         from agent_commercial.ops_engineer.engineer import OpsEngineer
         from agent_commercial.ops_engineer.gateway import OpsGateway
+        from agent_commercial.ops_engineer.attention import AttentionGate
+        from agent_commercial.ops_engineer.calendar import BuildingCalendar
+        from agent_commercial.ops_engineer.ledger import SignalLedger
         from agent_commercial.ops_engineer.memory import ConversationStore
         from agent_commercial.ops_engineer.proactive import ProactiveEngineer
+        from agent_commercial.ops_engineer.situation import Situation
         from agent_commercial.role_agents import RoleOrchestrator
 
         roster = {**load_roster(), **people.technician_roster()}
@@ -835,9 +839,19 @@ class OpsCopilot:
         gateway = OpsGateway(transport=transport, people=people, store=store, engineer=engineer,
                              field_checks=field_checks)
         engineer.notify = lambda person, text, kind: gateway.send(person, text, kind=kind)
-        proactive = ProactiveEngineer(people=people, store=store, gateway=gateway, engineer=engineer, roles=roles)
+        calendar = BuildingCalendar()
+        gate = AttentionGate(people=people, store=store, ledger=SignalLedger(self.database), calendar=calendar,
+                             situation=Situation(self.database, field_checks), engineer=engineer, gateway=gateway,
+                             state_engine=self.state_engine,
+                             advisories=getattr(self, "terminal_advisory_store", None))
+        gateway.gate = gate
+        engineer.gate = gate
+        engineer.calendar = calendar
+        proactive = ProactiveEngineer(people=people, store=store, gateway=gateway, engineer=engineer,
+                                      gate=gate, calendar=calendar, roles=roles)
         if self._event_bus is not None:
             proactive.attach(self._event_bus)
+        self.ops_gate = gate
         self._tasks.append(asyncio.create_task(proactive.run()))
         set_gateway(gateway)
         self.ops_gateway = gateway
