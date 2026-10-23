@@ -39,6 +39,29 @@ class OpsGateway:
         self.field_checks = field_checks
         self._locks: Dict[str, asyncio.Lock] = {}
         self._ignored: set = set()
+        self._tasks: set = set()
+
+    def spawn_inbound(self, sender: str, text: str, message_id: Optional[str] = None,
+                      reply_to: Optional[str] = None) -> asyncio.Task:
+        """Handle a message in the background (the webhook must answer fast). Order per
+        person is kept by the per-person lock inside on_inbound."""
+        task = asyncio.get_running_loop().create_task(
+            self._safe_inbound(sender, text, message_id=message_id, reply_to=reply_to))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return task
+
+    async def _safe_inbound(self, sender: str, text: str, **kw) -> Optional[str]:
+        try:
+            return await self.on_inbound(sender, text, **kw)
+        except Exception as e:
+            # Never leave someone talking to silence: say so, and log it loudly.
+            logger.error(f"[Ops] handling a message from {sender} failed: {type(e).__name__}: {e}", exc_info=True)
+            person = self.people.get(sender)
+            if person is not None:
+                await self.send(person, "Something went wrong on my side handling that — it's logged. "
+                                        "Could you send it again in a minute?")
+            return None
 
     async def send(self, person: Person, text: str, kind: str = "chat") -> Optional[str]:
         """Send to one person, paced, and remember it. Returns the message id (None if it failed)."""

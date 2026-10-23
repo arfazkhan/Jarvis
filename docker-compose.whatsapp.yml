@@ -1,0 +1,60 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# ARVIS — WhatsApp gateway for the site box (Evolution API, self-hosted)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Used together with the site file:
+#   docker compose -f docker-compose.site.yml -f docker-compose.whatsapp.yml up -d
+# Kept separate so sites without WhatsApp never need these settings — and so the
+# required ones below fail closed here (Evolution would otherwise fall back to a
+# public default API key). Settings: see the header of docker-compose.site.yml.
+# Evolution API is Apache-2.0 with a notice requirement; ARVIS serves the notice at
+# GET /api/v1/field-checks/channel.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+services:
+  # ── WhatsApp gateway (Evolution API, self-hosted) — profile "whatsapp" ──────────
+  # Host networking like the rest: the firewall (deploy/site/firewall.sh) accepts no
+  # inbound traffic except loopback and the proxy, so port 8080 and Postgres are
+  # reachable from this box only. Evolution calls ARVIS's webhook on 127.0.0.1:8000.
+  # Evolution needs outbound HTTPS to WhatsApp on the management interface.
+  evolution:
+    image: ${EVOLUTION_IMAGE:?set EVOLUTION_IMAGE to a pinned evoapicloud/evolution-api version}
+    container_name: arvis-evolution
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - SERVER_TYPE=http
+      - SERVER_PORT=8080
+      - SERVER_URL=http://127.0.0.1:8080
+      - AUTHENTICATION_API_KEY=${EVOLUTION_API_KEY:?set EVOLUTION_API_KEY (Evolution falls back to a public default otherwise)}
+      - DATABASE_PROVIDER=postgresql
+      - DATABASE_CONNECTION_URI=postgresql://evolution:${EVOLUTION_DB_PASSWORD:?set EVOLUTION_DB_PASSWORD}@127.0.0.1:5432/evolution?schema=evolution_api
+      - DATABASE_CONNECTION_CLIENT_NAME=arvis
+      - CACHE_REDIS_ENABLED=false
+      - CACHE_LOCAL_ENABLED=true
+      - DEL_INSTANCE=false
+      - CONFIG_SESSION_PHONE_CLIENT=ARVIS
+      - LOG_LEVEL=ERROR,WARN,INFO
+      - LOG_BAILEYS=error
+    volumes:
+      - evolution-instances:/evolution/instances
+    depends_on:
+      - evolution-db
+
+  evolution-db:
+    image: postgres:15-alpine
+    container_name: arvis-evolution-db
+    restart: unless-stopped
+    network_mode: host
+    command: ["postgres", "-c", "listen_addresses=127.0.0.1"]
+    environment:
+      - POSTGRES_DB=evolution
+      - POSTGRES_USER=evolution
+      - POSTGRES_PASSWORD=${EVOLUTION_DB_PASSWORD:?set EVOLUTION_DB_PASSWORD}
+    volumes:
+      - evolution-db:/var/lib/postgresql/data
+
+volumes:
+  evolution-instances:
+    driver: local
+  evolution-db:
+    driver: local

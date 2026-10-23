@@ -244,6 +244,8 @@ def create_api(
     # anonymously. In production every request must carry a valid signed JWT
     # (issued by /api/v1/auth/token), except health/docs/login. Dev + demo are
     # unaffected so existing flows keep working.
+    _SELF_AUTHENTICATED = {("POST", "/api/v1/evolution/webhook")}
+
     @app.middleware("http")
     async def _require_auth_in_production(request, call_next):
         import os as _os
@@ -252,6 +254,10 @@ def create_api(
             exempt = (
                 p in ("/", "/health", "/api/docs", "/api/redoc", "/openapi.json")
                 or p.startswith("/api/v1/auth")
+                # Routes that authenticate themselves with their own secret: the Evolution
+                # API webhook carries x-arvis-webhook-token, not a user JWT (checked in the route,
+                # which fails closed when the token is unset). Exact method + path only.
+                or (request.method, p) in _SELF_AUTHENTICATED
             )
             if not exempt:
                 ok = False
@@ -567,7 +573,9 @@ def create_api(
             await svc.on_delivery_failure(f.message_id, f.error)
         for m in messages:
             if gateway is not None:
-                await gateway.on_inbound(m.sender, m.text, message_id=m.message_id, reply_to=m.reply_to)
+                # A conversational turn can take tens of seconds (reasoning, tools); answer
+                # Evolution now and handle the message in the background, in order per person.
+                gateway.spawn_inbound(m.sender, m.text, message_id=m.message_id, reply_to=m.reply_to)
             else:
                 await svc.on_message(m.sender, m.text, reply_to=m.reply_to, message_id=m.message_id)
         return {"received": len(messages), "failures": len(failures)}
@@ -679,19 +687,18 @@ def create_api(
     @app.post("/api/v1/alarms/{alarm_id}/acknowledge")
     async def acknowledge_alarm(
         alarm_id: str,
+        note: Optional[str] = None,
         current_user: User = Depends(require_role(["operator", "admin"]))
     ):
-        """Acknowledge an active alarm (Requires Operator/Admin)"""
-        alarm_eng = app.state.alarm_engine
-        
-        if not alarm_eng:
-            raise HTTPException(503, "Alarm engine not initialized")
-            
-        success = alarm_eng.acknowledge_alarm(alarm_id)
-        if not success:
-            raise HTTPException(404, f"Alarm {alarm_id} not found or already acknowledged")
-            
-        return {"status": "acknowledged", "alarm_id": alarm_id}
+        """Acknowledge an active alarm (Requires Operator/Admin). The state engine owns
+        alarm state (the AlarmEngine holds the same Alarm objects), records who
+        acknowledged it and persists the change."""
+        state = app.state.bms_state
+        if not state:
+            raise HTTPException(503, "BMS state engine not initialized")
+        if not await state.acknowledge_alarm(alarm_id, by=current_user.username, note=note):
+            raise HTTPException(404, f"Alarm {alarm_id} not found")
+        return {"status": "acknowledged", "alarm_id": alarm_id, "by": current_user.username}
 
     @app.get("/api/v1/alarms/clusters")
     async def get_alarm_clusters():

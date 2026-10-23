@@ -29,6 +29,7 @@ import logging
 import sqlite3
 import aiosqlite
 import json
+import uuid
 import asyncio
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
@@ -374,7 +375,11 @@ class BuildingSkillbook:
         for i, desc in enumerate(descriptions):
             effective_title = title if len(descriptions) == 1 else f"{title} (Part {i+1})"
             
-            skill_id = f"skill_{self.building_id}_{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{i}"
+            # Timestamp alone is not unique: Windows' clock ticks in ~1-16 ms steps, so two
+            # skills written in quick succession got the same id and INSERT OR REPLACE
+            # silently overwrote the first. A random suffix makes every id unique.
+            skill_id = (f"skill_{self.building_id}_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+                        f"_{uuid.uuid4().hex[:8]}_{i}")
             
             skill = Skill(
                 skill_id=skill_id,

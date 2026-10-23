@@ -3,7 +3,7 @@
 # ARVIS edge box — host firewall (nftables). Outer layer of the site security.
 # ═══════════════════════════════════════════════════════════════════════════════
 # The box has two network interfaces:
-#   BMS_IF   on the building's BMS network  → BACnet/IP + Modbus/TCP to BMS_NET only.
+#   BMS_IF   on the building's BMS network  → BACnet/IP, Modbus/TCP, OPC UA to BMS_NET only.
 #                                            Nothing else in or out, ever.
 #   MGMT_IF  on the management network      → operators reach the TLS proxy (443) and
 #                                            SSH from MGMT_NET; outbound DNS + HTTPS only
@@ -30,6 +30,7 @@ set -euo pipefail
 : "${MGMT_NET:?set MGMT_NET (management subnet allowed to reach ARVIS, CIDR)}"
 BACNET_PORT="${BACNET_PORT:-47808}"
 MODBUS_PORT="${MODBUS_PORT:-502}"
+OPCUA_PORT="${OPCUA_PORT:-4840}"
 
 RULESET=$(cat <<EOF
 table inet arvis {
@@ -56,13 +57,15 @@ table inet arvis {
     oif "lo" accept
     ct state established,related accept
 
-    # BMS side: read-only polling — BACnet/IP and Modbus/TCP to the BMS subnet, nothing else
+    # BMS side: read-only polling — BACnet/IP, Modbus/TCP and OPC UA to the BMS subnet, nothing else
     oifname "${BMS_IF}" ip daddr ${BMS_NET} udp dport ${BACNET_PORT} accept
     oifname "${BMS_IF}" ip daddr ${BMS_NET} tcp dport ${MODBUS_PORT} accept
+    oifname "${BMS_IF}" ip daddr ${BMS_NET} tcp dport ${OPCUA_PORT} accept
     oifname "${BMS_IF}" ip daddr 255.255.255.255 udp dport ${BACNET_PORT} accept
     oifname "${BMS_IF}" udp sport ${BACNET_PORT} udp dport ${BACNET_PORT} accept
 
-    # Management side: DNS, HTTPS (LLM endpoint, host-filtered by ARVIS_EGRESS_ALLOW), NTP
+    # Management side: DNS, HTTPS (LLM endpoint, host-filtered by ARVIS_EGRESS_ALLOW; WhatsApp
+    # for the Evolution API container, which runs outside ARVIS's egress policy), NTP
     oifname "${MGMT_IF}" udp dport { 53, 123 } accept
     oifname "${MGMT_IF}" tcp dport { 53, 443 } accept
   }

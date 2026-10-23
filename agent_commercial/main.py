@@ -447,14 +447,15 @@ class OpsCopilot:
         # This makes ARVIS proactive (24/7 watchdog) instead of reactive (operator-prompted).
         self._watchdog = None
         self._dispatcher = None
-        self._event_bus = None
+        # One event bus for the whole process, in every mode: FDD findings, alarms,
+        # monitoring health and investigations publish here, and the WhatsApp engineer
+        # listens. (Lite mode used to have none, which silently disabled proactive messages.)
+        from arvis_core.event_bus.event_bus import EventBus
+        self._event_bus = EventBus()
         if not self.lite_mode:
             try:
-                from arvis_core.event_bus.event_bus import EventBus
                 from agent_commercial.anomaly_watchdog import AnomalyWatchdog
                 from agent_commercial.investigation_dispatcher import InvestigationDispatcher
-
-                self._event_bus = EventBus()
 
                 # Physics hard-limit bounds (backstop for near-constant signals)
                 _physics_bounds = {
@@ -511,7 +512,6 @@ class OpsCopilot:
                 logger.warning(f"B9 Autonomous Monitor init failed (non-critical): {_b9_err}")
                 self._watchdog = None
                 self._dispatcher = None
-                self._event_bus = None
 
         # State
         self._running = False

@@ -310,3 +310,15 @@ async def test_failed_reranker_does_not_halve_confidence(skillbook):
     got = await skillbook.get_relevant_skills({"situation_query": "AHU-07 coil capacity exhausted",
                                                "similarity_threshold": 0.3})
     assert got and got[0].confidence >= 0.6
+
+
+@pytest.mark.asyncio
+async def test_skills_written_back_to_back_are_both_kept(skillbook):
+    """Ids were timestamp-only; on Windows two quick writes collided and the second
+    INSERT OR REPLACE overwrote the first."""
+    for n in range(20):
+        await skillbook.add_skill(skill_type="pattern", title=f"lesson {n}", description=f"lesson number {n}",
+                                  equipment_id=f"AHU-{n:02d}")
+    async with skillbook.get_db() as conn:
+        async with conn.execute("SELECT COUNT(*) FROM skills") as cur:
+            assert (await cur.fetchone())[0] == 20

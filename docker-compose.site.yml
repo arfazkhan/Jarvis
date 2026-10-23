@@ -23,6 +23,17 @@
 #                                               = nothing leaves the LAN (rules engine
 #                                               still runs; LLM features degrade).
 #   GROQ_API_KEY (and/or OPENAI_API_KEY)      — LLM layer (degrades without)
+#
+# WhatsApp engineer (optional): add the gateway file —
+#   docker compose -f docker-compose.site.yml -f docker-compose.whatsapp.yml up -d
+#   EVOLUTION_IMAGE                           — pin it, e.g. evoapicloud/evolution-api:<version>
+#                                               (check Docker Hub; ARVIS was built against 2.3.x)
+#   EVOLUTION_API_KEY, EVOLUTION_DB_PASSWORD  — long random strings
+#   ARVIS_EVOLUTION_INSTANCE                  — instance name you create in Evolution
+#   ARVIS_EVOLUTION_WEBHOOK_TOKEN             — shared secret on the webhook (long random)
+#   ARVIS_PEOPLE                              — "Sara:+974...:fm, Ali:+974...:technician, ..."
+#   then: create the instance, scan its QR, and run
+#   docker exec arvis-site python -m agent_commercial.messaging.evolution set-webhook #       --url http://127.0.0.1:8000/api/v1/evolution/webhook
 # Site files:
 #   ./site/bms_config.yaml                     — bacnet.points / modbus.registers
 #   ./site/commissioning.yaml                  — design facts, zones, roles
@@ -54,6 +65,20 @@ services:
       # OPC UA (ARVIS_MODE=opcua): give ARVIS a read-only user on the server
       - ARVIS_OPCUA_USERNAME=${ARVIS_OPCUA_USERNAME:-}
       - ARVIS_OPCUA_PASSWORD=${ARVIS_OPCUA_PASSWORD:-}
+      # WhatsApp engineer — off unless the Evolution settings and the roster are set
+      - ARVIS_EVOLUTION_URL=${ARVIS_EVOLUTION_URL:-http://127.0.0.1:8080}
+      - ARVIS_EVOLUTION_INSTANCE=${ARVIS_EVOLUTION_INSTANCE:-}
+      - ARVIS_EVOLUTION_APIKEY=${EVOLUTION_API_KEY:-}
+      - ARVIS_EVOLUTION_WEBHOOK_TOKEN=${ARVIS_EVOLUTION_WEBHOOK_TOKEN:-}
+      - ARVIS_PEOPLE=${ARVIS_PEOPLE:-}
+      - ARVIS_FIELD_TECHNICIANS=${ARVIS_FIELD_TECHNICIANS:-}
+      - ARVIS_BUILDING_NAME=${ARVIS_BUILDING_NAME:-}
+      - ARVIS_TZ=${ARVIS_TZ:-Asia/Qatar}
+      - ARVIS_OPS_QUIET_HOURS=${ARVIS_OPS_QUIET_HOURS:-22-6}
+      - ARVIS_OPS_BRIEF_HOUR=${ARVIS_OPS_BRIEF_HOUR:-7}
+      - ARVIS_OPS_OWNER_BRIEF_DAY=${ARVIS_OPS_OWNER_BRIEF_DAY:-Sunday}
+      - ARVIS_OPS_OWNER_COST=${ARVIS_OPS_OWNER_COST:-1000}
+      - ARVIS_OPS_MAX_PER_HOUR=${ARVIS_OPS_MAX_PER_HOUR:-4}
       - GROQ_API_KEY=${GROQ_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
