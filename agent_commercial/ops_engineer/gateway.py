@@ -77,6 +77,21 @@ class OpsGateway:
         await self.store.append(person.number, "arvis", text, kind=kind)
         return msg_id
 
+    async def send_image(self, person: Person, png: bytes, caption: str, kind: str = "chart") -> Optional[str]:
+        """A chart to one person. The thread keeps the caption, so ARVIS knows what it showed."""
+        send_media = getattr(self.transport, "send_media", None)
+        if send_media is None:
+            logger.error("[Ops] this channel cannot send images")
+            return None
+        try:
+            msg_id = await send_media(person.number, png, caption=caption, filename="arvis-trend.png",
+                                      mimetype="image/png", delay_ms=typing_delay_ms(caption))
+        except Exception as e:
+            logger.error(f"[Ops] image to {person.name} not delivered: {type(e).__name__}: {e}")
+            return None
+        await self.store.append(person.number, "arvis", f"[chart] {caption}", kind=kind)
+        return msg_id
+
     async def on_inbound(self, sender: str, text: str, message_id: Optional[str] = None,
                          reply_to: Optional[str] = None) -> Optional[str]:
         person = self.people.get(sender)
@@ -114,7 +129,8 @@ class OpsGateway:
 
             await self.store.append(person.number, "person", text)
             reply = await self.engineer.respond(person, text)
-            await self.send(person, reply)
+            if await self.send(person, reply) is not None:
+                await self.engineer.delivered(person, reply)
             await self._observe(person, text, reply_to, tools=getattr(self.engineer, "last_tools", {}).get(person.number))
             return reply
 

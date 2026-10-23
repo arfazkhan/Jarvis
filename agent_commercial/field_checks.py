@@ -46,7 +46,7 @@ _DDL = """CREATE TABLE IF NOT EXISTS field_checks (
     case_id INTEGER NOT NULL, equipment_id TEXT NOT NULL, rule_id TEXT NOT NULL,
     evidence_id TEXT NOT NULL, question TEXT NOT NULL,
     technician TEXT NOT NULL, technician_name TEXT,
-    status TEXT NOT NULL DEFAULT 'sent',     -- sent | answered | unsure | expired | failed
+    status TEXT NOT NULL DEFAULT 'sent',     -- sent | answered | unsure | expired | failed | superseded
     answer TEXT, message_id TEXT, chain INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL, answered_at TEXT, error TEXT,
     requested_by TEXT)                       -- who asked for it (number), told if it expires/fails"""
@@ -191,6 +191,18 @@ class FieldCheckService:
             c.status = "expired"
             self._changed(c, "expired")
         return stale
+
+    async def supersede(self, case_id: int, evidence_id: str, answer: str, by: str) -> List[FieldCheck]:
+        """Someone answered this question directly (e.g. the FM on WhatsApp): close the
+        technician's open check for it, so nobody walks to the plant room for an answered
+        question and a late reply cannot overwrite the newer answer."""
+        rows = await self._rows("WHERE case_id = ? AND evidence_id = ? AND status = 'sent'", (case_id, evidence_id))
+        now = datetime.now().isoformat(timespec="seconds")
+        for c in rows:
+            await self._update(c.id, status="superseded", answer=answer, answered_at=now, error=f"answered by {by}")
+            c.status = "superseded"
+            self._changed(c, "superseded")
+        return rows
 
     def _changed(self, check: "FieldCheck", status: str) -> None:
         if self.on_change is not None:

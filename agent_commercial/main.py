@@ -840,8 +840,11 @@ class OpsCopilot:
                              field_checks=field_checks)
         engineer.notify = lambda person, text, kind: gateway.send(person, text, kind=kind)
         calendar = BuildingCalendar()
+        from agent_commercial.ops_engineer.work_orders import WorkOrderLog
+        work_orders = WorkOrderLog(self.database, cafm=getattr(self, "cafm_integration", None))
         gate = AttentionGate(people=people, store=store, ledger=SignalLedger(self.database), calendar=calendar,
-                             situation=Situation(self.database, field_checks), engineer=engineer, gateway=gateway,
+                             situation=Situation(self.database, field_checks, work_orders=work_orders),
+                             engineer=engineer, gateway=gateway,
                              state_engine=self.state_engine,
                              advisories=getattr(self, "terminal_advisory_store", None))
         from agent_commercial.ops_engineer.learning import Learning
@@ -854,6 +857,14 @@ class OpsCopilot:
         proactive = ProactiveEngineer(people=people, store=store, gateway=gateway, engineer=engineer,
                                       gate=gate, calendar=calendar, roles=roles)
         proactive.learning = learning
+        proactive.work_orders = work_orders
+        # The dashboard's jobs, from WhatsApp.
+        engineer.work_orders = work_orders
+        engineer.brief = proactive.brief_now
+        engineer.send_image = gateway.send_image
+        if getattr(self, "fdd_engine", None) is not None:
+            engineer.run_sweep = self.run_fdd_sweep
+            engineer.last_sweep = lambda: getattr(self, "fdd_last_run", None) or {}
         if self._event_bus is not None:
             proactive.attach(self._event_bus)
         self.ops_gate = gate
@@ -1461,7 +1472,15 @@ class OpsCopilot:
 
     async def run_fdd_sweep(self, hours: Optional[float] = None) -> Dict[str, Any]:
         """One rule-FDD pass over the building; persists findings and announces
-        newly confirmed faults on the event bus."""
+        newly confirmed faults on the event bus. One sweep at a time: the schedule,
+        the API and WhatsApp can all ask for one, and two overlapping sweeps would
+        both see a fault as new (and both re-check the same repairs)."""
+        if getattr(self, "_fdd_lock", None) is None:
+            self._fdd_lock = asyncio.Lock()
+        async with self._fdd_lock:
+            return await self._run_fdd_sweep(hours)
+
+    async def _run_fdd_sweep(self, hours: Optional[float] = None) -> Dict[str, Any]:
         from agent_commercial.fdd import Outcome
         from agent_commercial.fdd.store import latest_findings, save_findings
 
@@ -1520,6 +1539,8 @@ class OpsCopilot:
                              "window_hours": hours, "counts": counts,
                              "coverage": coverage_summary(findings),
                              "new_faults": [f.headline() for f in new_faults],
+                             "new_fault_keys": [{"equipment_id": f.equipment_id, "rule_id": f.rule_id,
+                                                 "headline": f.headline()} for f in new_faults],
                              "fixes_decided": [f"{v.equipment_id} {v.rule_id}: {v.status}" for v in decided]}
         logger.info(f"[FDD] sweep {run_id}: {counts}; {len(new_faults)} newly confirmed")
         return self.fdd_last_run

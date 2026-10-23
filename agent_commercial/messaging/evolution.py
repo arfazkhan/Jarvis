@@ -18,6 +18,9 @@ Shapes below are from Evolution's source (main, v2.3.x), not its docs, which
 are out of date in places:
   send     POST {base}/message/sendText/{instance}  header apikey
            body {"number", "text"}  → 201, sent message id at key.id
+  media    POST {base}/message/sendMedia/{instance}
+           body {"number", "mediatype": image|document|video|audio, "mimetype",
+           "media": URL or bare base64, "fileName", "caption", "delay"} → same shape
   webhook  POST to ARVIS: {event, instance, data, destination, date_time, sender,
            server_url, apikey}; event names are lower-dotted ("messages.upsert").
            Text and replies both arrive as data.message.conversation; the quoted
@@ -123,6 +126,23 @@ class EvolutionTransport:
         msg_id = (data.get("key") or {}).get("id")
         if not msg_id:
             raise EvolutionError(f"send accepted but no message id returned: {str(data)[:200]}")
+        return msg_id
+
+    async def send_media(self, to: str, data: bytes, *, caption: str = "", filename: str = "chart.png",
+                         mimetype: str = "image/png", delay_ms: Optional[int] = None) -> str:
+        """An image (or document) as raw base64 — Evolution accepts a URL or bare base64
+        (no data: prefix) in ``media``; ARVIS never exposes a URL for it to fetch."""
+        import base64
+        mediatype = "image" if mimetype.startswith("image/") else "document"
+        payload: Dict[str, Any] = {"number": to, "mediatype": mediatype, "mimetype": mimetype,
+                                   "media": base64.b64encode(data).decode("ascii"),
+                                   "fileName": filename, "caption": caption}
+        if delay_ms:
+            payload["delay"] = int(delay_ms)
+        out = await self._post(f"/message/sendMedia/{self.instance}", payload)
+        msg_id = (out.get("key") or {}).get("id")
+        if not msg_id:
+            raise EvolutionError(f"media accepted but no message id returned: {str(out)[:200]}")
         return msg_id
 
     async def send_check(self, to: str, body: str, ref: str) -> str:

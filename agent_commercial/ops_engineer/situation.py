@@ -6,6 +6,7 @@ AHU-07's valve. Before speaking up, the gate asks:
 
   * a field check on that equipment is waiting for a technician
   * a repair on it is recorded and awaiting re-check
+  * a work order for it is open (raised from WhatsApp in the last 14 days)
   * a signal about it was acknowledged ("on it")
   * the person was talking about it in the last ARVIS_OPS_HANDLED_CHAT_H hours (2)
 """
@@ -19,9 +20,10 @@ from typing import Any, List, Optional
 
 
 class Situation:
-    def __init__(self, database: Any, field_checks: Any = None, clock=None):
+    def __init__(self, database: Any, field_checks: Any = None, clock=None, work_orders: Any = None):
         self.database = database
         self.field_checks = field_checks
+        self.work_orders = work_orders              # WorkOrderLog
         self.clock = clock or datetime.now          # same clock as the conversation store
         self.chat_hours = float(os.getenv("ARVIS_OPS_HANDLED_CHAT_H", "2"))
 
@@ -41,6 +43,10 @@ class Situation:
                     out.append(f"repair on {subject} ({v.rule_id}) awaiting re-check")
         except Exception:
             pass
+        if self.work_orders is not None:
+            for wo in await self.work_orders.open_on(subject):
+                out.append(f"work order #{wo['id']}" + (f" ({wo['cafm_id']})" if wo.get("cafm_id") else "")
+                           + f" raised by {wo['raised_by'].removeprefix('whatsapp:')}")
         conn = await self.database._get_async_connection()
         try:
             async with conn.execute("SELECT ack_by FROM ops_signals WHERE subject=? AND state='acknowledged'",

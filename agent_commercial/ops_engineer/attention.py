@@ -356,9 +356,11 @@ class AttentionGate:
             if await self.situation.in_conversation(number, self.hold_min):
                 continue                                         # wait until they've finished talking
             live = []
-            for it in its:                                       # re-check: cleared while waiting?
+            for it in its:                                       # re-check: cleared, or told, while waiting?
                 row = await self.ledger.get(it.topic)
                 if row and row.get("state") == "resolved" and not it.kind.endswith(("cleared", "restored")):
+                    await self.ledger.mark([it.id], "cancelled", now)
+                elif await self.store.told(number, it.topic):    # e.g. in the conversation that held it
                     await self.ledger.mark([it.id], "cancelled", now)
                 else:
                     live.append(it)

@@ -125,6 +125,46 @@ _TOOLS = [
      "description": "Undo a learned 'normal for this building' pattern for an equipment, so ARVIS flags it again.",
      "parameters": {"type": "object", "properties": {"equipment_id": {"type": "string"}},
                     "required": ["equipment_id"]}},
+    {"name": "answer_diagnosis",
+     "description": "They answered an open diagnosis question themselves (the settling_question from open_cases, "
+                    "e.g. 'yes, the valve is at 100%'). Records yes / no / not sure and re-ranks the likely causes. "
+                    "Pass question_id when you know which question it answers.",
+     "parameters": {"type": "object", "properties": {"equipment_id": {"type": "string"},
+                                                     "answer": {"type": "string", "enum": ["yes", "no", "not sure"]},
+                                                     "rule_id": {"type": "string"},
+                                                     "question_id": {"type": "string"}},
+                    "required": ["equipment_id", "answer"]}},
+    {"name": "raise_work_order",
+     "description": "Raise a maintenance work order (in the site's CAFM system when one is connected) for an "
+                    "equipment's open fault, written from the diagnosis — or, with a note, for a job they describe. "
+                    "Only the facilities manager or owner. Does not touch the BMS.",
+     "parameters": {"type": "object", "properties": {"equipment_id": {"type": "string"},
+                                                     "rule_id": {"type": "string"},
+                                                     "note": {"type": "string", "description": "what they asked for"},
+                                                     "priority": {"type": "string",
+                                                                  "enum": ["low", "medium", "high", "emergency"]}},
+                    "required": ["equipment_id"]}},
+    {"name": "brief_now",
+     "description": "They asked for a brief / summary / 'what's going on' now: sends their brief as its own "
+                    "message, including everything you were holding for them. Afterwards add one short line at most.",
+     "parameters": {"type": "object", "properties": {}}},
+    {"name": "run_sweep",
+     "description": "Run a fault-detection sweep over the whole building now (facilities manager or owner) — "
+                    "e.g. after a repair or a change, 'check everything again'. Returns new and cleared faults. "
+                    "If a sweep ran in the last few minutes, returns that one instead.",
+     "parameters": {"type": "object", "properties": {}}},
+    {"name": "send_chart",
+     "description": "Send a trend chart image of up to 3 points (e.g. AHU-07/SAT, AHU-07/SAT_SP) over the last "
+                    "minutes. Mark when an action happened (minutes_ago or at='HH:MM') and the target if known. "
+                    "Use when a picture answers better than numbers, or when they ask to see it. The caption is "
+                    "sent with it — don't repeat its numbers.",
+     "parameters": {"type": "object", "properties": {"point_ids": {"type": "array", "items": {"type": "string"}},
+                                                     "minutes": {"type": "integer"},
+                                                     "minutes_ago": {"type": "integer"},
+                                                     "at": {"type": "string", "description": "HH:MM local"},
+                                                     "target": {"type": "number"},
+                                                     "band": {"type": "number"}},
+                    "required": ["point_ids"]}},
 ]
 
 _NUM = re.compile(r"(?<![A-Za-z0-9_\-/.])(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?(?![A-Za-z0-9_\-])")
@@ -250,6 +290,16 @@ class OpsEngineer:
         self.calendar = None      # BuildingCalendar
         self.learning = None      # Learning (preferences, normals, facts, engagement)
         self.last_tools: Dict[str, List[Dict[str, Any]]] = {}   # tools used in each person's last turn
+        # Dashboard jobs done from WhatsApp (wired by main; each tool says so when absent):
+        self.work_orders = None   # WorkOrderLog
+        self.run_sweep = None     # async () -> sweep summary
+        self.last_sweep = None    # () -> the last sweep summary (any trigger)
+        self.brief = None         # async (person) -> {"sent": bool, ...}
+        self.send_image = None    # async (person, png, caption) -> message id | None
+        self.sweep_guard_min = float(os.getenv("ARVIS_OPS_SWEEP_GUARD_MIN", "10"))
+        # What this turn's tools surfaced that the gate would otherwise announce: (topic, title, subject).
+        # Once the reply naming it is delivered, it counts as told.
+        self._surfaced: Dict[str, List[tuple]] = {}
 
     # ── context ───────────────────────────────────────────────────────────
     @staticmethod
@@ -330,6 +380,9 @@ class OpsEngineer:
             "- 'Did the reset/fix/change help?': find out when it happened (ask if they didn't say), then use "
             "change_since on the affected points (with the setpoint as target when you know it) and alarm_changes "
             "on the equipment. Report what actually happened, with the times and minutes the tools give you.\n"
+            "- You can do the dashboard's jobs here: if they answer a diagnosis question themselves, call "
+            "answer_diagnosis; 'raise a job/WO for it' → raise_work_order; 'brief me' → brief_now; 'check "
+            "everything again' → run_sweep; 'show me' a trend → send_chart.\n"
             "- Do not repeat what you already said in this conversation; answer the new message.\n"
             "- If you're unsure, say what you'd check next — that's what a good engineer does.\n\n"
             f"BUILDING FACTS (from ARVIS's engines, just now):\n{facts}"
@@ -338,6 +391,7 @@ class OpsEngineer:
     # ── a turn ────────────────────────────────────────────────────────────
     async def respond(self, person: Person, text: str) -> str:
         self.last_tools[person.number] = []
+        self._surfaced[person.number] = []
         history = await self.store.recent(person.number, limit=12)
         focus = " ".join([t.text for t in history[-4:]] + [text])
         facts = await self._facts(person, focus)
@@ -565,6 +619,7 @@ class OpsEngineer:
             out.append({"case_id": c.id, "equipment_id": c.equipment_id, "rule_id": c.rule_id,
                         "likely_causes": [{"cause": h["label"], "p": h["p"]} for h in (d.get("posterior") or [])[:3]],
                         "settling_question": (d.get("next_question") or {}).get("question"),
+                        "question_id": (d.get("next_question") or {}).get("evidence_id"),
                         "model_exhausted": bool(d.get("kb_bust"))})
         return out or {"open_cases": 0}
 
@@ -671,6 +726,165 @@ class OpsEngineer:
         n = await self.learning.revoke_normal(equipment_id, f"whatsapp:{person.name}")
         return {"revoked": n, "equipment_id": equipment_id,
                 "note": "I'll flag it again" if n else "there was no learned pattern for it"}
+
+    async def _tool_answer_diagnosis(self, person: Person, equipment_id: str, answer: str, rule_id: str = "",
+                                     question_id: str = "") -> Any:
+        if person.role not in ("fm", "technician"):
+            return {"error": "diagnosis questions are answered by the facilities manager or a technician"}
+        from agent_commercial.fdd.diagnosis import answer_question, list_cases, load_kb
+        from agent_commercial.field_checks import parse_answer
+        said = answer if answer in ("yes", "no") else parse_answer(answer)
+        if said is None:
+            return {"error": "could not tell yes, no or not sure from that — ask them again"}
+        cases = [c for c in await list_cases(self.database, status="open", equipment_id=equipment_id)
+                 if not rule_id or c.rule_id == rule_id]
+        picked = []
+        for c in cases:
+            nq = (c.diagnosis or {}).get("next_question") or {}
+            if question_id:
+                item = (await load_kb(self.database, c.rule_id)).evidence_item(question_id)
+                if item is not None:
+                    picked.append((c, question_id, item.question))
+            elif nq.get("evidence_id"):
+                picked.append((c, nq["evidence_id"], nq.get("question")))
+        if not picked:
+            return {"error": f"no open diagnosis question on {equipment_id}" + (f" for {rule_id}" if rule_id else "")}
+        if len(picked) > 1:
+            return {"error": "more than one open question on it — which one did they answer?",
+                    "questions": [{"rule_id": c.rule_id, "question_id": q, "question": text} for c, q, text in picked]}
+        case, evidence_id, question = picked[0]
+        if said == "unsure":
+            return {"recorded": False, "question": question,
+                    "note": "'not sure' does not change the diagnosis; ask_technician can send someone to look"}
+        updated = await answer_question(self.database, case.id, evidence_id, said,
+                                        answered_by=f"whatsapp:{person.name}")
+        closed = []
+        if self.field_checks is not None:
+            for c in await self.field_checks.supersede(case.id, evidence_id, said, by=person.name):
+                closed.append(c.technician_name or c.technician)
+                tech = self.people.get(c.technician)
+                if tech is not None and self.notify is not None and tech.number != person.number:
+                    await self.notify(tech, f"No need for check {c.ref} on {c.equipment_id} — {person.first_name} "
+                                            f"has already answered it. Thanks.", "check")
+        d = updated.diagnosis or {}
+        return {"recorded": True, "equipment_id": equipment_id, "rule_id": case.rule_id, "question": question,
+                "answer": said,
+                "likely_causes": [{"cause": h["label"], "p": h["p"]} for h in (d.get("posterior") or [])[:3]],
+                "next_question": (d.get("next_question") or {}).get("question"),
+                "model_exhausted": bool(d.get("kb_bust")), "technician_checks_closed": closed}
+
+    async def _tool_raise_work_order(self, person: Person, equipment_id: str, rule_id: str = "", note: str = "",
+                                     priority: str = "") -> Any:
+        if person.role not in ("fm", "owner"):
+            return {"error": "work orders are raised by the facilities manager or the owner"}
+        if self.work_orders is None:
+            return {"error": "work orders are not set up on this site"}
+        from agent_commercial.fdd import RULES_BY_ID
+        from agent_commercial.fdd.diagnosis import list_cases
+        cases = [c for c in await list_cases(self.database, status="open", equipment_id=equipment_id)
+                 if not rule_id or c.rule_id == rule_id]
+        if len(cases) > 1:
+            return {"error": f"{len(cases)} open faults on {equipment_id} — which one is the job for?",
+                    "open": [c.rule_id for c in cases]}
+        case = cases[0] if cases else None
+        if case is None and not note:
+            return {"error": f"no open fault on {equipment_id}" + (f" for {rule_id}" if rule_id else "")
+                             + " — ask what the job is and pass it as note"}
+        if case is not None:
+            for existing in await self.work_orders.open_on(equipment_id):
+                if existing.get("rule_id") == case.rule_id:
+                    return {"already_open": existing,
+                            "note": "a work order for this fault is already open — not raising a duplicate"}
+        parts = [equipment_id]
+        if case is not None:
+            rule = RULES_BY_ID.get(case.rule_id)
+            d = case.diagnosis or {}
+            parts[0] += f": {rule.title if rule else case.rule_id} ({case.rule_id}), confirmed by ARVIS fault detection."
+            causes = [f"{h['label']} ({h['p']:.0%})" for h in (d.get("posterior") or [])[:3]]
+            if causes:
+                parts.append("Likely causes: " + "; ".join(causes) + ".")
+            nq = (d.get("next_question") or {}).get("question")
+            if nq:
+                parts.append(f"Check first: {nq}")
+        if note:
+            parts.append(f"Requested by {person.name}: {note}")
+        description = " ".join(parts)[:2000]
+        severity = str((case.finding or {}).get("severity", "")).lower() if case else ""
+        prio = priority or {"critical": "emergency", "high": "high", "low": "low"}.get(severity, "medium")
+        out = await self.work_orders.raise_order(equipment_id=equipment_id, description=description,
+                                                 priority=prio, raised_by=f"whatsapp:{person.name}",
+                                                 raised_by_number=person.number,
+                                                 rule_id=case.rule_id if case else None,
+                                                 case_id=case.id if case else None)
+        return {**out, "priority": prio, "description": description[:600]}
+
+    async def _tool_brief_now(self, person: Person) -> Any:
+        if self.brief is None:
+            return {"error": "briefs are not set up on this site"}
+        return await self.brief(person)
+
+    async def _tool_run_sweep(self, person: Person) -> Any:
+        if person.role not in ("fm", "owner"):
+            return {"error": "building-wide sweeps are started by the facilities manager or the owner"}
+        if self.run_sweep is None:
+            return {"error": "fault detection is not running on this site"}
+        last = (self.last_sweep() if self.last_sweep else None) or {}
+        try:
+            age = (datetime.now() - datetime.fromisoformat(last["at"])).total_seconds() / 60 if last.get("at") else None
+        except (TypeError, ValueError):
+            age = None
+        if age is not None and age < self.sweep_guard_min:
+            res, note = last, f"a sweep ran {age:.0f} min ago — this is its result"
+        else:
+            res, note = await self.run_sweep(), None
+        for f in res.get("new_fault_keys") or []:
+            self._surfaced.setdefault(person.number, []).append(
+                (f"fault:{f['equipment_id']}:{f['rule_id']}", f.get("headline") or f["rule_id"], f["equipment_id"]))
+        out = {k: res.get(k) for k in ("at", "window_hours", "counts", "new_faults", "fixes_decided")}
+        if note:
+            out["note"] = note
+        return out
+
+    async def _tool_send_chart(self, person: Person, point_ids: Any, minutes: int = 120,
+                               minutes_ago: Optional[int] = None, at: Optional[str] = None,
+                               target: Optional[float] = None, band: Optional[float] = None) -> Any:
+        if self.send_image is None:
+            return {"error": "this channel cannot send images"}
+        if self.tool_handler is None:
+            return {"error": "trend data unavailable"}
+        if isinstance(point_ids, str):
+            point_ids = [p.strip() for p in point_ids.split(",") if p.strip()]
+        point_ids = list(dict.fromkeys(point_ids or []))[:3]
+        if not point_ids:
+            return {"error": "which points? e.g. AHU-07/SAT"}
+        minutes = max(10, min(int(minutes or 120), 7 * 24 * 60))
+        series = {}
+        for pid in point_ids:
+            series[pid] = (await self._samples(pid, minutes))[0]
+        if not any(series.values()):
+            return {"error": "no readings for those points in that window", "points": point_ids}
+        now = self._local_now()
+        mark = self._resolve_since(minutes_ago, at, now)
+        latest = max(p[-1][0] for p in series.values() if p)
+        if mark is not None and abs((now - latest).total_seconds()) > 6 * 3600:
+            mark = mark + (latest - now)          # data on another clock (simulator/replay), as in change_since
+        from agent_commercial.ops_engineer.charts import caption_for, render_trend
+        tz = self._tz()
+        hours = round(minutes / 60, 1)
+        png = await asyncio.to_thread(render_trend, series, tz=tz, title=f"{', '.join(point_ids)} — last {hours:g} h",
+                                      mark_at=mark, target=target, band=band)
+        caption = caption_for(series, tz, hours)
+        if await self.send_image(person, png, caption) is None:
+            return {"sent": False, "error": "the chart could not be delivered", "caption": caption}
+        return {"sent": True, "caption": caption,
+                "note": "the chart and this caption are already in their chat; add only what matters"}
+
+    async def delivered(self, person: Person, reply: str) -> None:
+        """The reply reached them: anything this turn surfaced that the reply names is now told,
+        so the attention gate does not announce it to them a second time."""
+        for topic, title, subject in self._surfaced.pop(person.number, []):
+            if subject and re.search(re.escape(subject).replace(r"\-", r"[-_\s]?"), reply or "", re.IGNORECASE):
+                await self.store.mark_told(person.number, topic, title)
 
     async def remember_confirmed_fact(self, fact: Any) -> None:
         """A confirmed fact also goes to the building's skillbook, so investigations use it."""

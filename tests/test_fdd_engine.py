@@ -236,6 +236,7 @@ def test_sweep_announces_only_newly_confirmed_faults(tmp_path):
     ns = SimpleNamespace(fdd_engine=FDDEngine(poll_seconds=POLL), state_engine=BMSStateEngine(),
                          database=db, _event_bus=SimpleNamespace(publish=events.append))
     ns._fdd_topology = lambda findings: OpsCopilot._fdd_topology(ns, findings)
+    ns._run_fdd_sweep = lambda hours=None: OpsCopilot._run_fdd_sweep(ns, hours)
 
     async def go():
         try:
