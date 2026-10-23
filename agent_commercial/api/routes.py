@@ -509,6 +509,69 @@ def create_api(
             raise HTTPException(400, str(e))
         return case.to_dict()
 
+    # ── Field checks: the diagnosis asks the technician on site ─────────────
+    class FieldCheckRequest(BaseModel):
+        technician: str          # roster number (ARVIS_FIELD_TECHNICIANS)
+
+    def _field_checks():
+        from agent_commercial.field_checks import get_field_check_service
+        svc = get_field_check_service()
+        if svc is None:
+            raise HTTPException(503, "No messaging channel configured (set ARVIS_EVOLUTION_URL / "
+                                     "ARVIS_EVOLUTION_INSTANCE / ARVIS_EVOLUTION_APIKEY).")
+        return svc
+
+    @app.post("/api/v1/fdd/cases/{case_id}/field-check")
+    async def send_field_check(case_id: int, req: FieldCheckRequest,
+                               current_user: User = Depends(require_role(["admin", "operator"]))):
+        """Send the case's most informative open question to a technician."""
+        try:
+            check = await _field_checks().request(case_id, req.technician)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        logger.info(f"[FieldCheck] {check.ref} for case {case_id} requested by {current_user.username}")
+        return check.to_dict()
+
+    @app.get("/api/v1/field-checks")
+    async def list_field_checks(status: Optional[str] = None,
+                                current_user: User = Depends(require_role(["admin", "operator"]))):
+        return [c.to_dict() for c in await _field_checks().list_checks(status)]
+
+    @app.get("/api/v1/field-checks/channel")
+    async def field_check_channel(current_user: User = Depends(require_role(["admin", "operator"]))):
+        """Messaging channel status, including the Evolution API attribution its license requires."""
+        from agent_commercial.field_checks import get_field_check_service, load_roster
+        from agent_commercial.messaging.evolution import CHANNEL_NOTICE
+        svc = get_field_check_service()
+        return {"configured": svc is not None, "provider": "Evolution API (WhatsApp)",
+                "instance": getattr(getattr(svc, "transport", None), "instance", None),
+                "technicians": len(load_roster()), "notice": CHANNEL_NOTICE}
+
+    from fastapi import Request as _Request
+
+    @app.post("/api/v1/evolution/webhook")
+    async def evolution_webhook(request: _Request):
+        """Inbound WhatsApp events from the site's Evolution API. Evolution does not
+        sign webhooks; it sends the shared-secret header ARVIS configured on it."""
+        from agent_commercial.messaging.evolution import parse_webhook, webhook_authorized
+        from agent_commercial.ops_engineer import get_gateway
+        if not webhook_authorized(dict(request.headers)):
+            raise HTTPException(401, "missing or wrong webhook token")
+        gateway = get_gateway()                     # the ops engineer, when configured
+        svc = _field_checks()
+        try:
+            messages, failures = parse_webhook(await request.json())
+        except ValueError:
+            raise HTTPException(400, "invalid JSON")
+        for f in failures:
+            await svc.on_delivery_failure(f.message_id, f.error)
+        for m in messages:
+            if gateway is not None:
+                await gateway.on_inbound(m.sender, m.text, message_id=m.message_id, reply_to=m.reply_to)
+            else:
+                await svc.on_message(m.sender, m.text, reply_to=m.reply_to, message_id=m.message_id)
+        return {"received": len(messages), "failures": len(failures)}
+
     @app.get("/api/v1/fdd/kb/{rule_id}")
     async def get_fdd_kb(rule_id: str):
         """A rule's diagnosis knowledge: hypotheses with repair track record, evidence items."""

@@ -1,8 +1,8 @@
 """
 Deployment security regression tests.
 
-1. ARVIS is read-only towards the building: no code path may issue a BACnet or
-   Modbus write. Enforced here by scanning the runtime packages' syntax trees,
+1. ARVIS is read-only towards the building: no code path may issue a BACnet,
+   Modbus or OPC UA write, or call an OPC UA method. Enforced here by scanning the runtime packages' syntax trees,
    so adding a write path fails the build instead of shipping quietly.
 2. The outbound (egress) policy blocks the internet except approved hosts.
 3. The deployment files keep their hardening: loopback API behind a TLS proxy on
@@ -22,12 +22,17 @@ from agent_commercial.egress_policy import EgressPolicy
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 RUNTIME_PACKAGES = ["agent_commercial", "arvis_core", "agent_unified"]
 
-# BACnet write services and Modbus write functions (pymodbus + bacpypes3 spellings)
+# BACnet write services, Modbus write functions (pymodbus + bacpypes3 spellings),
+# and OPC UA attribute writes and method calls (asyncua). OPC UA methods can
+# actuate equipment just like a write, so calling them is banned too.
 WRITE_APIS = {
     "write_property", "write_property_multiple", "WritePropertyRequest", "WritePropertyMultipleRequest",
     "WriteProperty", "WritePropertyMultiple", "write_group", "WriteGroupRequest",
     "write_register", "write_registers", "write_coil", "write_coils",
     "mask_write_register", "readwrite_registers", "write_file_record",
+    "write_value", "write_values", "set_value", "write_attribute", "write_attributes",
+    "write_params", "WriteRequest", "WriteParameters", "WriteValue", "set_writable",
+    "call_method", "CallRequest", "CallMethodRequest",
 }
 
 
@@ -65,10 +70,11 @@ def test_no_bms_write_calls_anywhere_in_runtime_code():
 
 def test_the_scan_actually_catches_a_write(tmp_path):
     """Guard against the scanner silently matching nothing."""
-    tree = ast.parse("client.write_register(1, 2)\nfrom bacpypes3.apdu import WritePropertyRequest\n")
+    tree = ast.parse("client.write_register(1, 2)\nfrom bacpypes3.apdu import WritePropertyRequest\n"
+                     "await node.write_value(1.0)\nawait obj.call_method('2:Start')\n")
     found = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
     found |= {a.name for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) for a in n.names}
-    assert {"write_register", "WritePropertyRequest"} <= found & WRITE_APIS
+    assert {"write_register", "WritePropertyRequest", "write_value", "call_method"} <= found & WRITE_APIS
 
 
 # ─────────────────────────────────────────────────────────────────────────────

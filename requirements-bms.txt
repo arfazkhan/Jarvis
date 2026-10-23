@@ -6,6 +6,7 @@
 # ═══════════════════════════════════════════════════════════
 BAC0>=23.7.0                    # BACnet/IP client
 pymodbus>=3.5.0                 # Modbus TCP/RTU client
+asyncua>=1.1.5                  # OPC UA client
 
 # ═══════════════════════════════════════════════════════════
 # ML/AI Stack (Hybrid Approach)

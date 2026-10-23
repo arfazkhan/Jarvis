@@ -5,6 +5,7 @@ Acts as the central router and orchestrator for the specialized Agent Nodes.
 
 import logging
 import asyncio
+import os
 import json
 import re
 from typing import Dict, Any, List, Optional
@@ -142,6 +143,8 @@ class QueenCoordinator(BaseModel):
     # 7-tier memory fabric disconnected from every swarm run.
     memory_orchestrator: Any = Field(default=None, exclude=True)
     terminal_advisory_store: Any = Field(default=None, exclude=True)
+    # Role agents (agent_commercial.role_agents.RoleOrchestrator) — grounded pre-investigation dossier
+    role_orchestrator: Any = Field(default=None, exclude=True)
     belief_store: Any = Field(default=None, exclude=True)
 
     class Config:
@@ -1018,6 +1021,25 @@ class QueenCoordinator(BaseModel):
                 "plan": plan,
             }
 
+        # ── Role agents: grounded dossier the specialists start from ─────────
+        # Anomaly / Diagnostic / Knowledge / Verification / Recommendation read
+        # ARVIS's own engines (rule FDD, diagnosis cases, skillbook, closed-loop
+        # repair checks), write each item to the evidence ledger, and report to
+        # every specialist through the shared context. No LLM calls. A lookup
+        # (T1, above) does not need a dossier.
+        _role_orchestrator = getattr(self, "role_orchestrator", None)
+        if _role_orchestrator is not None:
+            try:
+                _dossier = await asyncio.wait_for(
+                    _role_orchestrator.before_investigation(query, context, plan),
+                    timeout=float(os.getenv("ARVIS_ROLE_TIMEOUT_S", "15")))
+                if _dossier.get("prompt"):
+                    context = {**(context or {}), "ROLE_AGENT_REPORTS": _dossier["prompt"]}
+                logger.info(f"[Queen] Role dossier: focus={_dossier.get('focus')} "
+                            f"evidence={sum(len(r.evidence_ids) for r in _dossier['reports'].values())}")
+            except Exception as _role_err:
+                logger.warning(f"[Queen] Role agents skipped: {type(_role_err).__name__}: {_role_err}")
+
         # A3: Solo-node T3 proposals must face independent review
         if risk_tier == 3 and len(active_nodes) == 1:
             logger.info("[Queen] T3 solo-node: spawning Guardian for independent review.")
@@ -1798,6 +1820,12 @@ class QueenCoordinator(BaseModel):
                 else:
                     _confidence_val = 0.85
 
+        if _role_orchestrator is not None and getattr(plan, "role_reports", None):
+            try:
+                _role_orchestrator.after_investigation(plan, [n.name for n in active_nodes])
+            except Exception as _role_err:
+                logger.warning(f"[Queen] Investigation role report skipped: {_role_err}")
+
         _emit("investigation_complete", {
             "plan_id": plan.id,
             "nodes_total": _nodes_total,
@@ -1813,6 +1841,7 @@ class QueenCoordinator(BaseModel):
             "plan": plan,
             "nodes_total": _nodes_total,
             "nodes_converged": _nodes_converged,
+            "roles": getattr(plan, "role_reports", {}) or {},
         }
 
     def _verification_policy(self, risk_tier: int, query: str, advice: str, plan=None) -> Dict[str, Any]:

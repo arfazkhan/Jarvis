@@ -262,6 +262,9 @@ class InvestigationPlan:
     status: PlanStatus = PlanStatus.ACTIVE
     audit_trail: List[Span] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    # Reports from the role agents (agent_commercial/role_agents.py): anomalies,
+    # diagnosis, knowledge, verification, next checks, investigation, briefing.
+    role_reports: Dict[str, Any] = field(default_factory=dict)
     _shared_call_sigs: set = field(default_factory=set, repr=False)
     _tool_cache: dict = field(default_factory=dict, repr=False)
 
@@ -367,6 +370,7 @@ class InvestigationPlan:
             "audit_trail": [s.to_dict() for s in self.audit_trail],
             "evidence_count": len(self.evidence),
             "created_at": self.created_at.isoformat(),
+            "role_reports": self.role_reports,
         }
 
     def to_persist_dict(self) -> Dict[str, Any]:
@@ -383,6 +387,7 @@ class InvestigationPlan:
             "shared_call_sigs": list(self._shared_call_sigs),
             "tool_cache": self._tool_cache,
             "created_at": self.created_at.isoformat(),
+            "role_reports": self.role_reports,
         }
 
     def save(self, path: Path) -> None:
@@ -405,6 +410,7 @@ class InvestigationPlan:
         plan.evidence = EvidenceLedger.from_list(data.get("evidence", []))
         plan._shared_call_sigs = set(data.get("shared_call_sigs", []))
         plan._tool_cache = data.get("tool_cache", {})
+        plan.role_reports = data.get("role_reports", {})
         return plan
 
     @classmethod

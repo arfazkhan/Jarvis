@@ -6,11 +6,19 @@ FRIENDLY_AGENTS = {
     "Energy_Agent": "Energy Optimizer",
     "Comfort_Agent": "Thermal Comfort Specialist",
     "Strategic_Agent": "Strategic AI",
-    "Alarm_Agent": "Anomaly Detector",
+    "Alarm_Agent": "Alarm Triage Specialist",
     "Maintenance_Agent": "Predictive Maintenance Advisor",
-    "Memory_Agent": "Knowledge Graph",
+    "Memory_Agent": "Institutional Memory",
     "Sovereign_Agent": "Chief Building AI",
-    "Fast_Router": "Quick Inquiry Router"
+    "Fast_Router": "Quick Inquiry Router",
+    # Role agents (agent_commercial/role_agents.py)
+    "Anomaly_Agent": "Anomaly Agent",
+    "Diagnostic_Agent": "Diagnostic Agent",
+    "Investigation_Agent": "Investigation Agent",
+    "Recommendation_Agent": "Recommendation Agent",
+    "Verification_Agent": "Verification Agent",
+    "Knowledge_Agent": "Knowledge Agent",
+    "Briefing_Agent": "Briefing Agent",
 }
 
 FRIENDLY_TOOLS = {

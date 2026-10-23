@@ -147,11 +147,12 @@ class OpsCopilot:
     
     def __init__(
         self,
-        mode: str = "simulator",  # "simulator" | "bacnet" | "modbus" | "api_only"
+        mode: str = "simulator",  # "simulator" | "bacnet" | "modbus" | "opcua" | "api_only"
         api_port: int = 8000,
         bacnet_config: Optional[Dict[str, Any]] = None,
         modbus_config: Optional[Dict[str, Any]] = None,
         cafm_config: Optional[Dict[str, Any]] = None,
+        opcua_config: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize Ops Copilot.
@@ -160,6 +161,8 @@ class OpsCopilot:
             mode: Operating mode
                 - "simulator": Use simulated BMS data (for development)
                 - "bacnet": Connect to real BACnet devices
+                - "modbus": Connect to a Modbus TCP device
+                - "opcua": Connect to an OPC UA server (read-only)
                 - "api_only": API only, no data acquisition
             api_port: Port for REST API server
             bacnet_config: BACnet connection settings
@@ -171,7 +174,7 @@ class OpsCopilot:
         if _os.getenv("ARVIS_ENV", "development").lower() == "production" and mode in ("simulator", "api_only"):
             raise RuntimeError(
                 f"Refusing to start in production with mode='{mode}'. "
-                "Set ARVIS_MODE=bacnet or ARVIS_MODE=modbus to connect a real building."
+                "Set ARVIS_MODE=bacnet, modbus or opcua to connect a real building."
             )
         # Honest data-source status: LIVE | SIMULATED | UNAVAILABLE. Set during
         # connect(); defaults to SIMULATED for simulator mode, UNAVAILABLE otherwise.
@@ -179,6 +182,7 @@ class OpsCopilot:
         self.api_port = api_port
         self.bacnet_config = bacnet_config or {}
         self.modbus_config = modbus_config or {}
+        self.opcua_config = opcua_config or {}
         self.cafm_config = cafm_config or {}
 
         # Check lite mode
@@ -211,6 +215,7 @@ class OpsCopilot:
         # Protocol adapters
         self.bacnet_adapter = None
         self.modbus_adapter = None
+        self.opcua_adapter = None
 
         # CAFM integration (optional — only if cafm_config provided)
         self.cafm_integration = None
@@ -425,6 +430,16 @@ class OpsCopilot:
             logger.warning(f"TerminalAdvisoryStore init failed (non-critical): {_tas_err}")
             self.terminal_advisory_store = None
 
+        # ── Role agents — Anomaly / Diagnostic / Knowledge / Verification /
+        # Recommendation report grounded findings to the specialists before they
+        # investigate; Investigation + Briefing reports close the loop. ──────────
+        self.role_orchestrator = None
+        if hasattr(self.llm_agent, "queen") and self.llm_agent.queen:
+            from agent_commercial.role_agents import RoleOrchestrator
+            self.role_orchestrator = RoleOrchestrator(self.state_engine, self.database)
+            self.llm_agent.queen.role_orchestrator = self.role_orchestrator
+            logger.info("[ARVIS] Role agents wired into Queen")
+
         # ── B9: Autonomous Monitoring — Watchdog + Investigation Dispatcher ────
         # AnomalyWatchdog computes per-point rolling Z-score on every BMS update
         # and emits "anomaly_detected" events to EventBus. InvestigationDispatcher
@@ -608,6 +623,8 @@ class OpsCopilot:
                     raise
         elif self.mode == "modbus":
             await self._start_modbus()       # sets _bms_connected + data_source itself
+        elif self.mode == "opcua":
+            await self._start_opcua()        # sets _bms_connected + data_source itself
 
         # Commissioning — apply the building's declared design facts (design_attributes,
         # zones, specs) AFTER equipment is registered so they merge onto the live records.
@@ -732,6 +749,8 @@ class OpsCopilot:
         except Exception as _fdd_err:
             logger.warning(f"[FDD] Rule sweep not started: {_fdd_err}")
 
+        self._start_ops_engineer()
+
         # Fix 4: FDD VAE bootstrap — 30s delayed so BMS data flows first
         # FDD bootstrap generates SYNTHETIC training rows (jitter around defaults).
         # That is fine for a demo, but a real building must NOT get models
@@ -749,6 +768,53 @@ class OpsCopilot:
 
         logger.info(f"Ops Copilot started! API available at http://localhost:{self.api_port}/api/docs")
     
+    def _start_ops_engineer(self) -> None:
+        """ARVIS on WhatsApp (agent_commercial/ops_engineer): needs a configured
+        Evolution API instance and a site roster (ARVIS_PEOPLE). Absent either,
+        ARVIS runs without it — the dashboard and API are unaffected."""
+        from agent_commercial.messaging.evolution import EvolutionTransport
+        from agent_commercial.ops_engineer.people import People
+        transport, people = EvolutionTransport.from_env(), People.from_env()
+        if transport is None or not len(people):
+            logger.info("[Ops] WhatsApp engineer off (set ARVIS_EVOLUTION_* and ARVIS_PEOPLE to enable)")
+            return
+        import agent_commercial.field_checks as _fc
+        from agent_commercial.field_checks import FieldCheckService, load_roster
+        from agent_commercial.ops_engineer import set_gateway
+        from agent_commercial.ops_engineer.engineer import OpsEngineer
+        from agent_commercial.ops_engineer.gateway import OpsGateway
+        from agent_commercial.ops_engineer.memory import ConversationStore
+        from agent_commercial.ops_engineer.proactive import ProactiveEngineer
+        from agent_commercial.role_agents import RoleOrchestrator
+
+        roster = {**load_roster(), **people.technician_roster()}
+        field_checks = FieldCheckService(self.database, transport, roster=roster)
+        _fc._service = field_checks                          # the API's field-check routes use the same one
+        store = ConversationStore(self.database)
+        roles = getattr(self, "role_orchestrator", None) or RoleOrchestrator(self.state_engine, self.database)
+        llm_agent = getattr(self, "llm_agent", None)
+
+        async def investigate(question, person):
+            resp = await llm_agent.chat(question, {"operator_id": f"wa:{person.number}",
+                                                   "building_id": os.getenv("ARVIS_BUILDING_ID", "default")},
+                                        channel="whatsapp")
+            return resp.text
+
+        engineer = OpsEngineer(llm=getattr(llm_agent, "llm", None), people=people, store=store,
+                               database=self.database, roles=roles,
+                               tool_handler=getattr(llm_agent, "tool_handler", None), field_checks=field_checks,
+                               investigate=investigate if llm_agent is not None else None)
+        gateway = OpsGateway(transport=transport, people=people, store=store, engineer=engineer,
+                             field_checks=field_checks)
+        engineer.notify = lambda person, text, kind: gateway.send(person, text, kind=kind)
+        proactive = ProactiveEngineer(people=people, store=store, gateway=gateway, engineer=engineer, roles=roles)
+        if self._event_bus is not None:
+            proactive.attach(self._event_bus)
+        self._tasks.append(asyncio.create_task(proactive.run()))
+        set_gateway(gateway)
+        self.ops_gateway = gateway
+        logger.info(f"[Ops] WhatsApp engineer on: {len(people)} people via Evolution instance {transport.instance}")
+
     async def stop(self) -> None:
         """Stop the Ops Copilot"""
         logger.info("Stopping Ops Copilot...")
@@ -793,6 +859,8 @@ class OpsCopilot:
             await self.bacnet_adapter.disconnect()
         if self.modbus_adapter:
             await self.modbus_adapter.disconnect()
+        if self.opcua_adapter:
+            await self.opcua_adapter.disconnect()
 
         # Stop API server
         if self._api_server:
@@ -965,6 +1033,40 @@ class OpsCopilot:
         poll_interval = self.modbus_config.get("poll_interval", 30)
         await self.modbus_adapter.start_polling(poll_interval)
         logger.info(f"Modbus mode started (polling every {poll_interval}s)")
+
+    async def _start_opcua(self) -> None:
+        """Start with an OPC UA server connection (read-only)."""
+        from agent_commercial.opcua_adapter import opcua_adapter_from_config
+        logger.info("Starting OPC UA mode...")
+
+        self.opcua_adapter = opcua_adapter_from_config(self.opcua_config)
+        # Points before connect: node ids (incl. namespace-URI forms) resolve on connect.
+        count = self.opcua_adapter.load_points_from_config(self.opcua_config)
+        if count == 0 and os.getenv("ARVIS_ENV", "development").lower() == "production":
+            raise RuntimeError(
+                "No OPC UA points configured. Set ARVIS_BMS_CONFIG (opcua.points) — "
+                "refusing to report a live building with zero points."
+            )
+        endpoint = self.opcua_adapter.endpoint
+        if await self.opcua_adapter.connect():
+            # Connected ≠ live data: LIVE is set on the first GOOD reading.
+            self._bms_connected = True
+        else:
+            self._bms_connected = False
+            self.data_source = "UNAVAILABLE"
+            # No simulator fallback: allow_offline starts degraded with NO data and
+            # keeps reconnecting; it never serves made-up readings.
+            if not self.opcua_config.get("allow_offline"):
+                raise RuntimeError(
+                    f"OPC UA connection to {endpoint} failed. Fix the connection, or set "
+                    "opcua.allow_offline: true to start degraded (no data until it connects)."
+                )
+            logger.warning(f"OPC UA {endpoint} unreachable — starting degraded, retrying in the background")
+
+        self._wire_adapter(self.opcua_adapter)
+        poll_interval = self.opcua_config.get("poll_interval", 30)
+        await self.opcua_adapter.start_polling(poll_interval)
+        logger.info(f"OPC UA mode started ({count} points, polling every {poll_interval}s)")
 
     async def _register_simulated_equipment(self) -> None:
         """Register simulated equipment in state engine"""
@@ -1588,6 +1690,7 @@ class OpsCopilot:
         registry = get_role_registry(self.state_engine)
         entries = list((self.bacnet_config.get("points_config") or {}).get("points") or [])
         entries += list(self.modbus_config.get("registers") or [])
+        entries += list((getattr(self, "opcua_config", None) or {}).get("points") or [])
         n = 0
         for e in entries:
             if isinstance(e, dict) and e.get("role") and e.get("point_id"):
@@ -1610,10 +1713,11 @@ class OpsCopilot:
 
     def _setup_callbacks(self) -> None:
         """Set up event callbacks between components (idempotent)."""
-        # Live adapters are wired in _start_bacnet/_start_modbus before polling;
+        # Live adapters are wired in _start_bacnet/_start_modbus/_start_opcua before polling;
         # this only covers adapters created elsewhere and never double-registers.
         self._wire_adapter(self.bacnet_adapter)
         self._wire_adapter(self.modbus_adapter)
+        self._wire_adapter(getattr(self, "opcua_adapter", None))
 
     def _on_point_update(self, point: BMSDataPoint) -> None:
         """Handle point update from adapter"""
@@ -1986,7 +2090,8 @@ async def main(args):
                        "internet host. On a building site set ARVIS_EGRESS_POLICY=enforce.")
     bacnet_config: Dict[str, Any] = {}
     modbus_config: Dict[str, Any] = {}
-    if args.mode in ("bacnet", "modbus"):
+    opcua_config: Dict[str, Any] = {}
+    if args.mode in ("bacnet", "modbus", "opcua"):
         # Site point list. Production must name it explicitly — the repo default
         # (config/bms_config.yaml) describes the development simulator, not a building.
         production = os.getenv("ARVIS_ENV", "development").lower() == "production"
@@ -1997,8 +2102,10 @@ async def main(args):
             raise SystemExit(
                 "ARVIS_BMS_CONFIG is not set. Point it at the site BMS config "
                 "(bacnet.points / modbus.registers) before starting in live mode.")
+        site_cfg = load_bms_config(cfg_path)
         bacnet_config, modbus_config = build_protocol_configs(
-            load_bms_config(cfg_path), base_dir=os.path.dirname(os.path.abspath(cfg_path)))
+            site_cfg, base_dir=os.path.dirname(os.path.abspath(cfg_path)))
+        opcua_config = dict(site_cfg.get("opcua") or {})
         logger.info(f"Loaded BMS config from {cfg_path}")
 
     copilot = OpsCopilot(
@@ -2006,6 +2113,7 @@ async def main(args):
         api_port=args.port,
         bacnet_config=bacnet_config,
         modbus_config=modbus_config,
+        opcua_config=opcua_config,
     )
     
     # Handle shutdown signals
@@ -2040,10 +2148,10 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--mode",
-        choices=["simulator", "bacnet", "modbus", "api_only"],
+        choices=["simulator", "bacnet", "modbus", "opcua", "api_only"],
         default=os.getenv("ARVIS_MODE", "simulator"),
         help="Operating mode (default: $ARVIS_MODE or simulator). "
-             "Production (ARVIS_ENV=production) requires bacnet or modbus."
+             "Production (ARVIS_ENV=production) requires bacnet, modbus or opcua."
     )
     parser.add_argument(
         "--port",
@@ -2054,7 +2162,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--bms-config",
         default="",
-        help="Site BMS config (YAML/JSON with bacnet.points / modbus.registers). "
+        help="Site BMS config (YAML/JSON with bacnet.points / modbus.registers / opcua.points). "
              "Defaults to $ARVIS_BMS_CONFIG."
     )
     

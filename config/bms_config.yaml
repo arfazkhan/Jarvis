@@ -164,6 +164,25 @@ bacnet:
 # =============================================================================
 # Equipment Topology
 # =============================================================================
+# =============================================================================
+# OPC UA Configuration (ARVIS_MODE=opcua) — read-only
+# =============================================================================
+# Credentials go in ARVIS_OPCUA_USERNAME / ARVIS_OPCUA_PASSWORD, never here.
+# Prefer namespace-URI node ids (nsu=...): namespace indexes can change on restart.
+# To build the point list, browse the server: OpcUaAdapter.discover_variables().
+# opcua:
+#   endpoint: "opc.tcp://10.0.5.20:4840"
+#   security: "Basic256Sha256,SignAndEncrypt,certs/arvis.der,certs/arvis.pem"
+#   poll_interval: 30
+#   max_per_request: 500
+#   points:
+#     - node_id: "nsu=http://vendor.com/bms;s=AHU-03.SupplyAirTemp"
+#       point_id: "AHU-03/SAT"
+#       point_name: "Supply Air Temp"
+#       equipment_id: "AHU-03"
+#       unit: "°C"
+#       role: "supply-air-temp"   # optional, same roles as bacnet/modbus points
+
 equipment:
   chillers:
     - equipment_id: "CH-01"
