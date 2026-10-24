@@ -162,6 +162,20 @@ async def test_drift_is_confirmed_only_by_repeats(monkeypatch):
         d.stop_watch_loop()
 
 
+def test_drift_repeats_count_utc_stamped_anomalies_from_live_adapters():
+    # Live adapters stamp readings UTC-aware; the watch clock is naive local.
+    from agent_commercial.anomaly_watchdog import AnomalyEvent, AnomalyWatchdog
+    wd = AnomalyWatchdog()
+    d = _dispatcher(EventBus(), ScriptedQueen(), watchdog=wd)
+    watch = SimpleNamespace(point_id="AHU-07/SAT", created_at=datetime.now() - timedelta(minutes=5))
+    utc_now = datetime.now(timezone.utc)
+    for ago in (20, 3, 2, 1):                       # the 20-min-old one predates the watch
+        wd._anomaly_buffer.append(AnomalyEvent(
+            point_id="AHU-07/SAT", equipment_id="AHU-07", current_value=17, expected_value=13,
+            deviation_pct=30, z_score=3.2, severity="significant", timestamp=utc_now - timedelta(minutes=ago)))
+    assert d._repeats(watch) == 3
+
+
 # ── advisories, field checks, FDD cleared ────────────────────────────────────
 @pytest.mark.asyncio
 async def test_new_terminal_advisory_fires_hook_once(tmp_path):

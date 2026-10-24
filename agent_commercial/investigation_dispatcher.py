@@ -258,9 +258,12 @@ class InvestigationDispatcher:
         """How many times the watchdog flagged this point since the watch began."""
         if self.watchdog is None or not hasattr(self.watchdog, "get_recent_anomalies"):
             return 0
-        minutes = max(1, int((time.time() - watch.created_at.timestamp()) / 60) + 1)
+        # Compare instants: live adapters stamp anomalies UTC-aware, the watch clock is
+        # naive local, and comparing the datetimes directly raises TypeError.
+        began = watch.created_at.timestamp()
+        minutes = max(1, int((time.time() - began) / 60) + 1)
         return sum(1 for a in self.watchdog.get_recent_anomalies(minutes)
-                   if a.point_id == watch.point_id and a.timestamp >= watch.created_at)
+                   if a.point_id == watch.point_id and a.timestamp.timestamp() >= began)
 
     def start_watch_loop(self):
         """Start the background watch service (call from inside the running loop)."""
