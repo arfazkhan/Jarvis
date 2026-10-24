@@ -1851,7 +1851,14 @@ class OpsCopilot:
         """What ARVIS can see of the building, and what to connect next (coverage.py)."""
         from agent_commercial.coverage import assess
         store = getattr(self, "manual_readings", None)
-        return assess(self.state_engine, await store.points() if store is not None else [])
+        imported = []
+        try:
+            conn = await self.database._get_async_connection()
+            async with conn.execute("SELECT DISTINCT point_id, equipment_id FROM data_points WHERE source = 'import'") as cur:
+                imported = [(r[0], r[1] or r[0].split("/")[0]) for r in await cur.fetchall()]
+        except Exception as e:
+            logger.warning(f"[Coverage] imported history unavailable: {e}")
+        return assess(self.state_engine, await store.points() if store is not None else [], imported=imported)
 
     def _config_point_entries(self) -> list:
         """Every point the site config declares, from every source (roles, alarm rules, ...)."""

@@ -245,6 +245,7 @@ def create_api(
     # (issued by /api/v1/auth/token), except health/docs/login. Dev + demo are
     # unaffected so existing flows keep working.
     _SELF_AUTHENTICATED = {("POST", "/api/v1/evolution/webhook"), ("POST", "/api/v1/events")}
+    _SELF_AUTHENTICATED_PREFIX = ("/api/v1/push/",)          # vendor push: per-source token, checked in the route
 
     @app.middleware("http")
     async def _require_auth_in_production(request, call_next):
@@ -258,6 +259,7 @@ def create_api(
                 # API webhook carries x-arvis-webhook-token, not a user JWT (checked in the route,
                 # which fails closed when the token is unset). Exact method + path only.
                 or (request.method, p) in _SELF_AUTHENTICATED
+                or (request.method == "POST" and p.startswith(_SELF_AUTHENTICATED_PREFIX))
             )
             if not exempt:
                 ok = False
@@ -646,6 +648,50 @@ def create_api(
         if (file.filename or "").lower().endswith(".ics") or text.lstrip().startswith("BEGIN:VCALENDAR"):
             return await ing.import_ics(source, text)
         return await ing.import_csv(source, text)
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # HISTORY + VENDOR PUSH: trend exports, utility bills, REST sources that push
+    # ═══════════════════════════════════════════════════════════════════════
+    @app.post("/api/v1/import/trends")
+    async def import_trend_export(file: UploadFile = File(...), tz: str = Form(...), columns: str = Form(""),
+                                  current_user: User = Depends(require_role(["admin"]))):
+        """A BMS trend export (CSV or XLSX; wide or long). tz is required (e.g. Asia/Qatar, or 'local').
+        columns: optional JSON {"export header": "POINT/ID"}. Goes into history only — never alarms."""
+        import json as _json
+        from agent_commercial.database import get_database
+        from agent_commercial.importers.trend_csv import import_trends
+        try:
+            mapping = _json.loads(columns) if columns.strip() else {}
+            return await import_trends(get_database(), await file.read(), tz=tz, columns=mapping,
+                                       filename=file.filename or "")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/v1/import/bills")
+    async def import_utility_bills(file: UploadFile = File(...),
+                                   current_user: User = Depends(require_role(["admin", "operator"]))):
+        """Utility bills as CSV: meter,period(YYYY-MM),kwh,m3,cost → monthly meter points."""
+        from agent_commercial.database import get_database
+        from agent_commercial.importers.utility_bills import import_bills_csv
+        return await import_bills_csv(get_database(), (await file.read()).decode("utf-8-sig", errors="replace"))
+
+    @app.post("/api/v1/push/{source_id}")
+    async def vendor_push(source_id: str, request: _Request):
+        """A vendor system pushing data to a `kind: rest` source (x-arvis-push-token = its push_token_env)."""
+        ops = getattr(app.state, "ops_copilot", None)
+        mgr = getattr(ops, "source_manager", None)
+        handle = next((h for h in (getattr(mgr, "handles", None) or []) if h.id == source_id and h.kind == "rest"), None)
+        if handle is None:
+            raise HTTPException(404, f"no rest source {source_id!r}")
+        try:
+            body = await request.json()
+        except ValueError:
+            raise HTTPException(400, "invalid JSON")
+        try:
+            n = await handle.adapter.push(body, request.headers.get("x-arvis-push-token", ""))
+        except PermissionError:
+            raise HTTPException(401, "wrong or missing push token")
+        return {"points_updated": n}
 
     @app.get("/api/v1/coverage")
     async def get_coverage(current_user: User = Depends(require_role(["admin", "operator", "viewer"]))):
@@ -1857,9 +1903,11 @@ def create_api(
             
         ingestor = getattr(app.state, "document_ingestion", None)
         if not ingestor:
+            from agent_commercial.database import get_database
             ingestor = IngestionManager(
                 waste_tracker=app.state.waste_tracker,
-                energy_analyzer=app.state.energy_analyzer
+                energy_analyzer=app.state.energy_analyzer,
+                database=get_database(),
             )
             app.state.document_ingestion = ingestor
             

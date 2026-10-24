@@ -78,9 +78,11 @@ def _role_name(r: Any) -> Optional[str]:
     return getattr(r, "value", r) if r else None
 
 
-def _equipment(state_engine: Any, manual_points: Sequence[Any]) -> Dict[str, Any]:
+def _equipment(state_engine: Any, manual_points: Sequence[Any], imported: Sequence[Tuple[str, str]] = ()) -> Dict[str, Any]:
     """equipment id → its Equipment record (or None when only its points are known)."""
     eq: Dict[str, Any] = dict(getattr(state_engine, "_equipment", {}) or {})
+    for _pid, eq_id in imported:
+        eq.setdefault(eq_id, None)
     for p in list((getattr(state_engine, "_points", {}) or {}).values()):
         if str(getattr(p, "source", "") or "").startswith("event:"):
             continue                              # zone occupancy points: a zone is not equipment
@@ -91,9 +93,10 @@ def _equipment(state_engine: Any, manual_points: Sequence[Any]) -> Dict[str, Any
     return eq
 
 
-def assess(state_engine: Any, manual_points: Sequence[Any] = (), catalog: Optional[Dict[str, Any]] = None
-           ) -> Dict[str, Any]:
-    """The building's coverage: per equipment, the maturity level, and what to add next."""
+def assess(state_engine: Any, manual_points: Sequence[Any] = (), catalog: Optional[Dict[str, Any]] = None,
+           imported: Sequence[Tuple[str, str]] = ()) -> Dict[str, Any]:
+    """The building's coverage: per equipment, the maturity level, and what to add next.
+    `imported`: (point_id, equipment_id) of points that only have imported history."""
     from agent_commercial.semantics.point_roles import equipment_kind, get_role_registry
     catalog = catalog or load_catalog()
     kinds = catalog.get("kinds") or {}
@@ -105,11 +108,14 @@ def assess(state_engine: Any, manual_points: Sequence[Any] = (), catalog: Option
     manual_by_eq: Dict[str, List[Any]] = {}
     for mp in manual_points:
         manual_by_eq.setdefault(mp.equipment_id, []).append(mp)
+    imported_by_eq: Dict[str, List[str]] = {}
+    for pid, eq_id in imported:
+        imported_by_eq.setdefault(eq_id, []).append(pid)
 
     rank = {"connected": 3, "manual": 2, "imported": 1, "missing": 0}
     report: List[EquipmentCoverage] = []
     unrecognised: List[str] = []
-    for eq_id, rec in sorted(_equipment(state_engine, manual_points).items()):
+    for eq_id, rec in sorted(_equipment(state_engine, manual_points, imported).items()):
         if not eq_id:
             continue
         kind = equipment_kind(getattr(rec, "equipment_type", None), eq_id)
@@ -128,6 +134,11 @@ def assess(state_engine: Any, manual_points: Sequence[Any] = (), catalog: Option
                 "connected" if src not in _NOT_INSTRUMENT else None
             if state and rank[state] > rank[cov.roles.get(role, "missing")]:
                 cov.roles[role] = state
+        for pid in imported_by_eq.get(eq_id, []):   # history only (a trend export, a bill)
+            a = registry.resolve(pid, kind)
+            role = _role_name(a.role) if a.role is not None and a.confidence >= .9 else None
+            if role and rank["imported"] > rank[cov.roles.get(role, "missing")]:
+                cov.roles[role] = "imported"
         for mp in manual_by_eq.get(eq_id, []):      # declared for people to read, even before the first reading
             role = mp.role or _role_name(registry.resolve(mp.point_id, kind).role)
             if role and rank["manual"] > rank[cov.roles.get(role, "missing")]:

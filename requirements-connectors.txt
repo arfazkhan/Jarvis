@@ -3,5 +3,7 @@
 # site without MQTT never needs aiomqtt, etc.
 aiomqtt>=2.0,<3            # kind: mqtt   — IoT / retrofit sensors, LoRaWAN network servers
 pysnmp>=7.1,<8             # kind: snmp   — UPS, PDUs, CRAC (GET only)
+httpx>=0.27,<1             # kind: rest   — vendor APIs (GET only)
+openpyxl>=3.1,<4           # trend imports from .xlsx (CSV needs nothing)
 # test-only: an in-process MQTT broker for tests/test_mqtt_snmp.py
 amqtt>=0.11 ; extra == "test"

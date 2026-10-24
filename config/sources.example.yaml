@@ -36,3 +36,13 @@ sources:
     endpoint: opc.tcp://10.10.0.70:4840
     points:
       - {node_id: "nsu=urn:lighting;s=L5.Zone1.Level", point_id: LGT-L5/LEVEL, equipment_id: LGT-L5, unit: "%"}
+
+  - id: lifts                     # a vendor cloud API — only once its host is in ARVIS_EGRESS_ALLOW
+    kind: rest
+    required: false
+    base_url: https://api.lift-vendor.example
+    headers_env: {Authorization: ARVIS_LIFT_API_AUTH}
+    poll_interval: 120
+    points:
+      - {point_id: LIFT-2/INSVC, path: /v1/units/2/status, value: "$.inService"}
+      - {point_id: LIFT-2/FAULT, path: /v1/units/2/status, value: "$.fault", alarm_when: {op: "==", value: 1}}

@@ -12,7 +12,7 @@ ARVIS is **read-only** on every rung: it never writes to a building system.
 | 4. IoT, retrofit sensors, IT room | Current clamps, vibration, leak, air quality, LoRaWAN; UPS, PDUs, CRAC | MQTT (local broker), SNMP | [iot.md](iot.md) |
 | 5. People | Gauges, mechanical meters, anything read by eye | WhatsApp readings, gauge photos, reading rounds, logbooks | [people.md](people.md) |
 | 6. Events | Access control, people counters, room bookings | Webhook, CSV, calendar files | [events.md](events.md) |
-| 7. History and vendors | Trend exports, utility bills, vendor cloud APIs | Import, REST | *(Phase 6)* |
+| 7. History and vendors | Trend exports, utility bills, vendor cloud APIs | Import, REST | [history_vendors.md](history_vendors.md) |
 
 ## Systems with only a vendor cloud
 

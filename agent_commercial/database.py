@@ -253,6 +253,9 @@ class BMSDatabase:
                 if col not in cols:
                     await conn.execute(f"ALTER TABLE data_points ADD COLUMN {col} {typ}")
             await self._canonicalize_data_point_timestamps(conn)
+        # "which points have only imported history" (coverage) without scanning all telemetry
+        await conn.execute("CREATE INDEX IF NOT EXISTS idx_data_points_source "
+                           "ON data_points(source, point_id, equipment_id)")
 
         # 3. Alarms table
         if 'alarms' not in existing_tables:

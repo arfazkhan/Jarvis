@@ -39,24 +39,66 @@ class OCRProcessor:
     """OCR processor for PDF/Image to text conversion."""
     
     def process(self, file_path: str) -> str:
-        """OCR extraction with fallback to mock."""
+        """The document's text, or "" when it can't be read. Never made-up text: an
+        unreadable document is flagged for review, not filled in."""
         logger.info(f"Processing OCR for {file_path}")
-        
-        if HAS_OCR and os.path.exists(file_path):
-            try:
-                img = Image.open(file_path)
-                text = pytesseract.image_to_string(img)
-                if text.strip():
-                    return text
-            except Exception as e:
-                logger.warning(f"OCR failed for {file_path}: {e}. Falling back to mock data.")
-                
-        # Fallback to mock data
-        if "waste" in file_path.lower():
-            return "AL-WATAN WASTE SERVICES. INVOICE #12345. Date: 2026-05-01. General Waste: 500kg. Recycling: 200kg. Total: 700kg."
-        elif "elec" in file_path.lower() or "util" in file_path.lower():
-            return "KAHRAMAA BILL. Account: 987654. Period: April 2026. Electricity: 45000 kWh. Total Amount: 15000 QAR."
-        return "Generic document content. No specific GSAS metrics found."
+        if not os.path.exists(file_path):
+            logger.warning(f"OCR: {file_path} does not exist")
+            return ""
+        if file_path.lower().endswith((".txt", ".csv")):
+            with open(file_path, encoding="utf-8", errors="replace") as fh:
+                return fh.read()
+        if not HAS_OCR:
+            logger.warning("OCR: pytesseract is not installed — document flagged for review")
+            return ""
+        try:
+            return pytesseract.image_to_string(Image.open(file_path)) or ""
+        except Exception as e:
+            logger.warning(f"OCR failed for {file_path}: {e} — document flagged for review")
+            return ""
+
+_MONTHS = {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov",
+                                         "dec"], 1)}
+_AMOUNT = r"([\d][\d,]*(?:\.\d+)?)"
+
+
+def _num(s: str) -> float:
+    return float(s.replace(",", ""))
+
+
+def _regex_extract(text: str, document_type: str) -> Dict[str, Any]:
+    """What a bill or invoice says, from its text: numbers next to their units. {} when unclear."""
+    t = text or ""
+    if document_type == "utility_bill":
+        out: Dict[str, Any] = {}
+        m = re.search(_AMOUNT + r"\s*kwh", t, re.IGNORECASE)
+        if m:
+            out["utility"], out["consumption_kwh"] = "electricity", _num(m.group(1))
+        m = re.search(_AMOUNT + r"\s*(?:m3|m³|cubic)", t, re.IGNORECASE)
+        if m:
+            out.setdefault("utility", "water")
+            out["consumption_m3"] = _num(m.group(1))
+        m = re.search(_AMOUNT + r"\s*(?:qar|qr)\b", t, re.IGNORECASE) or \
+            re.search(r"(?:qar|qr)\s*" + _AMOUNT, t, re.IGNORECASE)
+        if m:
+            out["cost_qar"] = _num(m.group(1))
+        m = re.search(r"\b(20\d\d)[-/](0[1-9]|1[0-2])\b", t) or \
+            re.search(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(20\d\d)\b", t, re.IGNORECASE)
+        if m:
+            g = m.groups()
+            out["period"] = f"{g[0]}-{g[1]}" if g[0].isdigit() else f"{g[1]}-{_MONTHS[g[0][:3].lower()]:02d}"
+        return out if ("consumption_kwh" in out or "consumption_m3" in out) and "period" in out else {}
+    if document_type == "waste_invoice":
+        breakdown = {k.lower(): _num(v) for k, v in
+                     re.findall(r"(general|recycling|organic|mixed|hazardous)[^\d\n]{0,20}?" + _AMOUNT + r"\s*kg",
+                                t, re.IGNORECASE)}
+        m = re.search(r"\b(20\d\d-\d\d-\d\d)\b", t)
+        if not breakdown or not m:
+            return {}
+        return {"waste_type": "mixed" if len(breakdown) > 1 else next(iter(breakdown)),
+                "quantity_kg": sum(breakdown.values()), "breakdown": breakdown, "date": m.group(1)}
+    return {}
+
 
 class GSASDataExtractor:
     """Uses LLM to extract structured data from OCR text."""
@@ -89,28 +131,12 @@ class GSASDataExtractor:
             except Exception as e:
                 logger.warning(f"LLM extraction failed: {e}. Falling back to regex.")
         
-        # Mapping rules (Regex/Mock fallback)
+        # Without the language model: read what the text actually says. These results
+        # always go to review — a pattern match is not trusted on its own.
         if not extracted_data:
-            if document_type == "waste_invoice":
-                if "500kg" in text and "200kg" in text:
-                    extracted_data = {
-                        "waste_type": "mixed",
-                        "quantity_kg": 700.0,
-                        "breakdown": {"general": 500.0, "recycling": 200.0},
-                        "disposal_method": "recycling" if "200kg" in text else "landfill",
-                        "contractor": "Al-Watan Waste Services",
-                        "date": "2026-05-01"
-                    }
-            elif document_type == "utility_bill":
-                if "45000" in text:
-                    extracted_data = {
-                        "utility": "electricity",
-                        "consumption_kwh": 45000.0,
-                        "cost_qar": 15000.0,
-                        "period": "2026-04",
-                        "provider": "Kahramaa"
-                    }
-        
+            confidence = 0.7
+            extracted_data = _regex_extract(text, document_type)
+
         flagged = confidence < 0.85 or not extracted_data
         
         return ExtractionResult(
@@ -124,7 +150,9 @@ class GSASDataExtractor:
 class IngestionManager:
     """Orchestrates the document ingestion pipeline."""
     
-    def __init__(self, waste_tracker=None, energy_analyzer=None):
+    def __init__(self, waste_tracker=None, energy_analyzer=None, database=None, meter_id: str = "MAIN"):
+        self.database = database             # confirmed bills become monthly meter points
+        self.meter_id = meter_id
         self.ocr = OCRProcessor()
         self.extractor = GSASDataExtractor()
         self.waste_tracker = waste_tracker
@@ -158,10 +186,13 @@ class IngestionManager:
                     )
                     self.waste_tracker.add_record(record)
                     
-            elif doc_type == "utility_bill" and self.energy_analyzer:
-                # Update energy analyzer with billing data for validation
-                logger.info(f"Updated energy analyzer with bill: {result.data.get('consumption_kwh')} kWh")
-                # self.energy_analyzer.validate_against_bill(result.data['consumption_kwh'], result.data['period'])
+            elif doc_type == "utility_bill" and self.database is not None and result.data.get("period"):
+                # The bill's consumption becomes a monthly meter point (importers.utility_bills), so
+                # what the utility charged can be checked against what the meters measured.
+                from agent_commercial.importers.utility_bills import record_bill
+                await record_bill(self.database, self.meter_id, result.data["period"],
+                                  kwh=result.data.get("consumption_kwh"), m3=result.data.get("consumption_m3"),
+                                  cost=result.data.get("cost_qar"))
         
         return {
             "status": "success" if not result.flagged_for_review else "pending_review",

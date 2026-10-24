@@ -79,6 +79,15 @@ def test_listening_sources_never_send_anything():
     assert not sent, f"mqtt_source.py publishes at lines {sent}"
 
 
+def test_the_rest_source_only_ever_gets():
+    """Vendor APIs are read with GET; no other HTTP verb appears in the REST source."""
+    path = ROOT / "agent_commercial" / "sources" / "rest_source.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    verbs = [f"{n.attr}@{n.lineno}" for n in ast.walk(tree) if isinstance(n, ast.Attribute)
+             and n.attr in ("post", "put", "patch", "delete", "request", "send", "stream")]
+    assert not verbs, f"rest_source.py uses {verbs}"
+
+
 def test_the_scan_actually_catches_a_write(tmp_path):
     """Guard against the scanner silently matching nothing."""
     tree = ast.parse("client.write_register(1, 2)\nfrom bacpypes3.apdu import WritePropertyRequest\n"
