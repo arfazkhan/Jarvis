@@ -32,6 +32,9 @@
 #   ARVIS_EVOLUTION_INSTANCE                  — instance name you create in Evolution
 #   ARVIS_EVOLUTION_WEBHOOK_TOKEN             — shared secret on the webhook (long random)
 #   ARVIS_PEOPLE                              — "Sara:+974...:fm, Ali:+974...:technician, ..."
+#   ARVIS_OPS_GROUP                           — optional: the team's WhatsApp group jid (…@g.us)
+#   voice notes are transcribed on this box: fetch the speech model once (needs internet once):
+#   docker exec arvis-site python -m agent_commercial.ops_engineer.media prefetch
 #   then: create the instance, scan its QR, and run
 #   docker exec arvis-site python -m agent_commercial.messaging.evolution set-webhook #       --url http://127.0.0.1:8000/api/v1/evolution/webhook
 # Site files:
@@ -79,6 +82,11 @@ services:
       - ARVIS_OPS_OWNER_BRIEF_DAY=${ARVIS_OPS_OWNER_BRIEF_DAY:-Sunday}
       - ARVIS_OPS_OWNER_COST=${ARVIS_OPS_OWNER_COST:-1000}
       - ARVIS_OPS_MAX_PER_HOUR=${ARVIS_OPS_MAX_PER_HOUR:-4}
+      - ARVIS_OPS_GROUP=${ARVIS_OPS_GROUP:-}
+      - ARVIS_OPS_JUDGE=${ARVIS_OPS_JUDGE:-rule}
+      - ARVIS_DECISION_URL=${ARVIS_DECISION_URL:-}
+      - ARVIS_STT_MODEL=${ARVIS_STT_MODEL:-small}
+      - ARVIS_STT_MODEL_DIR=/app/data/models/whisper
       - GROQ_API_KEY=${GROQ_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}

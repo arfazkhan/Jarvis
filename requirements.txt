@@ -80,4 +80,6 @@ uvicorn[standard]>=0.29.0
 sse-starlette>=2.1.0         # SSE responses (api/routes_omega.py) — imported at API startup
 python-multipart>=0.0.6      # form/file uploads — FastAPI refuses to build the API without it
 matplotlib>=3.8              # trend charts sent as WhatsApp images (ops_engineer/charts.py)
+faster-whisper>=1.0         # voice notes transcribed on the site box (ops_engineer/media.py)
+av>=11,<19                  # faster-whisper 1.2 passes av.open(metadata_errors=), which PyAV 19 removed
 boto3>=1.34.0

@@ -30,9 +30,19 @@ Rules, in order (each appends a reason):
   normal      matches a learned "normal for this building" pattern → DROP
   engagement  they consistently ignore/dismiss this kind → one level quieter for them
               (the three above never apply to safety)
+  judge       a borderline SOON (not safety/critical; a medium-severity item, an LLM
+              conclusion, or one already turned down a level) can be put to the Kev
+              decision model (ARVIS_OPS_JUDGE=kev): "worth interrupting them today, or
+              wait for the brief?" It can only make ARVIS quieter (SOON → DIGEST), never
+              louder, and without Kev the rules above stand
   rate        over ARVIS_OPS_MAX_PER_HOUR unprompted messages → DIGEST (not safety)
 
-No language-model calls in the decision itself.
+The ops group (ARVIS_OPS_GROUP): a critical / life-safety NOW alert is also posted
+there once, from the same fixed template, so the whole team sees it; "on it" as a
+reply to it acknowledges it for everyone.
+
+No language-model calls in the decision itself (Kev is a calibrated yes/no model with
+a short timeout, and optional).
 """
 
 from __future__ import annotations
@@ -83,6 +93,11 @@ def _down(level: str) -> str:
     return {"NOW": "SOON", "SOON": "DIGEST"}.get(level, level)
 
 
+_KEV_INSTRUCTIONS = (
+    "A building operations assistant has something to tell a member of the facilities team. "
+    "Yes if it is worth a WhatsApp message during their working day today (it needs their decision or "
+    "action soon, or waiting would cost money or comfort); no if it can wait for tomorrow morning's brief.")
+
 _PURPOSE = {
     "fdd_fault": ("tell them about this newly confirmed fault: what it is, what it costs, the likely cause, "
                   "and offer to send the settling check to a technician"),
@@ -116,6 +131,8 @@ class AttentionGate:
         self.settle_min = _env_float("ARVIS_OPS_ALARM_SETTLE_MIN", 10.0)
         self.hold_min = _env_float("ARVIS_OPS_CONVERSATION_HOLD_MIN", 5.0)
         self.brief_hour = int(_env_float("ARVIS_OPS_BRIEF_HOUR", 7))
+        self.judge = os.getenv("ARVIS_OPS_JUDGE", "rule").strip().lower()
+        self.judge_threshold = _env_float("ARVIS_OPS_KEV_THRESHOLD", 0.5)
         self._queue: Optional[asyncio.Queue] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._tasks: set = set()
@@ -226,11 +243,41 @@ class AttentionGate:
                     d.because("low_engagement", f"{person.first_name} engaged with {e['engaged']} of {e['n']} "
                                                 f"'{s.kind}' messages lately")
 
+        if d.level == "SOON" and self.judge == "kev" and self._borderline(s, d):
+            await self._kev(s, person, d, now)
+
         if not s.safety and d.level in ("NOW", "SOON"):
             if await self.store.proactive_count(person.number, 1.0) >= self.max_per_hour:
                 d.level = "DIGEST"
                 d.because("hourly_cap", f"{self.max_per_hour} unprompted messages in the last hour")
         return d
+
+    @staticmethod
+    def _borderline(s: Signal, d: Decision) -> bool:
+        if s.safety or s.severity == "critical":
+            return False
+        codes = {r["code"] for r in d.reasons}
+        return bool(s.llm_origin or s.severity == "medium" or codes & {"already_handled", "low_engagement"})
+
+    def _kev_state(self, s: Signal, person: Person, d: Decision, now: datetime) -> str:
+        import json
+        return json.dumps({
+            "recipient_role": person.role, "local_time": self.calendar.describe(now),
+            "kind": s.kind, "severity": s.severity, "title": s.title, "facts": (s.facts or "")[:600],
+            "cost_per_day": s.cost, "from_language_model": s.llm_origin,
+            "reasons_so_far": d.reasons,
+        }, default=str)
+
+    async def _kev(self, s: Signal, person: Person, d: Decision, now: datetime) -> None:
+        from arvis_core.decision import kev
+        p = await kev.ask_noul(self._kev_state(s, person, d, now), _KEV_INSTRUCTIONS, qid="interrupt")
+        if p is None:
+            return                                   # Kev unavailable: the rules stand
+        if p < self.judge_threshold:
+            d.level = "DIGEST"
+            d.because("judge_kev", f"p={p:.2f} that it is worth interrupting {person.first_name} today")
+        else:
+            d.because("judge_kev", f"p={p:.2f} — worth telling today")
 
     async def process(self, s: Signal, now: Optional[datetime] = None) -> Dict[str, Decision]:
         now = now or utcnow()
@@ -284,6 +331,8 @@ class AttentionGate:
                 return
             await self.store.mark_told(person.number, s.topic, s.title)
             await self._delivered(person, s.topic, s.kind, s.subject, msg_id, now)
+            if s.safety or s.severity == "critical":
+                await self._post_to_group(s)
             # Chase for an acknowledgement only where a person is needed now: safety,
             # critical, high alarms, losing sight of the building. A costly energy fault
             # is important but not something to escalate every 15 minutes.
@@ -303,6 +352,14 @@ class AttentionGate:
             return
         brief = self.calendar.next_hour(self.brief_hour, now)
         await self.ledger.enqueue(s, person.number, "DIGEST", brief, now)
+
+    async def _post_to_group(self, s: Signal) -> None:
+        group = getattr(self.gateway, "group", None)
+        if not group or await self.store.told(group, s.topic):
+            return
+        text = f"⚠️ {s.title}\n{s.facts}\nReply 'on it' to this message when someone has it."
+        if await self.gateway.send_group(text, kind="proactive", meta={"topic": s.topic}) is not None:
+            await self.store.mark_told(group, s.topic, s.title)
 
     async def _delivered(self, person: Person, topic: str, kind: str, subject: Optional[str],
                          message_id: Optional[str], now: datetime) -> None:

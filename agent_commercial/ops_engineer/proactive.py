@@ -10,6 +10,9 @@ ARVIS_OPS_OWNER_BRIEF_DAY — and the morning after anything was held for them. 
 that person since the last brief. If ARVIS was down at the brief hour, it goes out
 at the next check before ARVIS_OPS_BRIEF_LATEST (11:00).
 
+With an ops group (ARVIS_OPS_GROUP), the team also gets one morning summary there on
+workdays — building status only; what was held for one person stays in their brief.
+
 Anyone can ask for their brief at any time ("brief me" → brief_now): same content,
 plus anything held for later today; it counts as today's brief.
 
@@ -118,7 +121,25 @@ class ProactiveEngineer:
                 announced = announced or bool(mine)
         if announced:                                        # every FM in this run heard them: once is enough
             await self.learning.mark_announced([n["id"] for n in normals])
+        if self.calendar.day_type(now) == "workday" and await self._team_brief(now, day, summary):
+            sent += 1
         return sent
+
+    async def _team_brief(self, now: datetime, day: str, summary: str) -> bool:
+        """The team's morning summary in the ops group — building status only; what was
+        held for one person stays in their own brief."""
+        group = getattr(self.gateway, "group", None)
+        if not group or await self.store.told(group, f"brief:{day}"):
+            return False
+        from agent_commercial.ops_engineer.people import Person
+        team = Person(name="the building team (ops group)", number=group, role="fm")
+        text = await self.engineer.compose(team, f"{self.calendar.describe(now)}\n{summary}",
+                                           "give the team's morning summary: what needs attention today and what "
+                                           "is waiting on technicians — no personal items")
+        if await self.gateway.send_group(text, kind="proactive") is None:
+            return False                                     # retried at the next check
+        await self.store.mark_told(group, f"brief:{day}", f"team brief {day}")
+        return True
 
     async def brief_now(self, person: Any, now: Optional[datetime] = None) -> dict:
         """The brief, on request — everything held for them, at any level, goes with it."""

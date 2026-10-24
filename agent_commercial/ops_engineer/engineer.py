@@ -296,6 +296,7 @@ class OpsEngineer:
         self.last_sweep = None    # () -> the last sweep summary (any trigger)
         self.brief = None         # async (person) -> {"sent": bool, ...}
         self.send_image = None    # async (person, png, caption) -> message id | None
+        self.media = None         # MediaStore: site photos kept as evidence
         self.sweep_guard_min = float(os.getenv("ARVIS_OPS_SWEEP_GUARD_MIN", "10"))
         # What this turn's tools surfaced that the gate would otherwise announce: (topic, title, subject).
         # Once the reply naming it is delivered, it counts as told.
@@ -352,15 +353,29 @@ class OpsEngineer:
                         f"{p['mode']} {p['scope_kind']} {p['scope_value']}".strip() for p in prefs))
             except Exception as e:
                 logger.warning(f"[Ops] learning context unavailable: {e}")
+        if self.media is not None:
+            try:
+                for eq in sorted({e.upper() for e in re.findall(r"\b[A-Za-z]{2,6}[-_ ]?\d{1,4}\b", focus_text)})[:3]:
+                    photos = await self.media.photos_on(eq.replace("_", "-").replace(" ", "-"), limit=3)
+                    if photos:
+                        lines.append(f"Photos from site on {eq}: " + "; ".join(
+                            f"#{ph['id']} {ph['at'][:16]} {ph['caption']} — {ph['description'][:160]}".strip()
+                            for ph in photos))
+            except Exception as e:
+                logger.warning(f"[Ops] site photos unavailable: {e}")
         told = await self.store.notices_since(person.number, 24)
         if told:
             lines.append("Already told this person in the last 24 h: " + "; ".join(t["summary"] for t in told[-6:]))
         return "\n".join(lines)
 
-    def _system(self, person: Person, facts: str) -> str:
+    def _system(self, person: Person, facts: str, group: bool = False) -> str:
+        where = ("" if not group else
+                 f"This is the building team's WhatsApp group. Each message starts with who wrote it; "
+                 f"{person.first_name} just addressed you. Answer {person.first_name}, briefly — the whole team "
+                 "reads it. Keep anything about one person's own alerts or preferences for your 1:1 chat with them.\n")
         return (
             f"You are ARVIS, the operations engineer for {self.building_name}, talking on WhatsApp with "
-            f"{person.name} — {_ROLE_GUIDE.get(person.role, _ROLE_GUIDE['fm'])}.\n"
+            f"{person.name} — {_ROLE_GUIDE.get(person.role, _ROLE_GUIDE['fm'])}.\n" + where +
             "You are a colleague, not a bot: talk naturally, like a senior engineer messaging a teammate. "
             "Short WhatsApp messages (usually 2-6 lines). No menus, no numbered option lists, no headings, "
             "no markdown tables. Reply in the language they write in (Arabic if they write Arabic).\n"
@@ -383,19 +398,24 @@ class OpsEngineer:
             "- You can do the dashboard's jobs here: if they answer a diagnosis question themselves, call "
             "answer_diagnosis; 'raise a job/WO for it' → raise_work_order; 'brief me' → brief_now; 'check "
             "everything again' → run_sweep; 'show me' a trend → send_chart.\n"
+            "- A [photo] message comes with what a vision model read from it: treat that as an observation to "
+            "confirm, not a measurement, and say so when it matters. A [voice note] is a transcript and may "
+            "mishear names or numbers — check anything important.\n"
             "- Do not repeat what you already said in this conversation; answer the new message.\n"
             "- If you're unsure, say what you'd check next — that's what a good engineer does.\n\n"
             f"BUILDING FACTS (from ARVIS's engines, just now):\n{facts}"
         )
 
     # ── a turn ────────────────────────────────────────────────────────────
-    async def respond(self, person: Person, text: str) -> str:
+    async def respond(self, person: Person, text: str, thread: Optional[str] = None) -> str:
+        """One turn. ``thread`` is the ops group when they addressed ARVIS there (its
+        messages carry who wrote them); by default the 1:1 chat with the person."""
         self.last_tools[person.number] = []
         self._surfaced[person.number] = []
-        history = await self.store.recent(person.number, limit=12)
+        history = await self.store.recent(thread or person.number, limit=16 if thread else 12)
         focus = " ".join([t.text for t in history[-4:]] + [text])
         facts = await self._facts(person, focus)
-        system = self._system(person, facts)
+        system = self._system(person, facts, group=bool(thread))
         messages: List[Dict[str, Any]] = [
             {"role": "user" if t.speaker == "person" else "assistant", "content": t.text} for t in history]
         if not messages or messages[-1]["content"] != text or messages[-1]["role"] != "user":
@@ -808,6 +828,15 @@ class OpsEngineer:
                 parts.append(f"Check first: {nq}")
         if note:
             parts.append(f"Requested by {person.name}: {note}")
+        if self.media is not None:
+            try:
+                photos = await self.media.photos_on(equipment_id, limit=3)
+                if photos:
+                    parts.append("Site photos in ARVIS: " + "; ".join(
+                        f"#{ph['id']} ({ph['at'][:16]}){': ' + ph['caption'] if ph['caption'] else ''}"
+                        for ph in photos) + ".")
+            except Exception as e:
+                logger.warning(f"[Ops] site photos unavailable: {e}")
         description = " ".join(parts)[:2000]
         severity = str((case.finding or {}).get("severity", "")).lower() if case else ""
         prio = priority or {"critical": "emergency", "high": "high", "low": "low"}.get(severity, "medium")

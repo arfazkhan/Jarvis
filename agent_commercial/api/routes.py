@@ -571,8 +571,8 @@ def create_api(
             if gateway is not None:
                 # A conversational turn can take tens of seconds (reasoning, tools); answer
                 # Evolution now and handle the message in the background, in order per person.
-                gateway.spawn_inbound(m.sender, m.text, message_id=m.message_id, reply_to=m.reply_to)
-            else:
+                gateway.spawn_message(m)
+            elif m.group is None and m.kind in ("text", "voice"):
                 await svc.on_message(m.sender, m.text, reply_to=m.reply_to, message_id=m.message_id)
         return {"received": len(messages), "failures": len(failures)}
 

@@ -836,8 +836,14 @@ class OpsCopilot:
                                database=self.database, roles=roles,
                                tool_handler=getattr(llm_agent, "tool_handler", None), field_checks=field_checks,
                                investigate=investigate if llm_agent is not None else None)
+        from agent_commercial.messaging.evolution import ops_group
+        from agent_commercial.ops_engineer.media import LocalTranscriber, MediaStore, PhotoReader
         gateway = OpsGateway(transport=transport, people=people, store=store, engineer=engineer,
-                             field_checks=field_checks)
+                             field_checks=field_checks, group=ops_group())
+        # Voice notes (transcribed on this box) and photos (vision model), kept as evidence.
+        gateway.media_store = engineer.media = MediaStore(self.database)
+        gateway.transcriber = LocalTranscriber()
+        gateway.photos = PhotoReader()
         engineer.notify = lambda person, text, kind: gateway.send(person, text, kind=kind)
         calendar = BuildingCalendar()
         from agent_commercial.ops_engineer.work_orders import WorkOrderLog
@@ -871,7 +877,9 @@ class OpsCopilot:
         self._tasks.append(asyncio.create_task(proactive.run()))
         set_gateway(gateway)
         self.ops_gateway = gateway
-        logger.info(f"[Ops] WhatsApp engineer on: {len(people)} people via Evolution instance {transport.instance}")
+        logger.info(f"[Ops] WhatsApp engineer on: {len(people)} people via Evolution instance {transport.instance}"
+                    + (f", ops group {gateway.group}" if gateway.group else "")
+                    + ("" if LocalTranscriber.installed() else " (voice notes off: faster-whisper not installed)"))
 
     async def stop(self) -> None:
         """Stop the Ops Copilot"""

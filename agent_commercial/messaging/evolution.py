@@ -28,6 +28,16 @@ are out of date in places:
            rewritten to their phone-number jid (key.remoteJidAlt) when known.
   set      POST {base}/webhook/set/{instance} {"webhook": {enabled, url, headers,
            byEvents, base64, events}}
+  media in POST {base}/chat/getBase64FromMediaMessage/{instance}
+           body {"message": <the webhook's {key, message}>, "convertToMp4": false}
+           → 201 {mediaType, fileName, caption, size, mimetype, base64}. Passing the
+           whole received message (not just its key) works without Evolution's own
+           message store. The webhook stays base64=false: media is fetched only for
+           people on the roster, only when needed.
+  groups   data.key.remoteJid is the group ("...@g.us"); the author is key.participant
+           (key.participantAlt when that is an @lid). Mentions are jids in
+           data.contextInfo.mentionedJid. The payload's top-level "sender" is the
+           instance's own number (ARVIS's WhatsApp).
 
 Webhook authentication: Evolution does not sign webhooks, but it sends the
 custom headers configured on the instance webhook. ARVIS configures a shared
@@ -56,7 +66,7 @@ import asyncio
 import hmac
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("arvis.messaging.evolution")
@@ -70,9 +80,16 @@ CHANNEL_NOTICE = ("WhatsApp messaging is provided through Evolution API "
 @dataclass
 class InboundMessage:
     sender: str                 # phone number, digits only
-    text: str
+    text: str                   # typed text, or Evolution's own voice transcript when it made one
     message_id: str
     reply_to: Optional[str]     # id of the message being replied to
+    kind: str = "text"          # text | voice | image | document | video | other
+    caption: str = ""           # an image's / document's caption
+    media: Optional[Dict[str, Any]] = None   # {key, message} to fetch the media with (fetch_media)
+    group: Optional[str] = None              # the group jid, for a message in the ops group
+    mentions: List[str] = field(default_factory=list)   # jids @mentioned in it
+    quoted_author: Optional[str] = None      # jid of the author of the message replied to
+    own_jid: Optional[str] = None            # ARVIS's own WhatsApp (the instance's number)
 
 
 @dataclass
@@ -145,6 +162,16 @@ class EvolutionTransport:
             raise EvolutionError(f"media accepted but no message id returned: {str(out)[:200]}")
         return msg_id
 
+    async def fetch_media(self, media: Dict[str, Any]) -> Tuple[bytes, str]:
+        """The bytes and mimetype of a received image / voice note / document."""
+        import base64
+        out = await self._post(f"/chat/getBase64FromMediaMessage/{self.instance}",
+                               {"message": media, "convertToMp4": False})
+        b64 = out.get("base64")
+        if not b64:
+            raise EvolutionError(f"no media returned: {str(out)[:200]}")
+        return base64.b64decode(b64), str(out.get("mimetype") or "")
+
     async def send_check(self, to: str, body: str, ref: str) -> str:
         return await self.send_text(to, body)
 
@@ -159,6 +186,16 @@ def webhook_authorized(headers: Dict[str, str], token: Optional[str] = None) -> 
     expected = token if token is not None else os.getenv("ARVIS_EVOLUTION_WEBHOOK_TOKEN", "")
     got = headers.get(WEBHOOK_HEADER) or headers.get(WEBHOOK_HEADER.title()) or ""
     return bool(expected) and hmac.compare_digest(expected, got)
+
+
+_MEDIA_KINDS = (("audioMessage", "voice"), ("imageMessage", "image"), ("documentMessage", "document"),
+                ("videoMessage", "video"), ("stickerMessage", "other"))
+
+
+def ops_group() -> Optional[str]:
+    """The site's ops group jid (ARVIS_OPS_GROUP), when group mode is on."""
+    g = os.getenv("ARVIS_OPS_GROUP", "").strip()
+    return g if g.endswith("@g.us") else None
 
 
 def _phone(jid: str) -> Optional[str]:
@@ -186,8 +223,19 @@ def _text_of(message: Dict[str, Any]) -> str:
     return ""
 
 
-def parse_webhook(payload: Dict[str, Any]) -> Tuple[List[InboundMessage], List[DeliveryFailure]]:
-    """Evolution webhook → inbound messages from people / delivery failures of ours."""
+def _kind_of(message: Dict[str, Any]) -> Tuple[str, str]:
+    """(kind, caption) of a received message."""
+    for key, kind in _MEDIA_KINDS:
+        if isinstance(message.get(key), dict):
+            return kind, str(message[key].get("caption") or "")
+    return "text", ""
+
+
+def parse_webhook(payload: Dict[str, Any], group: Optional[str] = None
+                  ) -> Tuple[List[InboundMessage], List[DeliveryFailure]]:
+    """Evolution webhook → inbound messages from people / delivery failures of ours.
+    Group messages are kept only from the ops group (``group``, default ARVIS_OPS_GROUP)."""
+    group = group if group is not None else ops_group()
     event = str(payload.get("event") or "").lower().replace("_", ".")
     data = payload.get("data")
     items = data if isinstance(data, list) else [data] if isinstance(data, dict) else []
@@ -199,17 +247,30 @@ def parse_webhook(payload: Dict[str, Any]) -> Tuple[List[InboundMessage], List[D
             if key.get("fromMe"):
                 continue                                 # typed on the business phone itself
             jid = key.get("remoteJid") or ""
-            if "@lid" in jid and key.get("remoteJidAlt"):
+            in_group = None
+            if jid.endswith("@g.us"):
+                if not group or jid != group:
+                    continue                             # not the ops group
+                in_group = jid
+                jid = key.get("participant") or ""
+                if "@lid" in jid and key.get("participantAlt"):
+                    jid = key["participantAlt"]
+            elif "@lid" in jid and key.get("remoteJidAlt"):
                 jid = key["remoteJidAlt"]
             sender = _phone(jid)
             if sender is None:
                 if jid.endswith("@lid"):
                     logger.info(f"[Evolution] message from unresolved LID {jid} — cannot match the roster; ignored")
-                continue                                 # group chat, broadcast, or unknown addressing
-            ctx = d.get("contextInfo") or ((d.get("message") or {}).get("extendedTextMessage") or {}).get("contextInfo") or {}
-            messages.append(InboundMessage(sender=sender, text=_text_of(d.get("message") or {}),
-                                           message_id=str(key.get("id") or ""),
-                                           reply_to=ctx.get("stanzaId")))
+                continue                                 # broadcast, or unknown addressing
+            message = d.get("message") or {}
+            ctx = d.get("contextInfo") or (message.get("extendedTextMessage") or {}).get("contextInfo") or {}
+            kind, caption = _kind_of(message)
+            messages.append(InboundMessage(
+                sender=sender, text=_text_of(message), message_id=str(key.get("id") or ""),
+                reply_to=ctx.get("stanzaId"), kind=kind, caption=caption,
+                media={"key": key, "message": message} if kind != "text" else None,
+                group=in_group, mentions=[str(j) for j in (ctx.get("mentionedJid") or []) if j],
+                quoted_author=ctx.get("participant"), own_jid=payload.get("sender")))
     elif event == "messages.update":
         for d in items:
             if str(d.get("status") or "").upper() == "ERROR" and (d.get("keyId") or d.get("key", {}).get("id")):

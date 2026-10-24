@@ -100,32 +100,8 @@ class VisionBackend(OCRBackend):
     def extract_page(self, png_bytes: bytes, page_no: int) -> PageOCRResult:
         if not self.available:
             return PageOCRResult(page_no=page_no, text="", backend=self.name, confidence=0.0)
-        # Downscale + JPEG-compress: full-res PNG page renders exceed the model's
-        # request-size limit (Groq qwen returns 413). Cap the long side and send
-        # JPEG to stay well under the limit while keeping text legible.
-        img_bytes, mime = self._prepare_image(png_bytes)
-        b64 = base64.b64encode(img_bytes).decode("ascii")
-        data_url = f"data:{mime};base64,{b64}"
-        call_kwargs = dict(
-            model=self._model,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": _TRANSCRIBE_PROMPT},
-                    {"type": "image_url", "image_url": {"url": data_url}},
-                ],
-            }],
-            temperature=0.0,
-            max_tokens=8192,
-            extra_body={"reasoning_effort": "none"},
-        )
         try:
-            if self._pool is not None:
-                resp = self._pool.chat_completion(**call_kwargs)
-            else:
-                resp = self._client.chat.completions.create(**call_kwargs)
-            text = (resp.choices[0].message.content or "").strip()
-            text = self._strip_reasoning(text)
+            text = self.describe(png_bytes, _TRANSCRIBE_PROMPT, max_tokens=8192)
         except Exception as e:
             logger.warning("Vision OCR failed on page %d: %s", page_no, e)
             return PageOCRResult(page_no=page_no, text="", backend=self.name, confidence=0.0)
@@ -137,6 +113,34 @@ class VisionBackend(OCRBackend):
             conf -= 0.2 * (text.count("[illegible]") > 3)
         return PageOCRResult(page_no=page_no, text=text, backend=self.name,
                              confidence=round(max(conf, 0.0), 3))
+
+    def describe(self, image_bytes: bytes, prompt: str, max_tokens: int = 1024) -> str:
+        """Ask the vision model about one image. Raises when no provider is configured
+        or the call fails — callers decide what to say then."""
+        if not self.available:
+            raise RuntimeError("no vision-capable model configured")
+        # Downscale + JPEG-compress: full-res images exceed the model's request-size
+        # limit (Groq qwen returns 413). Cap the long side and send JPEG.
+        img_bytes, mime = self._prepare_image(image_bytes)
+        data_url = f"data:{mime};base64,{base64.b64encode(img_bytes).decode('ascii')}"
+        call_kwargs = dict(
+            model=self._model,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            }],
+            temperature=0.0,
+            max_tokens=max_tokens,
+            extra_body={"reasoning_effort": "none"},
+        )
+        if self._pool is not None:
+            resp = self._pool.chat_completion(**call_kwargs)
+        else:
+            resp = self._client.chat.completions.create(**call_kwargs)
+        return self._strip_reasoning((resp.choices[0].message.content or "").strip())
 
     # Long-side cap in pixels for the vision request. Kept small deliberately:
     # Groq free-tier qwen has an 8000 tokens/min limit and image tokens scale
