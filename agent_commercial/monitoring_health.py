@@ -31,7 +31,7 @@ logger = logging.getLogger("arvis.monitoring.health")
 
 _ADAPTERS = ("bacnet_adapter", "modbus_adapter", "opcua_adapter")
 _LIVE_MODES = ("bacnet", "modbus", "opcua", "multi")
-_NOT_WATCHED = ("manual", "import", "commission")
+_NOT_WATCHED = ("manual", "import", "commission", "event")
 
 
 def _source_stats(ops: Any) -> List[Dict[str, Any]]:
@@ -77,7 +77,7 @@ def assess_monitoring(ops: Any, fresh_minutes: float = 15.0, now: Optional[datet
     fresh = 0
     total = 0
     for p in list(points.values()):
-        if str(getattr(p, "source", "") or "").lower() in _NOT_WATCHED:
+        if str(getattr(p, "source", "") or "").lower().split(":")[0] in _NOT_WATCHED:
             continue                             # read by people or imported: never "fresh" by design
         total += 1
         ts = _aware(getattr(p, "timestamp", None))

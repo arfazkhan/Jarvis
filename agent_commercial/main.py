@@ -640,6 +640,12 @@ class OpsCopilot:
         except Exception as e:
             logger.debug(f"Event correlator warm-start skipped: {e}")
 
+        # Events (access control, people counters, bookings) → occupancy per zone.
+        from agent_commercial.event_ingest import EventIngest
+        self.event_ingest = EventIngest(self.database, emit=self._on_point_update, publish=self._publish,
+                                        correlator=getattr(self, "_event_correlator", None),
+                                        state_engine=self.state_engine)
+
         # Initialize based on mode. data_source is the honest signal for what the
         # readings actually are: LIVE (real device), SIMULATED (fabricated), or
         # UNAVAILABLE (degraded, no live data) — so fake data never reads as real.
@@ -670,6 +676,8 @@ class OpsCopilot:
                   "opcua": (getattr(self, "opcua_adapter", None), self.opcua_config)}
         if self.mode in legacy and legacy[self.mode][0] is not None:
             self.source_manager.adopt(self.mode, legacy[self.mode][0], cfg=legacy[self.mode][1])
+        if self.event_ingest.zones:          # an events source declared zones: keep occupancy current
+            self._tasks.append(asyncio.create_task(self.event_ingest.run()))
 
         # Commissioning — apply the building's declared design facts (design_attributes,
         # zones, specs) AFTER equipment is registered so they merge onto the live records.

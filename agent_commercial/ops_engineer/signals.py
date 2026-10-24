@@ -225,6 +225,24 @@ def from_field_check(p: Dict[str, Any]) -> List[Signal]:
                    ref={"check_id": p.get("id"), "status": status})]
 
 
+def from_empty_conditioned(p: Dict[str, Any]) -> List[Signal]:
+    """A zone nobody is in (access control / people counter) that is still being cooled."""
+    zone, name = p.get("zone"), p.get("name") or p.get("zone")
+    return [Signal(kind="energy", topic=f"empty:{zone}", subject=zone,
+                   title=f"{name} is empty but still being cooled",
+                   facts=(f"{name} ({zone}) has had nobody in it since {str(p.get('empty_since', ''))[11:16]} "
+                          f"({p.get('minutes')} min, by access control / people count), but its conditioning is "
+                          f"still running: {'; '.join(p.get('running') or [])}. Worth switching it to unoccupied mode."),
+                   severity="medium", ref={"zone": zone})]
+
+
+def from_empty_conditioned_cleared(p: Dict[str, Any]) -> List[Signal]:
+    zone, name = p.get("zone"), p.get("name") or p.get("zone")
+    return [Signal(kind="energy_cleared", topic=f"empty:{zone}:cleared", subject=zone,
+                   title=f"{name}: no longer cooling an empty space",
+                   facts=f"{name} ({zone}): {p.get('why')}.", severity="info", clears=f"empty:{zone}")]
+
+
 NORMALISERS: Dict[str, Callable[[Dict[str, Any]], List[Signal]]] = {
     "fdd_faults_confirmed": from_fdd_faults,
     "fdd_fault_cleared": from_fdd_cleared,
@@ -238,6 +256,8 @@ NORMALISERS: Dict[str, Callable[[Dict[str, Any]], List[Signal]]] = {
     "terminal_advisory_fired": from_advisory,
     "drift_watch_outcome": from_drift,
     "field_check_changed": from_field_check,
+    "zone_empty_but_conditioned": from_empty_conditioned,
+    "zone_empty_but_conditioned_cleared": from_empty_conditioned_cleared,
 }
 
 

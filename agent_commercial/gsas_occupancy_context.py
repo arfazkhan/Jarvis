@@ -117,6 +117,27 @@ def _build_schedule_fallback(zone_id: str) -> Dict[str, Any]:
 # Main class
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _measured_occupancy(bms: Any, zone_id: str, fresh_minutes: float = 30.0) -> Optional[Dict[str, Any]]:
+    """Occupancy that was measured (event_ingest: badge swipes, people counters) beats
+    occupancy inferred from CO2. None when the zone has no fresh measured point."""
+    from datetime import datetime as _dt, timedelta as _td
+    pts = getattr(bms, "_points", {}) or {}
+    occ, cnt = pts.get(f"{zone_id}/OCCUPIED"), pts.get(f"{zone_id}/OCC_COUNT")
+    p = occ or cnt
+    if p is None or p.value is None:
+        return None
+    ts = p.timestamp if p.timestamp.tzinfo is None else p.timestamp.astimezone().replace(tzinfo=None)
+    if _dt.now() - ts > _td(minutes=fresh_minutes):
+        return None
+    occupied = bool(occ.value) if occ is not None and occ.value is not None else bool(cnt.value and cnt.value > 0)
+    return {"zone_id": zone_id, "source": "measured (access control / people counter)",
+            "current_occupancy_probability": 1.0 if occupied else 0.0,
+            "current_occupancy_level": "occupied" if occupied else "vacant",
+            "people": int(cnt.value) if cnt is not None and cnt.value is not None else None,
+            "predominant_pattern": "occupied_business_hours" if occupied else "mostly_unoccupied",
+            "average_daily_occupancy_hours": None, "peak_occupancy_time": None, "lowest_occupancy_time": None}
+
+
 class OccupancyContextProvider:
     """
     Aggregates occupancy signals from BMS CO2/VAV/lighting points via
@@ -157,6 +178,10 @@ class OccupancyContextProvider:
 
         if self.bms_state_engine is None:
             return {**_build_schedule_fallback(zone_id), "period_hours": hours}
+
+        measured = _measured_occupancy(self.bms_state_engine, zone_id)
+        if measured is not None:             # access control / people counter: known, not inferred
+            return {**measured, "period_hours": hours}
 
         # ── Read live BMS points ─────────────────────────────────────────────
         co2 = _try_get_value(self.bms_state_engine, *_co2_candidates(zone_id))

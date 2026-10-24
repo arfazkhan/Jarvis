@@ -244,7 +244,7 @@ def create_api(
     # anonymously. In production every request must carry a valid signed JWT
     # (issued by /api/v1/auth/token), except health/docs/login. Dev + demo are
     # unaffected so existing flows keep working.
-    _SELF_AUTHENTICATED = {("POST", "/api/v1/evolution/webhook")}
+    _SELF_AUTHENTICATED = {("POST", "/api/v1/evolution/webhook"), ("POST", "/api/v1/events")}
 
     @app.middleware("http")
     async def _require_auth_in_production(request, call_next):
@@ -604,6 +604,48 @@ def create_api(
         if store is None:
             raise HTTPException(503, "manual readings are not running")
         return store
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # EVENTS: access control, people counters, bookings (event_ingest.py)
+    # ═══════════════════════════════════════════════════════════════════════
+    def _events():
+        ops = getattr(app.state, "ops_copilot", None)
+        ing = getattr(ops, "event_ingest", None)
+        if ing is None:
+            raise HTTPException(503, "event ingestion is not running")
+        return ing
+
+    @app.post("/api/v1/events")
+    async def post_events(request: _Request, source: str = "events"):
+        """Events pushed by an access-control system, people counter or middleware. Authenticated
+        by the x-arvis-events-token header (ARVIS_EVENTS_TOKEN); fails closed when it is unset.
+        Body: one event or a list. Identity fields (names, card numbers) are dropped on arrival."""
+        from agent_commercial.event_ingest import events_authorized
+        if not events_authorized(dict(request.headers)):
+            raise HTTPException(401, "missing or wrong events token")
+        ing = _events()
+        try:
+            body = await request.json()
+        except ValueError:
+            raise HTTPException(400, "invalid JSON")
+        items = body if isinstance(body, list) else [body]
+        out = {"ingested": 0, "duplicates": 0, "errors": []}
+        for i, ev in enumerate(items):
+            try:
+                out["ingested" if await ing.ingest(source, ev) else "duplicates"] += 1
+            except (ValueError, TypeError) as e:
+                out["errors"].append({"index": i, "error": str(e)})
+        return out
+
+    @app.post("/api/v1/events/import")
+    async def import_events(file: UploadFile = File(...), source: str = Form("events"),
+                            current_user: User = Depends(require_role(["admin", "operator"]))):
+        """A badge-export CSV (time, door, direction, ...) or an .ics booking calendar."""
+        ing = _events()
+        text = (await file.read()).decode("utf-8-sig", errors="replace")
+        if (file.filename or "").lower().endswith(".ics") or text.lstrip().startswith("BEGIN:VCALENDAR"):
+            return await ing.import_ics(source, text)
+        return await ing.import_csv(source, text)
 
     @app.get("/api/v1/coverage")
     async def get_coverage(current_user: User = Depends(require_role(["admin", "operator", "viewer"]))):

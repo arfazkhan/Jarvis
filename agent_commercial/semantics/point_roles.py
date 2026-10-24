@@ -141,6 +141,7 @@ class PointRole(str, Enum):
     EQUIPMENT_TEMP = "equipment-temp"          # winding, cabinet, cold-room air, ...
     WATER_FLOW = "water-flow"
     OCCUPANCY_COUNT = "occupancy-count"        # people in a zone
+    SCHEDULED_OCCUPANCY = "scheduled-occupancy"  # booked / scheduled (calendar), 0/1
 
 
 _Q = Quantity
@@ -188,6 +189,7 @@ ROLE_QUANTITY: Dict[PointRole, Quantity] = {
     PointRole.ELECTRIC_CURRENT: _Q.CURRENT, PointRole.SUPPLY_FREQUENCY: _Q.FREQUENCY,
     PointRole.RUN_HOURS: _Q.DURATION, PointRole.EQUIPMENT_TEMP: _Q.TEMPERATURE,
     PointRole.WATER_FLOW: _Q.WATERFLOW, PointRole.OCCUPANCY_COUNT: _Q.COUNT,
+    PointRole.SCHEDULED_OCCUPANCY: _Q.BINARY,
 }
 assert set(ROLE_QUANTITY) == set(PointRole), "every role needs a quantity"
 
@@ -277,7 +279,8 @@ for _role, _names in {
     R.ZONE_TEMP_SP: ("ZONE_SP", "ZN_SP", "ZONE_TEMP_SP", "ZAT_SP", "ZN_T_SP", "SPACE_SP"),
     R.ZONE_HUMIDITY: ("ZONE_RH", "SPACE_RH", "ZN_RH"),
     R.ZONE_CO2: ("CO2", "ZONE_CO2", "ZN_CO2"),
-    R.OCCUPANCY: ("OCC", "OCC_STS", "OCCUPANCY"),
+    R.OCCUPANCY: ("OCC", "OCC_STS", "OCCUPANCY", "OCCUPIED"),
+    R.SCHEDULED_OCCUPANCY: ("BOOKED", "SCHED_OCC", "OCC_SCHED"),
     R.TERMINAL_DAMPER: ("VAV_DMPR", "DMPR_POS", "DAMPER_POS", "VAV_DAMPER"),
     R.TERMINAL_AIRFLOW_SP: ("AIRFLOW_SP", "FLOW_SP", "VAV_FLOW_SP"),
     R.REHEAT_VALVE: ("RHV", "RH_VLV", "REHEAT", "RHT_VLV", "REHEAT_VLV"),

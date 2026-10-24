@@ -206,6 +206,10 @@ register_source("opcua", build=_opcua_build, points_config=lambda cfg: cfg,
 from agent_commercial import manual_readings as _manual  # noqa: E402  (registers the `manual` kind)
 _manual._register()
 
+# ── events: access control, people counters, bookings (event_ingest.py) ─────
+from agent_commercial import event_ingest as _events  # noqa: E402  (registers the `events` kind)
+_events._register()
+
 
 # ── IoT / IT-room protocols (imported only when a site uses them) ────────────
 def _lazy(kind: str, module: str, default_poll: float = 30.0) -> None:

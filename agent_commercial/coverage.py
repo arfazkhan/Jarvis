@@ -82,6 +82,8 @@ def _equipment(state_engine: Any, manual_points: Sequence[Any]) -> Dict[str, Any
     """equipment id → its Equipment record (or None when only its points are known)."""
     eq: Dict[str, Any] = dict(getattr(state_engine, "_equipment", {}) or {})
     for p in list((getattr(state_engine, "_points", {}) or {}).values()):
+        if str(getattr(p, "source", "") or "").startswith("event:"):
+            continue                              # zone occupancy points: a zone is not equipment
         if getattr(p, "equipment_id", None):
             eq.setdefault(p.equipment_id, None)
     for mp in manual_points:
