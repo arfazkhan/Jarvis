@@ -26,7 +26,7 @@ import os
 import signal
 import sys
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Any, Dict, List, Optional
 
 from agent_commercial.bms_data_model import (
     Equipment,
@@ -103,27 +103,48 @@ def build_protocol_configs(cfg: Dict[str, Any], base_dir: str = "."):
     ({csv, device_id, equipment_id, prefix?}); their rows are appended to
     ``bacnet.points``. Relative CSV paths resolve against ``base_dir``.
     """
-    bacnet_cfg: Dict[str, Any] = {}
     b = cfg.get("bacnet") or {}
-    if b:
-        for key in ("local_address", "port", "device_id", "poll_interval",
-                    "discovery_timeout", "allow_offline", "max_per_request",
-                    "rediscover_interval", "read_timeout", "check_status_flags"):
-            if key in b:
-                bacnet_cfg[key] = b[key]
-        points = list(b.get("points") or [])
-        if b.get("registries"):
-            from agent_commercial.semantics.volttron_registry import load_volttron_registry
-            for reg in b["registries"]:
-                csv_path = reg["csv"]
-                if not os.path.isabs(csv_path):
-                    csv_path = os.path.join(base_dir, csv_path)
-                points.extend(load_volttron_registry(
-                    csv_path, device_id=reg["device_id"],
-                    equipment_id=reg["equipment_id"], point_prefix=reg.get("prefix")))
-        bacnet_cfg["points_config"] = {"points": points}
+    bacnet_cfg: Dict[str, Any] = _bacnet_config(b, base_dir) if b else {}
     modbus_cfg: Dict[str, Any] = dict(cfg.get("modbus") or {})
     return bacnet_cfg, modbus_cfg
+
+
+_BACNET_KEYS = ("local_address", "port", "device_id", "poll_interval", "discovery_timeout", "allow_offline",
+                "max_per_request", "rediscover_interval", "read_timeout", "check_status_flags")
+
+
+def _bacnet_config(b: Dict[str, Any], base_dir: str = ".") -> Dict[str, Any]:
+    """A BACnet block → adapter config: its settings, plus points_config with the
+    inline points and any VOLTTRON registry CSV rows."""
+    out: Dict[str, Any] = {k: b[k] for k in _BACNET_KEYS if k in b}
+    points = list(b.get("points") or [])
+    if b.get("registries"):
+        from agent_commercial.semantics.volttron_registry import load_volttron_registry
+        for reg in b["registries"]:
+            csv_path = reg["csv"]
+            if not os.path.isabs(csv_path):
+                csv_path = os.path.join(base_dir, csv_path)
+            points.extend(load_volttron_registry(
+                csv_path, device_id=reg["device_id"],
+                equipment_id=reg["equipment_id"], point_prefix=reg.get("prefix")))
+    out["points_config"] = {"points": points}
+    return out
+
+
+def build_sources(cfg: Dict[str, Any], base_dir: str = ".") -> List[Dict[str, Any]]:
+    """The site's `sources:` list (many data sources at once — see sources/registry.py),
+    each normalised for its kind. Empty when the config uses the single-protocol form."""
+    out: List[Dict[str, Any]] = []
+    for i, spec in enumerate(cfg.get("sources") or []):
+        if not isinstance(spec, dict) or not spec.get("kind"):
+            raise ValueError(f"sources[{i}] needs a kind (bacnet, modbus, opcua, ...)")
+        spec = dict(spec)
+        spec.setdefault("id", spec["kind"] if not any(s.get("kind") == spec["kind"] for s in out) else f"{spec['kind']}{i}")
+        if spec["kind"] == "bacnet":
+            spec = {"id": spec["id"], "kind": "bacnet", "required": spec.get("required", True),
+                    **_bacnet_config(spec, base_dir)}
+        out.append(spec)
+    return out
 
 
 class OpsCopilot:
@@ -153,6 +174,7 @@ class OpsCopilot:
         modbus_config: Optional[Dict[str, Any]] = None,
         cafm_config: Optional[Dict[str, Any]] = None,
         opcua_config: Optional[Dict[str, Any]] = None,
+        sources_config: Optional[List[Dict[str, Any]]] = None,
     ):
         """
         Initialize Ops Copilot.
@@ -163,6 +185,7 @@ class OpsCopilot:
                 - "bacnet": Connect to real BACnet devices
                 - "modbus": Connect to a Modbus TCP device
                 - "opcua": Connect to an OPC UA server (read-only)
+                - "multi": Several sources at once, from ``sources_config`` (the site's ``sources:``)
                 - "api_only": API only, no data acquisition
             api_port: Port for REST API server
             bacnet_config: BACnet connection settings
@@ -174,7 +197,7 @@ class OpsCopilot:
         if _os.getenv("ARVIS_ENV", "development").lower() == "production" and mode in ("simulator", "api_only"):
             raise RuntimeError(
                 f"Refusing to start in production with mode='{mode}'. "
-                "Set ARVIS_MODE=bacnet, modbus or opcua to connect a real building."
+                "Set ARVIS_MODE=bacnet, modbus, opcua or multi to connect a real building."
             )
         # Honest data-source status: LIVE | SIMULATED | UNAVAILABLE. Set during
         # connect(); defaults to SIMULATED for simulator mode, UNAVAILABLE otherwise.
@@ -183,7 +206,10 @@ class OpsCopilot:
         self.bacnet_config = bacnet_config or {}
         self.modbus_config = modbus_config or {}
         self.opcua_config = opcua_config or {}
+        self.sources_config = list(sources_config or [])
         self.cafm_config = cafm_config or {}
+        from agent_commercial.sources import SourceManager
+        self.source_manager = SourceManager()
 
         # Check lite mode
         from config.settings import ARVIS_LITE
@@ -629,6 +655,14 @@ class OpsCopilot:
             await self._start_modbus()       # sets _bms_connected + data_source itself
         elif self.mode == "opcua":
             await self._start_opcua()        # sets _bms_connected + data_source itself
+        elif self.mode == "multi":
+            await self._start_sources()
+        # Every live source — however it was started — is tracked in one place, so
+        # monitoring sees them all the same way.
+        legacy = {"bacnet": (self.bacnet_adapter, self.bacnet_config), "modbus": (self.modbus_adapter, self.modbus_config),
+                  "opcua": (getattr(self, "opcua_adapter", None), self.opcua_config)}
+        if self.mode in legacy and legacy[self.mode][0] is not None:
+            self.source_manager.adopt(self.mode, legacy[self.mode][0], cfg=legacy[self.mode][1])
 
         # Commissioning — apply the building's declared design facts (design_attributes,
         # zones, specs) AFTER equipment is registered so they merge onto the live records.
@@ -921,6 +955,9 @@ class OpsCopilot:
             await self.telemetry_recorder.stop()
 
         # Stop adapters
+        if self.mode == "multi":
+            await self.source_manager.stop()
+            self.bacnet_adapter = self.modbus_adapter = self.opcua_adapter = None
         if self.bacnet_adapter:
             await self.bacnet_adapter.disconnect()
         if self.modbus_adapter:
@@ -1105,6 +1142,20 @@ class OpsCopilot:
         poll_interval = self.modbus_config.get("poll_interval", 30)
         await self.modbus_adapter.start_polling(poll_interval)
         logger.info(f"Modbus mode started (polling every {poll_interval}s)")
+
+    async def _start_sources(self) -> None:
+        """Several data sources at once (the site's `sources:`). The first source of
+        each protocol is also reachable as bacnet_adapter / modbus_adapter /
+        opcua_adapter, which the API and older code use."""
+        if not self.sources_config:
+            raise RuntimeError("mode='multi' needs a `sources:` list in the site config (ARVIS_BMS_CONFIG)")
+        logger.info(f"Starting {len(self.sources_config)} data sources...")
+        await self.source_manager.start(self.sources_config, self)
+        self.bacnet_adapter = self.source_manager.first("bacnet")
+        self.modbus_adapter = self.source_manager.first("modbus")
+        self.opcua_adapter = self.source_manager.first("opcua")
+        # Connected ≠ live data: LIVE is set on the first GOOD reading (_on_point_update).
+        self._bms_connected = self.source_manager.any_connected()
 
     async def _start_opcua(self) -> None:
         """Start with an OPC UA server connection (read-only)."""
@@ -1786,6 +1837,11 @@ class OpsCopilot:
         entries = list((self.bacnet_config.get("points_config") or {}).get("points") or [])
         entries += list(self.modbus_config.get("registers") or [])
         entries += list((getattr(self, "opcua_config", None) or {}).get("points") or [])
+        from agent_commercial.sources import KINDS
+        for spec in getattr(self, "sources_config", None) or []:
+            kind = KINDS.get(spec.get("kind"))
+            if kind is not None:
+                entries += list(kind.point_entries(spec))
         n = 0
         for e in entries:
             if isinstance(e, dict) and e.get("role") and e.get("point_id"):
@@ -2186,7 +2242,8 @@ async def main(args):
     bacnet_config: Dict[str, Any] = {}
     modbus_config: Dict[str, Any] = {}
     opcua_config: Dict[str, Any] = {}
-    if args.mode in ("bacnet", "modbus", "opcua"):
+    sources_config: List[Dict[str, Any]] = []
+    if args.mode in ("bacnet", "modbus", "opcua", "multi"):
         # Site point list. Production must name it explicitly — the repo default
         # (config/bms_config.yaml) describes the development simulator, not a building.
         production = os.getenv("ARVIS_ENV", "development").lower() == "production"
@@ -2201,6 +2258,10 @@ async def main(args):
         bacnet_config, modbus_config = build_protocol_configs(
             site_cfg, base_dir=os.path.dirname(os.path.abspath(cfg_path)))
         opcua_config = dict(site_cfg.get("opcua") or {})
+        sources_config = build_sources(site_cfg, base_dir=os.path.dirname(os.path.abspath(cfg_path)))
+        if sources_config and args.mode != "multi":
+            logger.info(f"Site config lists {len(sources_config)} sources — running in multi mode")
+            args.mode = "multi"
         logger.info(f"Loaded BMS config from {cfg_path}")
 
     copilot = OpsCopilot(
@@ -2209,6 +2270,7 @@ async def main(args):
         bacnet_config=bacnet_config,
         modbus_config=modbus_config,
         opcua_config=opcua_config,
+        sources_config=sources_config,
     )
     
     # Handle shutdown signals
@@ -2243,10 +2305,10 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--mode",
-        choices=["simulator", "bacnet", "modbus", "opcua", "api_only"],
+        choices=["simulator", "bacnet", "modbus", "opcua", "multi", "api_only"],
         default=os.getenv("ARVIS_MODE", "simulator"),
         help="Operating mode (default: $ARVIS_MODE or simulator). "
-             "Production (ARVIS_ENV=production) requires bacnet, modbus or opcua."
+             "Production (ARVIS_ENV=production) requires bacnet, modbus, opcua or multi."
     )
     parser.add_argument(
         "--port",

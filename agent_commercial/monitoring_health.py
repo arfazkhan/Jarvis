@@ -9,9 +9,10 @@ sight of the plant says so — this module does.
 
   assess_monitoring(ops)        one definition of "fresh data" (also used by /health)
   MonitoringHealthWatcher       every ARVIS_HEALTH_CHECK_S (60 s):
-      blind     no fresh reading for ARVIS_BLIND_AFTER_MIN (10), or every live
-                adapter disconnected — after hysteresis → "monitoring_blind"
-      degraded  more than ARVIS_DEGRADED_STALE_FRAC (25 %) of points stale → "monitoring_degraded"
+      blind     no fresh reading for ARVIS_BLIND_AFTER_MIN (10), or every required
+                source disconnected — after hysteresis → "monitoring_blind"
+      degraded  more than ARVIS_DEGRADED_STALE_FRAC (25 %) of points stale, a device
+                missing, or an optional source down → "monitoring_degraded"
       restored  two healthy checks in a row after blind/degraded → "monitoring_restored"
   It also keeps ``ops.data_source`` honest: LIVE ↔ UNAVAILABLE.
 
@@ -29,6 +30,27 @@ from typing import Any, Callable, Dict, List, Optional
 logger = logging.getLogger("arvis.monitoring.health")
 
 _ADAPTERS = ("bacnet_adapter", "modbus_adapter", "opcua_adapter")
+_LIVE_MODES = ("bacnet", "modbus", "opcua", "multi")
+
+
+def _source_stats(ops: Any) -> List[Dict[str, Any]]:
+    """Every live source's own stats: from the source manager (all sources, with
+    their id and whether they are required), else the three legacy adapter slots."""
+    mgr = getattr(ops, "source_manager", None)
+    if mgr is not None and getattr(mgr, "handles", None):
+        return mgr.stats()
+    out = []
+    for name in _ADAPTERS:
+        ad = getattr(ops, name, None)
+        if ad is None or not hasattr(ad, "get_stats"):
+            continue
+        try:
+            st = ad.get_stats()
+        except Exception as e:
+            st = {"error": f"{type(e).__name__}: {e}"}
+        kind = name.replace("_adapter", "")
+        out.append({"id": kind, "kind": kind, "required": True, **st})
+    return out
 
 
 def _env_float(name: str, default: float) -> float:
@@ -57,16 +79,9 @@ def assess_monitoring(ops: Any, fresh_minutes: float = 15.0, now: Optional[datet
         if ts is not None and now - ts <= window:
             fresh += 1
     adapters: List[Dict[str, Any]] = []
-    for name in _ADAPTERS:
-        ad = getattr(ops, name, None)
-        if ad is None or not hasattr(ad, "get_stats"):
-            continue
-        try:
-            st = ad.get_stats()
-        except Exception as e:
-            st = {"error": f"{type(e).__name__}: {e}"}
+    for st in _source_stats(ops):
         adapters.append({
-            "adapter": name.replace("_adapter", ""),
+            "adapter": st["kind"], "id": st["id"], "required": bool(st.get("required", True)),
             "connected": bool(st.get("is_connected", st.get("connected", False))),
             "polling": bool(st.get("polling_active", st.get("polling", False))),
             "stale_points": len(st.get("stale_points") or []),
@@ -94,14 +109,17 @@ class MonitoringHealthWatcher:
         self.last: Dict[str, Any] = {}
 
     def _live(self) -> bool:
-        return getattr(self.ops, "mode", None) in ("bacnet", "modbus", "opcua")
+        return getattr(self.ops, "mode", None) in _LIVE_MODES
 
     def _classify(self, a: Dict[str, Any]) -> str:
         live = a["adapters"]
         if a["total_points"] == 0 and not live:
             return "unknown"                     # nothing configured to watch
-        if a["fresh_points"] == 0 or (live and not any(x["connected"] for x in live)):
+        required = [x for x in live if x["required"]] or live
+        if a["fresh_points"] == 0 or (required and not any(x["connected"] for x in required)):
             return "blind"
+        if any(not x["connected"] for x in live):
+            return "degraded"                    # an optional source is down; the rest still see
         stale = sum(x["stale_points"] for x in live)
         if a["total_points"] and stale / a["total_points"] > self.degraded_frac:
             return "degraded"

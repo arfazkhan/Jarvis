@@ -238,10 +238,20 @@ class BMSDatabase:
                 unit TEXT,
                 quality TEXT DEFAULT 'good',
                 timestamp TEXT,
+                source TEXT,
+                confidence REAL,
                 PRIMARY KEY (point_id, timestamp)
             )
             """)
         else:
+            # Provenance: which source produced the reading (bacnet, modbus:meters,
+            # manual, import, ...) and how sure it is (1.0 for instruments, lower for
+            # a reading taken by eye or read off a photo).
+            async with conn.execute("PRAGMA table_info(data_points)") as cur:
+                cols = {r[1] for r in await cur.fetchall()}
+            for col, typ in (("source", "TEXT"), ("confidence", "REAL")):
+                if col not in cols:
+                    await conn.execute(f"ALTER TABLE data_points ADD COLUMN {col} {typ}")
             await self._canonicalize_data_point_timestamps(conn)
 
         # 3. Alarms table
@@ -1096,7 +1106,9 @@ class BMSDatabase:
         unit: str = "",
         equipment_id: str = None,
         quality: str = "good",
-        timestamp: datetime = None
+        timestamp: datetime = None,
+        source: Optional[str] = None,
+        confidence: Optional[float] = None,
     ) -> None:
         """Save a data point reading (Async).
 
@@ -1121,9 +1133,10 @@ class BMSDatabase:
                 quality_str = quality.value if hasattr(quality, "value") else str(quality)
 
                 await conn.execute("""
-                    INSERT OR REPLACE INTO data_points (point_id, equipment_id, value, unit, quality, timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (point_id, equipment_id, value, unit, quality_str, ts))
+                    INSERT OR REPLACE INTO data_points (point_id, equipment_id, value, unit, quality, timestamp,
+                                                        source, confidence)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (point_id, equipment_id, value, unit, quality_str, ts, source, confidence))
 
                 await conn.commit()
         except sqlite3.IntegrityError as _ie:
@@ -1153,6 +1166,8 @@ class BMSDatabase:
                 p.get("unit", ""),
                 _q_str,
                 _ts_str,
+                p.get("source"),
+                p.get("confidence"),
             ))
         if rejected:
             logger.warning(f"[DB] save_data_points_batch skipped {rejected} row(s) with an unparseable timestamp")
@@ -1161,8 +1176,9 @@ class BMSDatabase:
             conn = await self._get_async_connection()
 
             await conn.executemany("""
-                INSERT OR REPLACE INTO data_points (point_id, equipment_id, value, unit, quality, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO data_points (point_id, equipment_id, value, unit, quality, timestamp,
+                                                    source, confidence)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, data)
             
             await conn.commit()

@@ -1,0 +1,38 @@
+# Many data sources at once — copy into the site BMS config (ARVIS_BMS_CONFIG).
+#
+# A `sources:` list switches ARVIS to multi mode automatically: every source is
+# started the same way (load points, connect, wire, poll) and watched the same way.
+#   required: true  (default)  can't connect → startup stops, unless allow_offline: true;
+#                              down later → the building is "blind"
+#   required: false            its failure is logged and ARVIS runs without it;
+#                              down later → the building is "degraded"
+# Read-only: no source ever writes to a building system.
+# Secrets never go in this file — each kind reads its credentials from the environment.
+
+sources:
+  - id: plant_bms                 # the BMS: HVAC, chillers, AHUs
+    kind: bacnet
+    required: true
+    local_address: 10.10.0.50/24
+    poll_interval: 60
+    points:
+      - {point_id: AHU-01/SAT, device_id: 1001, object_type: analogInput, object_instance: 1,
+         equipment_id: AHU-01, unit: "°C", role: supply-air-temp}
+    # registries: [{csv: registries/ahu.csv, device_id: 1001, equipment_id: AHU-01}]
+
+  - id: meters                    # energy meters on their own Modbus TCP gateway
+    kind: modbus
+    required: false
+    host: 10.10.0.60
+    port: 502
+    unit_id: 1
+    registers:
+      - {point_id: MTR-01/KW, point_name: Main incomer kW, equipment_id: MTR-01, register_type: holding,
+         address: 3000, data_type: float32, unit: kW}
+
+  - id: lighting                  # a lighting controller exposing OPC UA
+    kind: opcua
+    required: false
+    endpoint: opc.tcp://10.10.0.70:4840
+    points:
+      - {node_id: "nsu=urn:lighting;s=L5.Zone1.Level", point_id: LGT-L5/LEVEL, equipment_id: LGT-L5, unit: "%"}

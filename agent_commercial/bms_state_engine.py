@@ -33,6 +33,9 @@ _SOURCE_PRIORITY = {
     "BMS_HISTORIAN": 0,
     "LIVE_BMS_SNAPSHOT": 1,
     "INFERRED": 2,
+    # live protocol sources (bacnet, modbus, opcua, ...) rank 99 by default
+    "MANUAL": 100,      # read by a person (typed, field check, photo): only fills in when live is stale
+    "IMPORT": 101,      # historical import: never replaces anything current
 }
 
 

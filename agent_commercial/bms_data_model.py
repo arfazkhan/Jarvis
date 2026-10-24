@@ -129,7 +129,10 @@ class BMSDataPoint:
     equipment_id: str = ""
     point_type: PointType = PointType.SENSOR
     quality: PointQuality = PointQuality.GOOD
-    
+    # How sure the reading is: 1.0 for an instrument; lower for a value taken by
+    # eye or read off a photo (manual readings), so analysis can weigh it.
+    confidence: float = 1.0
+
     # BACnet-specific (optional)
     bacnet_device_id: Optional[int] = None
     bacnet_object_type: Optional[str] = None

@@ -54,6 +54,7 @@ services:
     network_mode: host
     environment:
       - ARVIS_ENV=production
+      # bacnet | modbus | opcua — or a `sources:` list in the site config runs several at once (multi)
       - ARVIS_MODE=${ARVIS_MODE:-bacnet}
       - ARVIS_BMS_CONFIG=/app/site/bms_config.yaml
       - ARVIS_COMMISSIONING_SPEC=/app/site/commissioning.yaml

@@ -88,6 +88,8 @@ class TelemetryRecorder:
             "unit": getattr(point, "unit", "") or "",
             "quality": quality.value if hasattr(quality, "value") else str(quality),
             "timestamp": ts,
+            "source": getattr(point, "source", None) or None,
+            "confidence": getattr(point, "confidence", None),
         })
         self.stats["recorded"] += 1
 
