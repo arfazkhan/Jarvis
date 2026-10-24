@@ -61,6 +61,50 @@ async def get_async_db(db_path: Any) -> aiosqlite.Connection:
     return conn
 
 
+# ── data_points.timestamp storage format ──────────────────────────────────────
+# One representation per column is what makes the lexicographic SQL windows
+# (`timestamp > ?`, `MAX(timestamp)`) and the per-local-day
+# `SUBSTR(timestamp, 1, 10)` buckets (digests, calibrator) correct. Writers used
+# to store raw isoformat(), so UTC-aware adapter readings ('...+00:00') sat
+# beside naive-local ones and every window was off by the host's UTC offset.
+_D = "[0-9]"
+_CANONICAL_TS_GLOB = f"{_D * 4}-{_D * 2}-{_D * 2}T{_D * 2}:{_D * 2}:{_D * 2}"
+_CANONICAL_TS_SQL = (f"timestamp GLOB '{_CANONICAL_TS_GLOB}' "
+                     f"OR timestamp GLOB '{_CANONICAL_TS_GLOB}.{_D * 6}'")
+
+
+def to_storage_ts(ts: Any = None) -> str:
+    """Canonical ``data_points.timestamp``: naive LOCAL wall-time ISO-8601, as
+    ``datetime.isoformat()`` emits it ('YYYY-MM-DDTHH:MM:SS[.ffffff]').
+
+    Aware datetimes are converted to this process's local clock, naive ones are
+    taken as already local, ISO strings are parsed (never stored verbatim) and
+    None means now. Anything else raises ValueError.
+    """
+    if ts is None:
+        return datetime.now().isoformat()
+    if isinstance(ts, str):
+        ts = datetime.fromisoformat(ts.strip())
+    if not isinstance(ts, datetime):
+        raise ValueError(f"not a timestamp: {ts!r}")
+    if ts.utcoffset() is not None:
+        ts = ts.astimezone()
+    return ts.replace(tzinfo=None).isoformat()
+
+
+async def latest_storage_time(conn: aiosqlite.Connection) -> datetime:
+    """Reference "now" for history windows: the newest stored reading (simulated
+    time when replaying), else the wall clock. Naive local, like the column."""
+    try:
+        async with conn.execute("SELECT MAX(timestamp) FROM data_points") as c:
+            row = await c.fetchone()
+        if row and row[0]:
+            return datetime.fromisoformat(row[0])
+    except Exception as e:
+        logger.warning(f"[DB] data_points reference time unavailable, using wall clock: {e}")
+    return datetime.now()
+
+
 class BMSDatabase:
     """
     SQLite persistence layer for BMS data.
@@ -197,7 +241,9 @@ class BMSDatabase:
                 PRIMARY KEY (point_id, timestamp)
             )
             """)
-        
+        else:
+            await self._canonicalize_data_point_timestamps(conn)
+
         # 3. Alarms table
         if 'alarms' not in existing_tables:
             logger.info("Creating table: alarms")
@@ -898,6 +944,58 @@ class BMSDatabase:
         await conn.commit()
         logger.info("✅ Database schema verification complete.")
 
+    async def _canonicalize_data_point_timestamps(self, conn: aiosqlite.Connection) -> None:
+        """Rewrite legacy ``data_points.timestamp`` values into the canonical
+        form (``to_storage_ts``). Idempotent: canonical rows never match the
+        GLOB filter, so a clean table costs one scan.
+
+        Unparseable values are moved to ``data_points_quarantine``, never
+        deleted: left in place they would sort after every real timestamp and
+        poison ``MAX(timestamp)`` and each ``timestamp > ?`` window."""
+        fixed = quarantined = 0
+        last_rowid = 0
+        while True:
+            async with conn.execute(
+                f"SELECT rowid, timestamp FROM data_points "
+                f"WHERE rowid > ? AND NOT ({_CANONICAL_TS_SQL}) ORDER BY rowid LIMIT 5000",
+                (last_rowid,),
+            ) as cur:
+                rows = await cur.fetchall()
+            if not rows:
+                break
+            last_rowid = rows[-1][0]
+            updates, bad = [], []
+            for rowid, raw in rows:
+                try:
+                    updates.append((to_storage_ts(raw), rowid))
+                except (TypeError, ValueError):
+                    bad.append(rowid)
+            # OR REPLACE: a legacy copy of an already-stored reading (same point,
+            # same instant) collapses into one row instead of failing the PK.
+            await conn.executemany(
+                "UPDATE OR REPLACE data_points SET timestamp = ? WHERE rowid = ?", updates)
+            if bad:
+                await conn.execute("""
+                CREATE TABLE IF NOT EXISTS data_points_quarantine (
+                    point_id TEXT, equipment_id TEXT, value REAL, unit TEXT,
+                    quality TEXT, timestamp TEXT, quarantined_at TEXT
+                )
+                """)
+                now = datetime.now().isoformat()
+                await conn.executemany(
+                    "INSERT INTO data_points_quarantine SELECT point_id, equipment_id, value, unit, "
+                    "quality, timestamp, ? FROM data_points WHERE rowid = ?",
+                    [(now, rowid) for rowid in bad])
+                await conn.executemany("DELETE FROM data_points WHERE rowid = ?",
+                                       [(rowid,) for rowid in bad])
+            fixed += len(updates)
+            quarantined += len(bad)
+        if fixed:
+            logger.info(f"[DB] Canonicalized {fixed} legacy data_points timestamps to naive local ISO")
+        if quarantined:
+            logger.warning(f"[DB] Moved {quarantined} data_points rows with an unparseable timestamp "
+                           f"to data_points_quarantine")
+
 
     # ═══════════════════════════════════════════════════════════════════════════
     # EQUIPMENT OPERATIONS
@@ -1012,10 +1110,14 @@ class BMSDatabase:
         in stderr, which is noise — not a correctness problem.
         """
         try:
+            ts = to_storage_ts(timestamp)
+        except (TypeError, ValueError) as e:
+            logger.warning(f"[DB] save_data_point rejected {point_id}: bad timestamp {timestamp!r} ({e})")
+            return
+        try:
             async with self._write_lock:
                 conn = await self._get_async_connection()
 
-                ts = timestamp if isinstance(timestamp, str) else (timestamp or datetime.now()).isoformat()
                 quality_str = quality.value if hasattr(quality, "value") else str(quality)
 
                 await conn.execute("""
@@ -1032,24 +1134,32 @@ class BMSDatabase:
     
     async def save_data_points_batch(self, points: List[Dict]) -> None:
         """Save multiple data points efficiently (Async)"""
+        data = []
+        rejected = 0
+        for p in points:
+            try:
+                _ts_str = to_storage_ts(p.get("timestamp"))
+            except (TypeError, ValueError):
+                # One bad row must not sink the batch (the recorder would retry
+                # it forever and stall all telemetry).
+                rejected += 1
+                continue
+            _q = p.get("quality", "good")
+            _q_str = _q.value if hasattr(_q, "value") else str(_q)
+            data.append((
+                p.get("point_id"),
+                p.get("equipment_id"),
+                p.get("value"),
+                p.get("unit", ""),
+                _q_str,
+                _ts_str,
+            ))
+        if rejected:
+            logger.warning(f"[DB] save_data_points_batch skipped {rejected} row(s) with an unparseable timestamp")
+
         async with self._write_lock:
             conn = await self._get_async_connection()
-            
-            data = []
-            for p in points:
-                _q = p.get("quality", "good")
-                _q_str = _q.value if hasattr(_q, "value") else str(_q)
-                _ts = p.get("timestamp")
-                _ts_str = _ts.isoformat() if isinstance(_ts, datetime) else (_ts or datetime.now().isoformat())
-                data.append((
-                    p.get("point_id"),
-                    p.get("equipment_id"),
-                    p.get("value"),
-                    p.get("unit", ""),
-                    _q_str,
-                    _ts_str,
-                ))
-            
+
             await conn.executemany("""
                 INSERT OR REPLACE INTO data_points (point_id, equipment_id, value, unit, quality, timestamp)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -1065,24 +1175,12 @@ class BMSDatabase:
     ) -> List[Dict]:
         """Get historical values for a point (Async)"""
         conn = await self._get_async_connection()
-        
-        # Get simulated reference time
-        sim_now = datetime.now()
-        try:
-            async with conn.execute("SELECT MAX(timestamp) FROM data_points") as c:
-                row = await c.fetchone()
-                if row and row[0]:
-                    # Handle possible string formats
-                    val_str = str(row[0])
-                    if "T" in val_str:
-                        sim_now = datetime.fromisoformat(val_str.split(".")[0].split("+")[0])
-                    else:
-                        sim_now = datetime.fromisoformat(val_str)
-        except Exception:
-            pass
-            
-        cutoff = (sim_now - timedelta(hours=hours)).isoformat()
-        
+
+        # Stored timestamps are canonical (to_storage_ts), so the cutoff is
+        # built the same way and compared as a string.
+        sim_now = await latest_storage_time(conn)
+        cutoff = to_storage_ts(sim_now - timedelta(hours=hours))
+
         async with conn.execute("""
             SELECT value, unit, quality, timestamp 
             FROM data_points 

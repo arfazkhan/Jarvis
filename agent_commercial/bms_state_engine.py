@@ -916,23 +916,12 @@ class BMSStateEngine:
             # Maybe equipment_id_or_type is just equipment_id directly
             equipment_ids = [equipment_id_or_type]
 
-        # 2. Get sim time
+        # 2. Get sim time — compared against the canonical stored timestamps
+        from agent_commercial.database import latest_storage_time, to_storage_ts
         conn = await self.db._get_async_connection()
-        sim_now = datetime.now()
-        try:
-            async with conn.execute("SELECT MAX(timestamp) FROM data_points") as c:
-                row = await c.fetchone()
-                if row and row[0]:
-                    val_str = str(row[0])
-                    if "T" in val_str:
-                        sim_now = datetime.fromisoformat(val_str.split(".")[0].split("+")[0])
-                    else:
-                        sim_now = datetime.fromisoformat(val_str)
-        except Exception:
-            pass
-            
-        cutoff = (sim_now - timedelta(days=days)).isoformat()
-        
+        sim_now = await latest_storage_time(conn)
+        cutoff = to_storage_ts(sim_now - timedelta(days=days))
+
         # 3. Retrieve points in bulk
         placeholders = ",".join(["?"] * len(equipment_ids))
         query = f"""
