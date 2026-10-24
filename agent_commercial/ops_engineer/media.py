@@ -28,7 +28,9 @@ import argparse
 import asyncio
 import io
 import logging
+import json
 import os
+import re
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -191,6 +193,49 @@ class PhotoReader:
             self.error = f"vision failed: {type(e).__name__}"
             logger.error(f"[Ops] reading a photo failed: {type(e).__name__}: {e}")
             return None
+
+    async def read_value(self, image: bytes, candidates: List[Dict[str, str]], caption: str = "") -> Optional[Dict[str, Any]]:
+        """The one value a gauge or display photo shows, for one of the candidate points
+        ({point_id, name, unit}). Returns {point_id, value, unit} or None — never a guess:
+        an illegible dial, two plausible readings or an unknown point all give None.
+        The value is only a proposal: the person confirms it before it is used."""
+        if not candidates:
+            return None
+        listing = "\n".join(f"- {c['point_id']}: {c.get('name', '')} ({c.get('unit', '')})" for c in candidates)
+        prompt = (VALUE_PROMPT + listing + (f"\nThe technician's caption: {caption}" if caption else ""))
+        try:
+            vision = await asyncio.to_thread(self._vision)
+            if not vision.available:
+                self.error = "no vision model configured"
+                return None
+            raw = (await asyncio.to_thread(vision.describe, image, prompt, 200)).strip()
+        except Exception as e:
+            self.error = f"vision failed: {type(e).__name__}"
+            logger.error(f"[Ops] reading a value off a photo failed: {type(e).__name__}: {e}")
+            return None
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        try:
+            got = json.loads(m.group(0)) if m else None
+        except ValueError:
+            got = None
+        if not isinstance(got, dict) or not isinstance(got.get("value"), (int, float)) or isinstance(got.get("value"), bool):
+            self.error = "the photo has no single clear reading"
+            return None
+        ids = {c["point_id"] for c in candidates}
+        pid = got.get("point_id") if got.get("point_id") in ids else (next(iter(ids)) if len(ids) == 1 else None)
+        if pid is None:
+            self.error = "can't tell which gauge this is"
+            return None
+        return {"point_id": pid, "value": float(got["value"]), "unit": str(got.get("unit") or "")}
+
+
+VALUE_PROMPT = (
+    "This photo, from a building technician, shows a gauge, meter or display. Read the ONE value it shows, "
+    "with its unit as printed. If it is not clearly legible, or you would have to guess between two readings, "
+    "say so with value null. Which of these points is it (choose only if the photo makes it clear; if there is "
+    "just one, it is that one)?\n"
+    'Answer with JSON only: {"point_id": "...", "value": 4.2, "unit": "bar"} or {"value": null}\n'
+)
 
 
 def _main() -> None:

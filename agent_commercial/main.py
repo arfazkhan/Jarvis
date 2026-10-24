@@ -602,6 +602,12 @@ class OpsCopilot:
         self.state_engine.on_point_update(self.telemetry_recorder.on_point)
         self._tasks.append(self.telemetry_recorder.start())
 
+        # Readings taken by people (typed, gauge photos, rounds, logbooks): they reach
+        # ARVIS like any instrument reading, through the same ingestion path.
+        from agent_commercial.manual_readings import ManualReadingStore
+        self.manual_readings = ManualReadingStore(self.database, emit=self._on_point_update,
+                                                  state_engine=self.state_engine)
+
         # Explicit point roles declared in the site BMS config (bacnet.points /
         # modbus.registers `role:`). The commissioning spec can add more below.
         self._register_config_roles()
@@ -898,6 +904,9 @@ class OpsCopilot:
                                       gate=gate, calendar=calendar, roles=roles)
         proactive.learning = learning
         proactive.work_orders = work_orders
+        # Readings taken by people: rounds, overdue readings in the brief, typed and photo readings.
+        readings = getattr(self, "manual_readings", None)
+        proactive.readings = gateway.readings = engineer.readings = readings
         # The dashboard's jobs, from WhatsApp.
         engineer.work_orders = work_orders
         engineer.brief = proactive.brief_now

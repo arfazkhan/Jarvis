@@ -165,6 +165,16 @@ _TOOLS = [
                                                      "target": {"type": "number"},
                                                      "band": {"type": "number"}},
                     "required": ["point_ids"]}},
+    {"name": "record_reading",
+     "description": "They told you a reading of something that has no sensor (a gauge, a meter, a display, a tank "
+                    "level): record it so ARVIS can trend and learn it. point is the point id or how they named it "
+                    "('tank 1', 'CHWP-1 discharge'). If it comes back waiting for confirmation, ask them to confirm.",
+     "parameters": {"type": "object", "properties": {"point": {"type": "string"}, "value": {"type": "number"},
+                                                     "unit": {"type": "string"}},
+                    "required": ["point", "value"]}},
+    {"name": "readings",
+     "description": "The hand-taken readings ARVIS tracks: which are overdue, or the recent history of one point.",
+     "parameters": {"type": "object", "properties": {"point": {"type": "string"}}}},
 ]
 
 _NUM = re.compile(r"(?<![A-Za-z0-9_\-/.])(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?(?![A-Za-z0-9_\-])")
@@ -296,6 +306,7 @@ class OpsEngineer:
         self.last_sweep = None    # () -> the last sweep summary (any trigger)
         self.brief = None         # async (person) -> {"sent": bool, ...}
         self.send_image = None    # async (person, png, caption) -> message id | None
+        self.readings = None      # ManualReadingStore: readings taken by people
         self.media = None         # MediaStore: site photos kept as evidence
         self.sweep_guard_min = float(os.getenv("ARVIS_OPS_SWEEP_GUARD_MIN", "10"))
         # What this turn's tools surfaced that the gate would otherwise announce: (topic, title, subject).
@@ -397,7 +408,8 @@ class OpsEngineer:
             "on the equipment. Report what actually happened, with the times and minutes the tools give you.\n"
             "- You can do the dashboard's jobs here: if they answer a diagnosis question themselves, call "
             "answer_diagnosis; 'raise a job/WO for it' → raise_work_order; 'brief me' → brief_now; 'check "
-            "everything again' → run_sweep; 'show me' a trend → send_chart.\n"
+            "everything again' → run_sweep; 'show me' a trend → send_chart. If they report a reading of "
+            "something without a sensor ('tank 1 is at 60%', 'the gauge shows 4.2 bar') → record_reading.\n"
             "- A [photo] message comes with what a vision model read from it: treat that as an observation to "
             "confirm, not a measurement, and say so when it matters. A [voice note] is a transcript and may "
             "mishear names or numbers — check anything important.\n"
@@ -846,6 +858,42 @@ class OpsEngineer:
                                                  rule_id=case.rule_id if case else None,
                                                  case_id=case.id if case else None)
         return {**out, "priority": prio, "description": description[:600]}
+
+    async def _tool_record_reading(self, person: Person, point: str, value: float, unit: str = "") -> Any:
+        if person.role not in ("fm", "technician"):
+            return {"error": "readings are recorded by the facilities team"}
+        if self.readings is None:
+            return {"error": "hand-taken readings are not set up on this site"}
+        mp = await self.readings.point(point) or await self.readings.find_point(point)
+        if mp is None:
+            names = [f"{p.name} ({p.point_id})" for p in await self.readings.points()][:8]
+            return {"error": f"no tracked reading called {point!r}", "tracked": names}
+        try:
+            r = await self.readings.record(mp.point_id, float(value), unit=unit or "", method="whatsapp_text",
+                                           technician=person.number, raw_text=f"{point} {value} {unit}".strip())
+        except ValueError as e:
+            return {"error": str(e)}
+        out = {"point": mp.name, "point_id": mp.point_id, "value": r.value, "unit": r.unit, "status": r.status}
+        if r.status == "pending_confirm":
+            out["ask"] = f"confirm: {r.note} — reply yes, no or the right number"
+        if r.status == "verification":
+            out["note"] = f"an instrument also reads this point: {r.note}"
+        return out
+
+    async def _tool_readings(self, person: Person, point: str = "") -> Any:
+        if self.readings is None:
+            return {"error": "hand-taken readings are not set up on this site"}
+        if point:
+            mp = await self.readings.point(point) or await self.readings.find_point(point)
+            if mp is None:
+                return {"error": f"no tracked reading called {point!r}"}
+            hist = await self.readings.history(mp.point_id, limit=8)
+            return {"point": mp.name, "unit": mp.unit, "readings": [
+                {"value": r.value, "at": r.observed_at[:16], "by_method": r.method, "status": r.status} for r in hist]}
+        overdue = await self.readings.overdue()
+        return {"tracked": len(await self.readings.points()), "overdue": [
+            {"point": p.name, "every_h": p.expected_interval_h, "last": (last.observed_at[:16] if last else "never")}
+            for p, last in overdue[:12]]}
 
     async def _tool_brief_now(self, person: Person) -> Any:
         if self.brief is None:

@@ -18,6 +18,10 @@ plus anything held for later today; it counts as today's brief.
 
 Work orders that CAFM did not accept the first time are retried on the same clock,
 and the person who raised one is told once it is in.
+
+Reading rounds (manual_readings.py) go out on the same clock at their set times —
+one message per round listing what to read, with the last value as a cross-check —
+and readings that are overdue appear in the facilities manager's brief.
 """
 
 from __future__ import annotations
@@ -45,6 +49,7 @@ class ProactiveEngineer:
         self.roles = roles
         self.learning = None                     # Learning: learned normals are announced in the brief
         self.work_orders = None                  # WorkOrderLog: queued orders retried on this clock
+        self.readings = None                     # ManualReadingStore: reading rounds + overdue readings
         self.clock = utcnow                      # aware UTC now (injectable, like the store's clock)
         self.brief_hour = int(os.getenv("ARVIS_OPS_BRIEF_HOUR", "7"))
         self.brief_latest = int(os.getenv("ARVIS_OPS_BRIEF_LATEST", "11"))
@@ -78,6 +83,15 @@ class ProactiveEngineer:
         """Compose and send one person's brief; only once it is delivered are the held
         items marked sent and the day's brief marked told."""
         facts = f"{self.calendar.describe(now)}\n{summary}"
+        if self.readings is not None and person.role == "fm":
+            try:
+                overdue = await self.readings.overdue()
+            except Exception as e:
+                logger.warning(f"[Ops] overdue readings unavailable: {e}")
+                overdue = []
+            if overdue:
+                facts += "\nHand-taken readings overdue: " + "; ".join(
+                    f"{p.name} (last {last.observed_at[:16] if last else 'never'})" for p, last in overdue[:8])
         if held:
             facts += "\nHeld for this brief:\n" + "\n".join(f"- {i.title}: {i.facts}" for i in held)
         if normals:
@@ -155,6 +169,38 @@ class ProactiveEngineer:
         return {"sent": sent, "held_items_included": len(held) if sent else 0,
                 **({} if sent else {"error": "the brief could not be delivered"})}
 
+    async def send_rounds(self, now: Optional[datetime] = None) -> int:
+        """Reading rounds whose time has come: one message each, to the person or the group."""
+        if self.readings is None:
+            return 0
+        local = self.calendar.local(now or self.clock())
+        sent = 0
+        for r in await self.readings.rounds_due(local):
+            pts = [p for p in [await self.readings.point(pid) for pid in r["point_ids"]] if p]
+            if not pts:
+                continue
+            lines, lasts = [], []
+            for i, p in enumerate(pts, 1):
+                last = await self.readings.last(p.point_id)
+                lasts.append(last)
+                lines.append(f"{i}. {p.name}" + (f" ({p.unit})" if p.unit else "")
+                             + (f" — last {last.value:g}" if last else ""))
+            example = f"{pts[0].name.lower()} {lasts[0].value:g}" if lasts[0] else f"{pts[0].name.lower()} 42"
+            text = (f"{r['name']} — time for these readings:\n" + "\n".join(lines)
+                    + f"\nReply like “{example}”, one per line, or send a photo of each gauge.")
+            if r["recipient"] == "group":
+                msg = await self.gateway.send_group(text, kind="round")
+            else:
+                person = self.people.get(r["recipient"])
+                if person is None:
+                    logger.warning(f"[Ops] round {r['name']!r}: {r['recipient']} is not on the roster")
+                    continue
+                msg = await self.gateway.send(person, text, kind="round")
+            if msg is not None:
+                await self.readings.mark_round_sent(r["name"], r["slot"])
+                sent += 1
+        return sent
+
     async def retry_work_orders(self) -> int:
         if self.work_orders is None:
             return 0
@@ -176,6 +222,7 @@ class ProactiveEngineer:
                     if self.brief_hour <= hour < self.brief_latest:
                         await self.morning_brief()
                     await self.retry_work_orders()
+                    await self.send_rounds()
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:

@@ -596,9 +596,73 @@ def create_api(
         return await ops.run_fdd_sweep(hours=hours)
 
     # ═══════════════════════════════════════════════════════════════════════
+    # READINGS TAKEN BY PEOPLE (manual_readings.py)
+    # ═══════════════════════════════════════════════════════════════════════
+    def _readings():
+        ops = getattr(app.state, "ops_copilot", None)
+        store = getattr(ops, "manual_readings", None)
+        if store is None:
+            raise HTTPException(503, "manual readings are not running")
+        return store
+
+    @app.get("/api/v1/readings/points")
+    async def list_manual_points(current_user: User = Depends(require_role(["admin", "operator", "viewer"]))):
+        """The points read by people, and which are overdue."""
+        store = _readings()
+        overdue = {p.point_id: (last.observed_at if last else None) for p, last in await store.overdue()}
+        return {"points": [{**p.__dict__, "overdue": p.point_id in overdue, "last_reading_at": overdue.get(p.point_id)}
+                           for p in await store.points()]}
+
+    @app.post("/api/v1/points/{point_id}/readings")
+    async def post_manual_reading(point_id: str, body: Dict[str, Any], request: _Request,
+                                  current_user: User = Depends(require_role(["admin", "operator"]))):
+        """One reading: {value, unit?, observed_at?, technician?}. Send an Idempotency-Key header
+        so a retried request is not counted twice."""
+        from datetime import datetime as _dt
+        store = _readings()
+        if not isinstance(body.get("value"), (int, float)) or isinstance(body.get("value"), bool):
+            raise HTTPException(400, "value must be a number")
+        try:
+            obs = _dt.fromisoformat(body["observed_at"]) if body.get("observed_at") else None
+            if obs is not None and obs.tzinfo is not None:
+                obs = obs.astimezone().replace(tzinfo=None)          # stored on this host's clock
+            r = await store.record(point_id, float(body["value"]), unit=str(body.get("unit") or ""), method="api",
+                                   technician=body.get("technician") or f"api:{current_user.username}",
+                                   observed_at=obs, idempotency_key=request.headers.get("idempotency-key"))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return r.to_dict()
+
+    @app.post("/api/v1/readings/import")
+    async def import_logbook(file: UploadFile = File(...),
+                             current_user: User = Depends(require_role(["admin", "operator"]))):
+        """A logbook / log-sheet CSV: point_id,value[,unit][,observed_at][,technician].
+        Readings that look wrong are kept waiting, not used; the response lists them."""
+        import csv as _csv
+        import io as _io
+        from datetime import datetime as _dt
+        store = _readings()
+        text = (await file.read()).decode("utf-8-sig", errors="replace")
+        result = {"recorded": 0, "waiting": [], "errors": []}
+        for i, row in enumerate(_csv.DictReader(_io.StringIO(text)), start=2):
+            try:
+                obs = _dt.fromisoformat(row["observed_at"]) if row.get("observed_at") else None
+                r = await store.record(row["point_id"].strip(), float(row["value"]), unit=(row.get("unit") or "").strip(),
+                                       method="logbook_csv", technician=(row.get("technician") or "").strip() or None,
+                                       observed_at=obs.replace(tzinfo=None) if obs else None,
+                                       idempotency_key=f"logbook:{row['point_id'].strip()}:{row.get('observed_at')}:{row['value']}")
+                if r.status == "pending_confirm":
+                    result["waiting"].append({"line": i, "point_id": r.point_id, "value": r.value, "why": r.note})
+                else:
+                    result["recorded"] += 1
+            except (KeyError, ValueError) as e:
+                result["errors"].append({"line": i, "error": str(e)})
+        return result
+
+    # ═══════════════════════════════════════════════════════════════════════
     # DASHBOARD ENDPOINTS
     # ═══════════════════════════════════════════════════════════════════════
-    
+
     @app.get("/api/v1/dashboard/overview", response_model=DashboardOverview)
     async def get_dashboard_overview():
         """Get dashboard summary metrics"""

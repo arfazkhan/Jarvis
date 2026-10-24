@@ -200,3 +200,8 @@ register_source("bacnet", build=_bacnet_build, points_config=lambda cfg: cfg.get
 register_source("modbus", build=_modbus_build, points_config=lambda cfg: cfg, point_entries=_modbus_entries)
 register_source("opcua", build=_opcua_build, points_config=lambda cfg: cfg,
                 point_entries=lambda cfg: list(cfg.get("points") or []))
+
+
+# ── readings taken by people (manual_readings.py) ────────────────────────────
+from agent_commercial import manual_readings as _manual  # noqa: E402  (registers the `manual` kind)
+_manual._register()

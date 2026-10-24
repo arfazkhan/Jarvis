@@ -8,6 +8,10 @@ Inbound WhatsApp → the right handler; outbound → paced like a person.
     text (so a spoken "yes" answers a check). Photos are kept as evidence, read by
     the vision model, and go to the engineer with what they show. Videos and files:
     ARVIS says it can't use them yet.
+  * Readings taken by people (manual_readings.py): a reply to a reading round fills
+    in the readings it names; a gauge photo of a tracked point becomes a proposed
+    reading that the person confirms; a doubtful reading waits for "yes", "no" or
+    the right number. All deterministic — no language model in the loop.
   * A short YES / NO / NOT SURE from someone who owes ARVIS a field check is that
     check's answer (deterministic path). Everything else goes to the engineer.
   * The ops group (ARVIS_OPS_GROUP): ARVIS reads along quietly (that is context) and
@@ -62,6 +66,7 @@ class OpsGateway:
         self.media_store = None                # MediaStore: photos / voice notes kept as evidence
         self.transcriber = None                # LocalTranscriber (voice notes, on the site box)
         self.photos = None                     # PhotoReader (vision model)
+        self.readings = None                   # ManualReadingStore (readings taken by people)
         self._group_turn: Dict[str, str] = {}  # person → group, while answering them in the group
         self._locks: Dict[str, asyncio.Lock] = {}
         self._ignored: set = set()
@@ -166,6 +171,10 @@ class OpsGateway:
             reply = await self._acknowledgement(person, text, reply_to)
             if reply is not None:
                 await self._observe(person, text, reply_to, ack=True)
+                return reply
+
+            reply = await self._reading_reply(person, text)
+            if reply is not None:
                 return reply
 
             reply = await self._fact_confirmation(person, text)
@@ -283,6 +292,9 @@ class OpsGateway:
                                                        message_id=m.message_id)
             except Exception as e:
                 logger.error(f"[Ops] photo not kept: {e}")
+        question = await self._photo_reading(person, image, caption, equipment, media_id, to)
+        if question is not None:
+            return None, "", question
         seen = await self.photos.read(image, caption) if self.photos is not None else None
         if seen and media_id is not None:
             await self.media_store.annotate(media_id, description=seen)
@@ -297,6 +309,106 @@ class OpsGateway:
             text += f"\n(I could not look at the photo itself: {why}." + (" It is kept as evidence.)" if media_id
                                                                           else ")")
         return text, text, None
+
+    # ── readings taken by people ─────────────────────────────────────────
+    async def _reading_reply(self, person: Person, text: str) -> Optional[str]:
+        """A yes / no / number for a reading that was waiting, or a reply to a reading round."""
+        if self.readings is None:
+            return None
+        from agent_commercial.field_checks import parse_answer
+        from agent_commercial.manual_readings import Parsed, convert, parse_numbers, parse_numeric
+        pend = await self.readings.pending_for(person.number)
+        if pend is not None and len(text) <= _CHECK_REPLY_MAX_CHARS:
+            num = parse_numeric(text)
+            answer = None if isinstance(num, Parsed) else parse_answer(text)
+            mp = await self.readings.point(pend.point_id)
+            name = mp.name if mp else pend.point_id
+            reply = None
+            if isinstance(num, Parsed):
+                v = convert(num.value, num.unit, pend.unit)
+                if v is None:
+                    reply = f"{name} is tracked in {pend.unit} — could you send it in {pend.unit}?"
+                else:
+                    await self.readings.confirm(pend.id, value=v, by=person.name)
+                    reply = f"Saved: {name} {v:g} {pend.unit}.".replace("  ", " ")
+            elif answer == "yes":
+                await self.readings.confirm(pend.id, by=person.name)
+                reply = f"Saved: {name} {pend.value:g} {pend.unit}.".replace("  ", " ")
+            elif answer in ("no", "unsure"):
+                await self.readings.reject(pend.id)
+                reply = f"OK, I won't use that reading of {name}. Send the right number when you have it."
+            if reply is not None:
+                await self.store.append(person.number, "person", text, kind="reading")
+                await self.send(person, reply, kind="reading")
+                return reply
+        due = await self.readings.open_round_points(person.number)
+        if not due:
+            return None
+        found = parse_numbers(text)
+        if not found:
+            return None
+        got, doubtful = [], []
+        for item in found:
+            mp = due[0] if len(found) == 1 and len(due) == 1 and not item.label \
+                else await self.readings.find_point(item.label, candidates=due)
+            if mp is None:
+                continue
+            try:
+                r = await self.readings.record(mp.point_id, item.value, unit=item.unit, method="round",
+                                               technician=person.number, raw_text=text)
+            except ValueError as e:
+                doubtful.append(str(e))
+                continue
+            (got if r.status in ("confirmed", "verification") else doubtful).append(
+                f"{mp.name} {r.value:g} {r.unit}".strip() if r.status != "pending_confirm"
+                else f"{mp.name} {r.value:g} {r.unit} — {r.note}; is that right?")
+            due = [d for d in due if d.point_id != mp.point_id]
+        if not got and not doubtful:
+            return None
+        lines = []
+        if got:
+            lines.append("Got it: " + "; ".join(got) + ".")
+        lines += doubtful
+        lines.append(("Still need: " + ", ".join(d.name for d in due) + ".") if due else "That's the round done — thanks.")
+        reply = "\n".join(lines)
+        await self.store.append(person.number, "person", text, kind="reading")
+        await self.send(person, reply, kind="reading")
+        return reply
+
+    async def _photo_reading(self, person: Person, image: bytes, caption: str, equipment: Optional[str],
+                             media_id: Optional[int], to: str) -> Optional[str]:
+        """A gauge photo of a tracked point: read its value, and ask the person to confirm it."""
+        if self.readings is None or self.photos is None or not hasattr(self.photos, "read_value"):
+            return None
+        cands = await self.readings.open_round_points(person.number)
+        if not cands and equipment:
+            cands = await self.readings.points(equipment)
+        cands = [p for p in cands if p.capture in ("photo", "either")]
+        if not cands:
+            return None
+        got = await self.photos.read_value(image, [{"point_id": p.point_id, "name": p.name, "unit": p.unit}
+                                                   for p in cands], caption)
+        if got is None:
+            return None
+        try:
+            r = await self.readings.record(got["point_id"], got["value"], unit=got["unit"], method="photo_ocr",
+                                           technician=person.number, raw_text=caption or None,
+                                           media_ref=f"ops_media:{media_id}" if media_id is not None else None)
+        except ValueError as e:
+            logger.info(f"[Ops] photo reading not used: {e}")
+            return None
+        name = next(p.name for p in cands if p.point_id == r.point_id)
+        if r.status == "verification":
+            question = (f"The photo reads {r.value:g} {r.unit} for {name}; {r.note}. "
+                        "Noted as a check on that sensor.").replace("  ", " ")
+        else:
+            question = (f"From the photo I read {r.value:g} {r.unit} for {name} — is that right? "
+                        "Reply yes, no, or the correct number.").replace("  ", " ")
+        label = f"[photo #{media_id} of {equipment or r.point_id}] {caption}".strip()
+        await self.store.append(to, "person", label if to == person.number else f"{person.first_name}: {label}",
+                                kind="reading")
+        await self._deliver(to, question, kind="reading")
+        return question
 
     # ── the ops group ─────────────────────────────────────────────────────
     async def _addressed(self, m: InboundMessage) -> Tuple[bool, Optional[Dict[str, Any]]]:

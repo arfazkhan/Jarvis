@@ -31,6 +31,7 @@ logger = logging.getLogger("arvis.monitoring.health")
 
 _ADAPTERS = ("bacnet_adapter", "modbus_adapter", "opcua_adapter")
 _LIVE_MODES = ("bacnet", "modbus", "opcua", "multi")
+_NOT_WATCHED = ("manual", "import", "commission")
 
 
 def _source_stats(ops: Any) -> List[Dict[str, Any]]:
@@ -74,12 +75,18 @@ def assess_monitoring(ops: Any, fresh_minutes: float = 15.0, now: Optional[datet
     points = getattr(state, "_points", {}) or {}
     window = timedelta(minutes=fresh_minutes)
     fresh = 0
+    total = 0
     for p in list(points.values()):
+        if str(getattr(p, "source", "") or "").lower() in _NOT_WATCHED:
+            continue                             # read by people or imported: never "fresh" by design
+        total += 1
         ts = _aware(getattr(p, "timestamp", None))
         if ts is not None and now - ts <= window:
             fresh += 1
     adapters: List[Dict[str, Any]] = []
     for st in _source_stats(ops):
+        if st.get("watch") is False:
+            continue                             # e.g. manual readings: people don't go "offline"
         adapters.append({
             "adapter": st["kind"], "id": st["id"], "required": bool(st.get("required", True)),
             "connected": bool(st.get("is_connected", st.get("connected", False))),
@@ -87,7 +94,6 @@ def assess_monitoring(ops: Any, fresh_minutes: float = 15.0, now: Optional[datet
             "stale_points": len(st.get("stale_points") or []),
             "devices_missing": list(st.get("devices_missing") or st.get("missing_devices") or []),
         })
-    total = len(points)
     return {"total_points": total, "fresh_points": fresh, "fresh_minutes": fresh_minutes,
             "fresh_ratio": round(fresh / total, 3) if total else 0.0, "adapters": adapters}
 
