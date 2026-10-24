@@ -9,7 +9,7 @@ This is the "single source of truth" for current BMS state.
 """
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Any, Callable
 from collections import defaultdict
 import logging
@@ -467,25 +467,21 @@ class BMSStateEngine:
         async with self._lock:
             point = self._points.get(point_id)
             if point:
-                # Determine simulated reference time from max timestamp of points
-                sim_now = datetime.now()
-                if self._points:
-                    valid_ts = []
-                    for p in self._points.values():
-                        ts = getattr(p, 'timestamp', None)
-                        if ts:
-                            if ts.tzinfo is not None:
-                                ts = ts.replace(tzinfo=None)
-                            valid_ts.append(ts)
-                    if valid_ts:
-                        sim_now = max(valid_ts)
-                cutoff = sim_now.timestamp() - (minutes * 60)
-                
+                # Reference "now" = latest point timestamp (simulated time when
+                # replaying), else the wall clock. Live adapters stamp UTC-aware
+                # and the simulator stamps naive local, so compare aware instants:
+                # stripping tzinfo would read UTC wall-time as local and shift the
+                # window by the host's UTC offset.
+                stamps = [_as_utc(getattr(p, "timestamp", None)) for p in self._points.values()]
+                stamps = [s for s in stamps if s is not None]
+                sim_now = max(stamps) if stamps else datetime.now(timezone.utc)
+                cutoff = sim_now - timedelta(minutes=minutes)
+
                 # Point history contains (dt_object, value_float)
                 result = []
                 for t, v in point.history:
-                    t_naive = t.replace(tzinfo=None) if t.tzinfo is not None else t
-                    if t_naive.timestamp() > cutoff:
+                    t_aware = _as_utc(t)
+                    if t_aware is not None and t_aware > cutoff:
                         result.append((t, v))
                 if result:
                     return result
