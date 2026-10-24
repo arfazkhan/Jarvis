@@ -205,3 +205,24 @@ register_source("opcua", build=_opcua_build, points_config=lambda cfg: cfg,
 # ── readings taken by people (manual_readings.py) ────────────────────────────
 from agent_commercial import manual_readings as _manual  # noqa: E402  (registers the `manual` kind)
 _manual._register()
+
+
+# ── IoT / IT-room protocols (imported only when a site uses them) ────────────
+def _lazy(kind: str, module: str, default_poll: float = 30.0) -> None:
+    """Register a kind whose module (and its package: aiomqtt, pysnmp) loads on first use."""
+    def build(cfg: Dict[str, Any]) -> Any:
+        import importlib
+        mod = importlib.import_module(module)
+        mod._register()                     # replaces this lazy entry with the real one
+        return KINDS[kind].build(cfg)
+
+    def entries(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+        import importlib
+        mod = importlib.import_module(module)
+        mod._register()
+        return KINDS[kind].point_entries(cfg)
+    register_source(kind, build=build, points_config=lambda cfg: cfg, point_entries=entries, default_poll=default_poll)
+
+
+_lazy("mqtt", "agent_commercial.sources.mqtt_source")
+_lazy("snmp", "agent_commercial.sources.snmp_source", default_poll=60.0)

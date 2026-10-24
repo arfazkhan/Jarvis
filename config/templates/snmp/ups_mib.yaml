@@ -1,0 +1,15 @@
+# RFC 1628 UPS-MIB (upsMIB 1.3.6.1.2.1.33): what almost every UPS network card answers.
+# Each entry becomes <equipment_id>/<suffix>. Single-phase input/output lines (.1);
+# add .2/.3 entries by hand for a three-phase UPS.
+name: UPS (RFC 1628 UPS-MIB)
+oids:
+  - {suffix: BATT_STATUS,  oid: 1.3.6.1.2.1.33.1.2.1.0, name: Battery status (1 unknown, 2 normal, 3 low, 4 depleted)}
+  - {suffix: ON_BATT_S,    oid: 1.3.6.1.2.1.33.1.2.2.0, unit: s, name: Seconds on battery}
+  - {suffix: MIN_LEFT,     oid: 1.3.6.1.2.1.33.1.2.3.0, unit: min, name: Estimated minutes remaining}
+  - {suffix: BATT_PCT,     oid: 1.3.6.1.2.1.33.1.2.4.0, unit: "%", role: battery-charge, name: Battery charge remaining}
+  - {suffix: BATT_V,       oid: 1.3.6.1.2.1.33.1.2.5.0, unit: V, scale: 0.1, role: battery-voltage, name: Battery voltage}
+  - {suffix: IN_V,         oid: 1.3.6.1.2.1.33.1.3.3.1.3.1, unit: V, role: supply-voltage, name: Input voltage}
+  - {suffix: OUT_V,        oid: 1.3.6.1.2.1.33.1.4.4.1.2.1, unit: V, name: Output voltage}
+  - {suffix: LOAD_PCT,     oid: 1.3.6.1.2.1.33.1.4.4.1.5.1, unit: "%", role: load-percent, name: Output load}
+  - {suffix: ALARMS,       oid: 1.3.6.1.2.1.33.1.6.1.0, name: Alarms present (count),
+     alarm_when: {op: ">", value: 0, severity: high, message: "UPS reports an alarm"}}

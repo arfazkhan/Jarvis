@@ -33,6 +33,8 @@ WRITE_APIS = {
     "write_value", "write_values", "set_value", "write_attribute", "write_attributes",
     "write_params", "WriteRequest", "WriteParameters", "WriteValue", "set_writable",
     "call_method", "CallRequest", "CallMethodRequest",
+    # SNMP SET (pysnmp), KNX group writes (xknx), M-Bus SND_UD (data to a meter)
+    "set_cmd", "setCmd", "SetRequestPDU", "group_value_write", "GroupValueWrite", "snd_ud", "SND_UD",
 }
 
 
@@ -66,6 +68,15 @@ def test_no_bms_write_calls_anywhere_in_runtime_code():
                     if alias.name.split(".")[-1] in WRITE_APIS:
                         offenders.append(f"{path.relative_to(ROOT)}:{node.lineno} imports {alias.name}")
     assert not offenders, "ARVIS must stay read-only towards the BMS:\n" + "\n".join(offenders)
+
+
+def test_listening_sources_never_send_anything():
+    """MQTT is subscribe-only: the source must not publish (the bus's own `publish`
+    elsewhere is ARVIS-internal; on the MQTT client it would be a write to the site)."""
+    path = ROOT / "agent_commercial" / "sources" / "mqtt_source.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    sent = [n.lineno for n in ast.walk(tree) if isinstance(n, ast.Attribute) and n.attr in ("publish", "will_set")]
+    assert not sent, f"mqtt_source.py publishes at lines {sent}"
 
 
 def test_the_scan_actually_catches_a_write(tmp_path):

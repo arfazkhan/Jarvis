@@ -9,7 +9,7 @@ ARVIS is **read-only** on every rung: it never writes to a building system.
 | 1. The BMS | Everything the BMS already sees (HVAC, often lifts and fire panels through their gateways) | BACnet/IP, Modbus TCP, OPC UA | [bms.md](bms.md) |
 | 2. Serial devices | Meters, gensets, drives and controllers with RS-485 and no Ethernet | Modbus RTU, and BACnet MS/TP through a router | [bms.md](bms.md) |
 | 3. Dumb equipment | Anything with a relay contact, a 4–20 mA transmitter or a pulse output | A Modbus I/O module, about $100–200 | [io_modules.md](io_modules.md) |
-| 4. IoT and retrofit sensors | Current clamps, vibration, leak, air quality, LoRaWAN | MQTT (local broker) | *(Phase 4)* |
+| 4. IoT, retrofit sensors, IT room | Current clamps, vibration, leak, air quality, LoRaWAN; UPS, PDUs, CRAC | MQTT (local broker), SNMP | [iot.md](iot.md) |
 | 5. People | Gauges, mechanical meters, anything read by eye | WhatsApp readings, gauge photos, reading rounds, logbooks | [people.md](people.md) |
 | 6. Events | Access control, people counters, room bookings | Webhook, CSV, calendar files | *(Phase 5)* |
 | 7. History and vendors | Trend exports, utility bills, vendor cloud APIs | Import, REST | *(Phase 6)* |

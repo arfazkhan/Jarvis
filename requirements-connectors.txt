@@ -1,0 +1,7 @@
+# Optional data-source connectors — install only what a site uses. Each is
+# imported lazily by its source kind (agent_commercial/sources/registry.py), so a
+# site without MQTT never needs aiomqtt, etc.
+aiomqtt>=2.0,<3            # kind: mqtt   — IoT / retrofit sensors, LoRaWAN network servers
+pysnmp>=7.1,<8             # kind: snmp   — UPS, PDUs, CRAC (GET only)
+# test-only: an in-process MQTT broker for tests/test_mqtt_snmp.py
+amqtt>=0.11 ; extra == "test"

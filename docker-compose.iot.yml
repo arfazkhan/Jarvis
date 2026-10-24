@@ -1,0 +1,37 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# ARVIS — local MQTT broker for IoT / retrofit / LoRaWAN sensors (Mosquitto)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Used together with the site file:
+#   docker compose -f docker-compose.site.yml -f docker-compose.iot.yml up -d
+#
+# Sensors, gateways and LoRaWAN network servers publish here; ARVIS subscribes
+# (a `kind: mqtt` source with host 127.0.0.1). Nothing is anonymous: create the
+# password file once —
+#   docker run --rm -v $PWD/site/mosquitto:/m eclipse-mosquitto:2.0.20 \
+#     mosquitto_passwd -c -b /m/passwords arvis "$ARVIS_MQTT_PASSWORD"
+#   (and one user per sensor gateway, without -c)
+# then set ARVIS_MQTT_USERNAME / ARVIS_MQTT_PASSWORD for ARVIS's own login.
+#
+# ARVIS_MQTT_BIND_IP: the address sensors reach the broker on (the IoT VLAN side of
+# this box). Open 1883 from that VLAN only in deploy/site/firewall.sh; everything
+# else stays closed. A site that already runs a broker skips this file and points
+# the mqtt source at it instead.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2.0.20
+    container_name: arvis-mosquitto
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - ARVIS_MQTT_BIND_IP=${ARVIS_MQTT_BIND_IP:?set ARVIS_MQTT_BIND_IP to the IoT-side address of this box}
+    command: >
+      sh -c 'printf "listener 1883 127.0.0.1\nlistener 1883 %s\nallow_anonymous false\npassword_file /mosquitto/config/passwords\npersistence true\npersistence_location /mosquitto/data/\n" "$$ARVIS_MQTT_BIND_IP" > /tmp/mosquitto.conf && exec mosquitto -c /tmp/mosquitto.conf'
+    volumes:
+      - ./site/mosquitto/passwords:/mosquitto/config/passwords:ro
+      - mosquitto-data:/mosquitto/data
+
+volumes:
+  mosquitto-data:
+    driver: local
