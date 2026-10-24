@@ -157,6 +157,7 @@ def test_roles_come_from_every_sources_points():
     ns = SimpleNamespace(state_engine=BMSStateEngine(), bacnet_config={}, modbus_config={}, opcua_config={},
                          sources_config=[{"id": "m", "kind": "scripted",
                                           "points": [{"point_id": "AHU-09/SAT", "value": 1, "role": "supply-air-temp", "unit": "°C"}]}])
+    ns._config_point_entries = lambda: OpsCopilot._config_point_entries(ns)
     assert OpsCopilot._register_config_roles(ns) == 1
 
 

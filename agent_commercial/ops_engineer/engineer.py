@@ -172,6 +172,11 @@ _TOOLS = [
      "parameters": {"type": "object", "properties": {"point": {"type": "string"}, "value": {"type": "number"},
                                                      "unit": {"type": "string"}},
                     "required": ["point", "value"]}},
+    {"name": "coverage",
+     "description": "How much of the building ARVIS can see: its level (Full / Partial / Limited / Manual), what "
+                    "is connected, read by people, or missing per equipment, and what to connect next. For 'what "
+                    "can't you see?', 'what should we add?', 'how connected is the building?'.",
+     "parameters": {"type": "object", "properties": {"equipment_id": {"type": "string"}}}},
     {"name": "readings",
      "description": "The hand-taken readings ARVIS tracks: which are overdue, or the recent history of one point.",
      "parameters": {"type": "object", "properties": {"point": {"type": "string"}}}},
@@ -307,6 +312,7 @@ class OpsEngineer:
         self.brief = None         # async (person) -> {"sent": bool, ...}
         self.send_image = None    # async (person, png, caption) -> message id | None
         self.readings = None      # ManualReadingStore: readings taken by people
+        self.coverage = None      # async () -> coverage.assess(...) report
         self.media = None         # MediaStore: site photos kept as evidence
         self.sweep_guard_min = float(os.getenv("ARVIS_OPS_SWEEP_GUARD_MIN", "10"))
         # What this turn's tools surfaced that the gate would otherwise announce: (topic, title, subject).
@@ -879,6 +885,18 @@ class OpsEngineer:
         if r.status == "verification":
             out["note"] = f"an instrument also reads this point: {r.note}"
         return out
+
+    async def _tool_coverage(self, person: Person, equipment_id: str = "") -> Any:
+        if self.coverage is None:
+            return {"error": "coverage is not available"}
+        rep = await self.coverage()
+        if equipment_id:
+            eq = next((e for e in rep["equipment"] if e["equipment_id"].lower() == equipment_id.lower()), None)
+            return eq or {"error": f"{equipment_id} is not in the equipment list"}
+        return {"level": rep["level"], "instrumented": f"{rep['instrumented']:.0%}", "covered": f"{rep['covered']:.0%}",
+                "needs": rep["totals"], "next": [{k: n[k] for k in ("equipment_id", "label", "role", "how", "advice",
+                                                                      "unlocks_fault_checks")} for n in rep["next"][:5]],
+                "unrecognised_equipment": rep["unrecognised_equipment"][:10]}
 
     async def _tool_readings(self, person: Person, point: str = "") -> Any:
         if self.readings is None:

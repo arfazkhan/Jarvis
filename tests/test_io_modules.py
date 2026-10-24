@@ -105,4 +105,5 @@ def test_io_module_roles_reach_the_role_registry():
                          modbus_config={"io_modules": [{"template": "analog_4_20ma", "channels": {
                              0: {"point_id": "CHWP-1/DP", "role": "chw-dp", "unit": "kPa",
                                  "range": [0, 250]}}}]})
+    ns._config_point_entries = lambda: OpsCopilot._config_point_entries(ns)
     assert OpsCopilot._register_config_roles(ns) == 1

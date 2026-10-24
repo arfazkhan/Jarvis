@@ -20,3 +20,5 @@ Some systems, such as lifts, VRF, solar or access control, only offer data throu
 
 - **By default**, staff report on WhatsApp ("lift 2 is down").
 - **When the vendor offers an API**, ARVIS polls it. The vendor's host must be enabled for that site in `ARVIS_EGRESS_ALLOW`, signed off by the site and logged.
+
+Once connected, see [coverage.md](coverage.md) for what ARVIS can see, what to add next, and how any point can raise an alarm.

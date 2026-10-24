@@ -44,6 +44,11 @@ class Quantity(str, Enum):
     WATERFLOW = "waterflow"          # L/s
     CO2 = "co2"                      # ppm
     HUMIDITY = "humidity"            # %RH
+    VOLTAGE = "voltage"              # V
+    CURRENT = "current"              # A
+    FREQUENCY = "frequency"          # Hz
+    DURATION = "duration"            # h
+    COUNT = "count"                  # people, trips, ... (no unit)
 
 
 CANONICAL_UNIT = {
@@ -51,6 +56,8 @@ CANONICAL_UNIT = {
     Quantity.BINARY: "bool", Quantity.POWER: "kW", Quantity.THERMAL_POWER: "kW",
     Quantity.ENERGY: "kWh", Quantity.VOLUME: "m³", Quantity.AIRFLOW: "m³/s",
     Quantity.WATERFLOW: "L/s", Quantity.CO2: "ppm", Quantity.HUMIDITY: "%RH",
+    Quantity.VOLTAGE: "V", Quantity.CURRENT: "A", Quantity.FREQUENCY: "Hz", Quantity.DURATION: "h",
+    Quantity.COUNT: "",
 }
 
 
@@ -110,6 +117,30 @@ class PointRole(str, Enum):
     ELECTRIC_POWER = "electric-power"
     ELECTRIC_ENERGY = "electric-energy"
     WATER_VOLUME = "water-volume"
+    # ── Any equipment: status, levels, electrical (lifts, gensets, UPS, tanks, pumps, panels) ──
+    RUN_STATUS = "run-status"                  # running, 0/1
+    FAULT_STATUS = "fault-status"              # tripped / in fault, 0/1
+    IN_SERVICE = "in-service"                  # available for use (lifts, escalators), 0/1
+    COMMON_ALARM = "common-alarm"              # a panel's or controller's general alarm, 0/1
+    HIGH_LEVEL_ALARM = "high-level-alarm"      # float switch / high-level, 0/1
+    DOOR_STATUS = "door-status"                # open, 0/1
+    AUTO_MODE = "auto-mode"                    # selector in AUTO (e.g. fire pumps), 0/1
+    TANK_LEVEL = "tank-level"
+    FUEL_LEVEL = "fuel-level"
+    BATTERY_CHARGE = "battery-charge"
+    LOAD_PERCENT = "load-percent"
+    GAS_LEVEL = "gas-level"                    # %LEL
+    DISCHARGE_PRESSURE = "discharge-pressure"
+    SUCTION_PRESSURE = "suction-pressure"
+    WATER_PRESSURE = "water-pressure"
+    BATTERY_VOLTAGE = "battery-voltage"
+    SUPPLY_VOLTAGE = "supply-voltage"
+    ELECTRIC_CURRENT = "electric-current"
+    SUPPLY_FREQUENCY = "supply-frequency"
+    RUN_HOURS = "run-hours"
+    EQUIPMENT_TEMP = "equipment-temp"          # winding, cabinet, cold-room air, ...
+    WATER_FLOW = "water-flow"
+    OCCUPANCY_COUNT = "occupancy-count"        # people in a zone
 
 
 _Q = Quantity
@@ -146,6 +177,17 @@ ROLE_QUANTITY: Dict[PointRole, Quantity] = {
     PointRole.DC_PRIMARY_FLOW: _Q.WATERFLOW, PointRole.THERMAL_POWER: _Q.THERMAL_POWER,
     PointRole.ELECTRIC_POWER: _Q.POWER, PointRole.ELECTRIC_ENERGY: _Q.ENERGY,
     PointRole.WATER_VOLUME: _Q.VOLUME,
+    PointRole.RUN_STATUS: _Q.BINARY, PointRole.FAULT_STATUS: _Q.BINARY, PointRole.IN_SERVICE: _Q.BINARY,
+    PointRole.COMMON_ALARM: _Q.BINARY, PointRole.HIGH_LEVEL_ALARM: _Q.BINARY, PointRole.DOOR_STATUS: _Q.BINARY,
+    PointRole.AUTO_MODE: _Q.BINARY,
+    PointRole.TANK_LEVEL: _Q.FRACTION, PointRole.FUEL_LEVEL: _Q.FRACTION, PointRole.BATTERY_CHARGE: _Q.FRACTION,
+    PointRole.LOAD_PERCENT: _Q.FRACTION, PointRole.GAS_LEVEL: _Q.FRACTION,
+    PointRole.DISCHARGE_PRESSURE: _Q.PRESSURE, PointRole.SUCTION_PRESSURE: _Q.PRESSURE,
+    PointRole.WATER_PRESSURE: _Q.PRESSURE,
+    PointRole.BATTERY_VOLTAGE: _Q.VOLTAGE, PointRole.SUPPLY_VOLTAGE: _Q.VOLTAGE,
+    PointRole.ELECTRIC_CURRENT: _Q.CURRENT, PointRole.SUPPLY_FREQUENCY: _Q.FREQUENCY,
+    PointRole.RUN_HOURS: _Q.DURATION, PointRole.EQUIPMENT_TEMP: _Q.TEMPERATURE,
+    PointRole.WATER_FLOW: _Q.WATERFLOW, PointRole.OCCUPANCY_COUNT: _Q.COUNT,
 }
 assert set(ROLE_QUANTITY) == set(PointRole), "every role needs a quantity"
 
@@ -170,17 +212,31 @@ _KIND_BY_TYPE = {
     "air_handling_unit": "ahu", "variable_air_volume": "vav", "fan_coil_unit": "fcu",
     "chiller": "chiller", "pump": "pump", "cooling_tower": "cooling_tower",
     "electric_meter": "meter", "water_meter": "meter", "gas_meter": "meter",
+    # the rest of the building
+    "lift": "lift", "escalator": "escalator", "generator": "generator", "ups": "ups",
+    "transformer": "transformer", "ats": "ats", "water_tank": "water_tank", "booster_pump": "booster_pump",
+    "sump_pump": "sump_pump", "fire_pump": "fire_pump", "sewage_treatment_plant": "stp", "cold_room": "cold_room",
+    "crac": "crac", "ev_charger": "ev_charger", "solar_inverter": "solar_inverter", "fire_panel": "fire_panel",
+    "gas_detection": "gas_detection", "access_door": "access_door", "people_counter": "people_counter",
 }
 _KIND_BY_PREFIX = (
     ("FAHU", "ahu"), ("MAU", "ahu"), ("AHU", "ahu"), ("PAU", "ahu"), ("VAV", "vav"),
     ("FCU", "fcu"), ("PCHWP", "pump"), ("SCHWP", "pump"), ("CHWP", "pump"),
     ("CDWP", "pump"), ("PUMP", "pump"), ("ETS", "plant"), ("CHW", "plant"),
     ("CH", "chiller"), ("CT", "cooling_tower"), ("METER", "meter"), ("MTR", "meter"),
+    ("LIFT", "lift"), ("ELV", "lift"), ("ESC", "escalator"), ("GEN", "generator"), ("DG", "generator"),
+    ("UPS", "ups"), ("TX", "transformer"), ("TRF", "transformer"), ("ATS", "ats"), ("TANK", "water_tank"),
+    ("BOOST", "booster_pump"), ("SUMP", "sump_pump"),
+    ("FP", "fire_pump"), ("JP", "fire_pump"), ("STP", "stp"), ("CRAC", "crac"), ("COLD", "cold_room"),
+    ("EV", "ev_charger"), ("PV", "solar_inverter"),
+    ("FACP", "fire_panel"), ("FAP", "fire_panel"), ("GD", "gas_detection"), ("DOOR", "access_door"),
 )
 
 
 def equipment_kind(equipment_type: Any = None, equipment_id: str = "") -> str:
-    """Normalise to: ahu | vav | fcu | chiller | pump | plant | cooling_tower | meter | other."""
+    """Normalise to an equipment kind: the HVAC kinds (ahu | vav | fcu | chiller | pump | plant |
+    cooling_tower | meter), the rest of the building (lift, generator, ups, water_tank, fire_pump,
+    ... — see config/equipment_catalog.yaml), or other."""
     t = getattr(equipment_type, "value", equipment_type)
     if t and str(t).lower() in _KIND_BY_TYPE:
         return _KIND_BY_TYPE[str(t).lower()]
@@ -243,6 +299,28 @@ for _role, _names in {
     R.ELECTRIC_POWER: ("KW", "POWER_KW", "DEMAND_KW", "TOTAL_KW"),
     R.ELECTRIC_ENERGY: ("KWH", "ENERGY_KWH", "TOTAL_KWH"),
     R.WATER_VOLUME: ("TOTAL_M3",),
+    R.RUN_STATUS: ("RUN", "RUN_STS", "RUNNING", "RUN_STATUS"),
+    R.FAULT_STATUS: ("FAULT", "FLT", "TRIP", "FAULT_STS", "TRIPPED"),
+    R.IN_SERVICE: ("INSVC", "IN_SERVICE", "IN_SVC", "AVAILABLE"),
+    R.COMMON_ALARM: ("ALM", "ALARM", "COMMON_ALARM", "COMMON_ALM", "GEN_ALM"),
+    R.HIGH_LEVEL_ALARM: ("HIGH", "HI_LVL", "HIGH_LEVEL", "HLA"),
+    R.DOOR_STATUS: ("DOOR", "DOOR_STS", "DOOR_OPEN"),
+    R.AUTO_MODE: ("AUTO", "AUTO_MODE", "IN_AUTO"),
+    R.TANK_LEVEL: ("LVL", "LEVEL", "TANK_LVL", "TANK_LEVEL"),
+    R.FUEL_LEVEL: ("FUEL", "FUEL_LVL", "FUEL_LEVEL"),
+    R.BATTERY_CHARGE: ("BATT_PCT", "BATTERY_PCT", "SOC", "BATT_CHARGE"),
+    R.LOAD_PERCENT: ("LOAD_PCT", "LOAD_PERCENT", "PCT_LOAD"),
+    R.GAS_LEVEL: ("GAS", "LEL", "GAS_LEL", "GAS_LVL"),
+    R.DISCHARGE_PRESSURE: ("DISCH_P", "DISCHARGE_P", "DISCH_PRESS", "DIS_P"),
+    R.SUCTION_PRESSURE: ("SUCT_P", "SUCTION_P", "SUC_P"),
+    R.WATER_PRESSURE: ("WATER_P", "WTR_P", "MAINS_P"),
+    R.BATTERY_VOLTAGE: ("BATT_V", "BAT_V", "BATTERY_V", "BATT_VOLTS"),
+    R.SUPPLY_VOLTAGE: ("VOLTS", "VOLTAGE", "V_LL", "V_LN"),
+    R.ELECTRIC_CURRENT: ("AMPS", "CURRENT", "I_AVG"),
+    R.SUPPLY_FREQUENCY: ("HZ", "FREQ", "FREQUENCY"),
+    R.RUN_HOURS: ("RUN_HRS", "RUNTIME", "RUN_HOURS", "HOURS"),
+    R.EQUIPMENT_TEMP: ("WINDING_TEMP", "WDG_T", "CAB_TEMP", "OIL_TEMP"),
+    R.OCCUPANCY_COUNT: ("PEOPLE", "OCC_COUNT", "HEADCOUNT", "PEOPLE_COUNT"),
 }.items():
     for _n in _names:
         _SUFFIX_EXACT[_n] = _role
@@ -330,6 +408,11 @@ _WATERFLOW_TO_LS = {"l/s": 1.0, "lps": 1.0, "literspersecond": 1.0, "m3/h": 1 / 
                     "cubicmeterspersecond": 1000.0, "gpm": 0.0630902,
                     "usgallonsperminute": 0.0630902, "l/min": 1 / 60, "lpm": 1 / 60,
                     "litersperminute": 1 / 60}
+_VOLTAGE_TO_V = {"v": 1.0, "volt": 1.0, "volts": 1.0, "kv": 1000.0, "mv": 0.001, "millivolts": 0.001}
+_CURRENT_TO_A = {"a": 1.0, "amp": 1.0, "amps": 1.0, "ampere": 1.0, "amperes": 1.0, "ma": 0.001, "ka": 1000.0}
+_FREQUENCY_TO_HZ = {"hz": 1.0, "hertz": 1.0}
+_DURATION_TO_H = {"h": 1.0, "hr": 1.0, "hrs": 1.0, "hour": 1.0, "hours": 1.0, "min": 1 / 60, "mins": 1 / 60,
+                  "minutes": 1 / 60, "s": 1 / 3600, "sec": 1 / 3600, "seconds": 1 / 3600, "d": 24.0, "days": 24.0}
 _PERCENT = {"%", "percent", "pct"}
 _FRACTION_NOUNIT = {"", "frac", "fraction", "0-1", "nounits", "none"}
 _BINARY_UNITS = {"", "bool", "binary", "nounits", "none", "on/off", "0/1", "status"}
@@ -378,11 +461,14 @@ def to_canonical(value: Any, unit: Any, role_or_quantity: Any) -> Optional[float
         return v if u in _PERCENT | {"%rh", "rh", "percentrelativehumidity"} else None
     if q is Quantity.CO2:
         return v if u in {"ppm", "partspermillion"} else None
+    if q is Quantity.COUNT:
+        return v if u in {"", "count", "people", "persons", "pax", "nounits", "none"} else None
     table = {
         Quantity.PRESSURE: _PRESSURE_TO_PA, Quantity.POWER: _POWER_TO_KW,
         Quantity.THERMAL_POWER: _THERMAL_TO_KW, Quantity.ENERGY: _ENERGY_TO_KWH,
         Quantity.VOLUME: _VOLUME_TO_M3, Quantity.AIRFLOW: _AIRFLOW_TO_M3S,
-        Quantity.WATERFLOW: _WATERFLOW_TO_LS,
+        Quantity.WATERFLOW: _WATERFLOW_TO_LS, Quantity.VOLTAGE: _VOLTAGE_TO_V,
+        Quantity.CURRENT: _CURRENT_TO_A, Quantity.FREQUENCY: _FREQUENCY_TO_HZ, Quantity.DURATION: _DURATION_TO_H,
     }[q]
     factor = table.get(u)
     return v * factor if factor is not None else None

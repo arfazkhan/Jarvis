@@ -605,6 +605,14 @@ def create_api(
             raise HTTPException(503, "manual readings are not running")
         return store
 
+    @app.get("/api/v1/coverage")
+    async def get_coverage(current_user: User = Depends(require_role(["admin", "operator", "viewer"]))):
+        """How much of the building ARVIS can see, per equipment, and what to connect next."""
+        ops = getattr(app.state, "ops_copilot", None)
+        if ops is None or not hasattr(ops, "coverage_report"):
+            raise HTTPException(503, "not running")
+        return await ops.coverage_report()
+
     @app.get("/api/v1/readings/points")
     async def list_manual_points(current_user: User = Depends(require_role(["admin", "operator", "viewer"]))):
         """The points read by people, and which are overdue."""

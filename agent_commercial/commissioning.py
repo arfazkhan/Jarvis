@@ -37,6 +37,7 @@ Schema (YAML):
             point_type: sensor           # PointType value
             role: supply-air-temp        # optional canonical role (semantics.point_roles)
             value: 16.5
+        fed_by: [CHWP-1]                 # what feeds it — or `serves: [VAV-28-01, ...]` on the parent
     zones:
       - zone_id: ZONE-28A
         name: Executive Office 28A
@@ -201,6 +202,25 @@ async def commission_building(
                 point_type=_pt_type(pt.get("point_type", "sensor")),
             ))
             counts["points"] += 1
+
+    # ── Topology: what feeds what (serves / fed_by) ───────────────────────
+    # The edges topology.py walks (impact of a failure, what's downstream). Applied
+    # after every equipment record exists, so the order of the list doesn't matter.
+    counts["topology_links"] = 0
+    for eq in spec.get("equipment", []) or []:
+        if not isinstance(eq, dict) or not eq.get("id"):
+            continue
+        links = [(eq["id"], c) for c in (eq.get("serves") or [])]
+        links += [(p, eq["id"]) for p in ([eq["fed_by"]] if isinstance(eq.get("fed_by"), str) else eq.get("fed_by") or [])]
+        for parent_id, child_id in links:
+            parent, child = await bms_state.get_equipment(parent_id), await bms_state.get_equipment(child_id)
+            if parent is None or child is None:
+                logger.warning(f"[Commission] topology link {parent_id} → {child_id}: unknown equipment")
+                continue
+            if child_id not in (parent.child_equipment_ids or []):
+                parent.child_equipment_ids = list(parent.child_equipment_ids or []) + [child_id]
+            child.parent_equipment_id = parent_id
+            counts["topology_links"] += 1
 
     # ── Zones (ghost-space detection inputs) ──────────────────────────────
     zones = spec.get("zones", []) or []

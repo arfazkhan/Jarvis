@@ -611,6 +611,7 @@ class OpsCopilot:
         # Explicit point roles declared in the site BMS config (bacnet.points /
         # modbus.registers `role:`). The commissioning spec can add more below.
         self._register_config_roles()
+        self._register_config_alarms()
 
         # Warm-start: restore previous state from DB snapshot
         restored = await self.state_engine.restore_from_snapshot()
@@ -907,6 +908,7 @@ class OpsCopilot:
         # Readings taken by people: rounds, overdue readings in the brief, typed and photo readings.
         readings = getattr(self, "manual_readings", None)
         proactive.readings = gateway.readings = engineer.readings = readings
+        engineer.coverage = proactive.coverage = self.coverage_report
         # The dashboard's jobs, from WhatsApp.
         engineer.work_orders = work_orders
         engineer.brief = proactive.brief_now
@@ -1837,10 +1839,14 @@ class OpsCopilot:
     # CALLBACKS
     # ═══════════════════════════════════════════════════════════════════════
     
-    def _register_config_roles(self) -> int:
-        """Register explicit `role:` entries from the site BMS config."""
-        from agent_commercial.semantics import get_role_registry
-        registry = get_role_registry(self.state_engine)
+    async def coverage_report(self) -> Dict[str, Any]:
+        """What ARVIS can see of the building, and what to connect next (coverage.py)."""
+        from agent_commercial.coverage import assess
+        store = getattr(self, "manual_readings", None)
+        return assess(self.state_engine, await store.points() if store is not None else [])
+
+    def _config_point_entries(self) -> list:
+        """Every point the site config declares, from every source (roles, alarm rules, ...)."""
         entries = list((self.bacnet_config.get("points_config") or {}).get("points") or [])
         from agent_commercial.modbus_adapter import modbus_register_entries
         entries += modbus_register_entries(self.modbus_config)
@@ -1850,8 +1856,24 @@ class OpsCopilot:
             kind = KINDS.get(spec.get("kind"))
             if kind is not None:
                 entries += list(kind.point_entries(spec))
+        return entries
+
+    def _register_config_alarms(self) -> int:
+        """`alarm_when` rules on any point, so every source can raise alarms (not only BACnet)."""
+        from agent_commercial.alarms.rule_alarms import RuleAlarms
+        self.rule_alarms = RuleAlarms(self.state_engine)
+        n = self.rule_alarms.load(self._config_point_entries())
+        if n:
+            self.rule_alarms.attach()
+            logger.info(f"[Alarms] {n} point alarm rules from site config")
+        return n
+
+    def _register_config_roles(self) -> int:
+        """Register explicit `role:` entries from the site BMS config."""
+        from agent_commercial.semantics import get_role_registry
+        registry = get_role_registry(self.state_engine)
         n = 0
-        for e in entries:
+        for e in self._config_point_entries():
             if isinstance(e, dict) and e.get("role") and e.get("point_id"):
                 try:
                     registry.set_explicit(e["point_id"], e["role"], unit=e.get("unit"))

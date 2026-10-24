@@ -50,6 +50,7 @@ class ProactiveEngineer:
         self.learning = None                     # Learning: learned normals are announced in the brief
         self.work_orders = None                  # WorkOrderLog: queued orders retried on this clock
         self.readings = None                     # ManualReadingStore: reading rounds + overdue readings
+        self.coverage = None                     # async () -> coverage report (owners' weekly brief)
         self.clock = utcnow                      # aware UTC now (injectable, like the store's clock)
         self.brief_hour = int(os.getenv("ARVIS_OPS_BRIEF_HOUR", "7"))
         self.brief_latest = int(os.getenv("ARVIS_OPS_BRIEF_LATEST", "11"))
@@ -92,6 +93,16 @@ class ProactiveEngineer:
             if overdue:
                 facts += "\nHand-taken readings overdue: " + "; ".join(
                     f"{p.name} (last {last.observed_at[:16] if last else 'never'})" for p, last in overdue[:8])
+        if self.coverage is not None and person.role == "owner":
+            try:
+                rep = await self.coverage()
+                if rep["level"] != "Unknown":
+                    nxt = "; ".join(f"{n['label']} {n['equipment_id']}: {n['role']} ({n['how']})" for n in rep["next"][:2])
+                    facts += (f"\nHow much of the building ARVIS sees: {rep['level']} — {rep['instrumented']:.0%} by "
+                              f"instruments, {rep['covered']:.0%} counting readings taken by people."
+                              + (f" Most useful next: {nxt}." if nxt else ""))
+            except Exception as e:
+                logger.warning(f"[Ops] coverage unavailable: {e}")
         if held:
             facts += "\nHeld for this brief:\n" + "\n".join(f"- {i.title}: {i.facts}" for i in held)
         if normals:

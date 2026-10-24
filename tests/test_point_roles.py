@@ -22,7 +22,7 @@ def test_parse_role_accepts_both_spellings():
 @pytest.mark.parametrize("etype,eid,kind", [
     (EquipmentType.AHU, "X", "ahu"), (None, "FAHU-1", "ahu"), (None, "SCHWP-02", "pump"),
     (None, "CH-3", "chiller"), (None, "CHW-PLANT", "plant"), (None, "VAV-3-12", "vav"),
-    ("fan_coil_unit", "", "fcu"), (None, "LIFT-1", "other"),
+    ("fan_coil_unit", "", "fcu"), (None, "LIFT-1", "lift"), (None, "WIDGET-1", "other"),
 ])
 def test_equipment_kind(etype, eid, kind):
     assert equipment_kind(etype, eid) == kind
@@ -141,6 +141,7 @@ def test_site_config_expands_registries_and_registers_roles(tmp_path):
 
     state = SimpleNamespace()
     ns = SimpleNamespace(state_engine=state, bacnet_config=b, modbus_config={})
+    ns._config_point_entries = lambda: OpsCopilot._config_point_entries(ns)
     assert OpsCopilot._register_config_roles(ns) == 2
     reg = get_role_registry(state)
     assert reg.resolve("CH-01/T1").role is R.CHW_SUPPLY_TEMP

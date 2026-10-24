@@ -1,0 +1,169 @@
+# What ARVIS needs from each kind of equipment, and the usual way to get it.
+#
+# required: what it takes to look after this equipment at all (an entry that is a
+#           list means "any one of these")
+# optional: what makes ARVIS sharper (more fault checks, better diagnosis)
+# how:      the usual way to connect each role on a site —
+#           bms | io_module | snmp | mqtt | manual | event | vendor_api — `default` for the rest
+# manual_interval_h: how often a person should read it if it has to be read by hand
+#
+# coverage.py compares this with what a building actually has: each role is
+# connected (an instrument), manual (read by people), imported, or missing.
+
+kinds:
+  ahu:
+    label: Air handling unit
+    required: [supply-air-temp, [supply-fan-status, supply-fan-speed]]
+    optional: [supply-air-temp-sp, return-air-temp, mixed-air-temp, outside-air-temp, cooling-valve,
+               outside-air-damper, duct-static-pressure, filter-dp, supply-airflow]
+    how: {default: bms, filter-dp: manual}
+    manual_interval_h: 24
+  vav:
+    label: VAV box
+    required: [zone-temp]
+    optional: [zone-temp-sp, terminal-damper, terminal-airflow, terminal-airflow-sp, terminal-discharge-temp]
+    how: {default: bms}
+  fcu:
+    label: Fan coil unit
+    required: [zone-temp]
+    optional: [zone-temp-sp, supply-fan-status, cooling-valve, terminal-discharge-temp]
+    how: {default: bms, zone-temp: mqtt}
+  chiller:
+    label: Chiller
+    required: [chw-supply-temp, chw-return-temp, chiller-status]
+    optional: [chw-supply-temp-sp, chiller-load, electric-power, chw-flow, condenser-water-supply-temp,
+               condenser-water-return-temp]
+    how: {default: bms}
+  plant:
+    label: District cooling transfer station
+    required: [dc-primary-supply-temp, dc-primary-return-temp]
+    optional: [dc-primary-flow, thermal-power, chw-supply-temp, chw-return-temp]
+    how: {default: bms, thermal-power: io_module}
+  pump:
+    label: Chilled / condenser water pump
+    required: [[run-status, pump-speed]]
+    optional: [chw-dp, chw-dp-sp, electric-current, discharge-pressure, fault-status]
+    how: {default: bms, electric-current: mqtt, discharge-pressure: manual}
+    manual_interval_h: 24
+  cooling_tower:
+    label: Cooling tower
+    required: [condenser-water-supply-temp, condenser-water-return-temp]
+    optional: [cooling-tower-fan-speed, run-status]
+    how: {default: bms}
+  meter:
+    label: Meter
+    required: [[electric-power, electric-energy, water-volume, thermal-power]]
+    optional: []
+    how: {default: bms, water-volume: io_module}
+    manual_interval_h: 24
+  lift:
+    label: Lift
+    required: [fault-status, in-service]
+    optional: [run-status, door-status]
+    how: {default: io_module}
+  escalator:
+    label: Escalator
+    required: [[run-status, in-service], fault-status]
+    optional: []
+    how: {default: io_module}
+  generator:
+    label: Generator
+    required: [run-status, common-alarm, fuel-level]
+    optional: [battery-voltage, run-hours, load-percent, supply-voltage, supply-frequency, equipment-temp]
+    how: {default: bms, fuel-level: manual, run-hours: manual, battery-voltage: manual}
+    manual_interval_h: 24
+  ups:
+    label: UPS
+    required: [load-percent, battery-charge]
+    optional: [common-alarm, supply-voltage, run-hours]
+    how: {default: snmp}
+  transformer:
+    label: Transformer
+    required: [equipment-temp]
+    optional: [load-percent, common-alarm]
+    how: {default: io_module, equipment-temp: manual}
+    manual_interval_h: 24
+  ats:
+    label: Automatic transfer switch
+    required: [common-alarm]
+    optional: [in-service]
+    how: {default: io_module}
+  water_tank:
+    label: Water tank
+    required: [tank-level]
+    optional: [high-level-alarm]
+    how: {default: io_module, tank-level: manual}
+    manual_interval_h: 12
+  booster_pump:
+    label: Booster pump set
+    required: [run-status, water-pressure]
+    optional: [fault-status]
+    how: {default: io_module, water-pressure: manual}
+    manual_interval_h: 24
+  sump_pump:
+    label: Sump / sewage ejector pump
+    required: [run-status, high-level-alarm]
+    optional: [fault-status]
+    how: {default: io_module}
+  fire_pump:
+    label: Fire pump (incl. jockey)
+    required: [run-status, auto-mode]
+    optional: [fault-status, discharge-pressure]
+    how: {default: io_module, auto-mode: manual, discharge-pressure: manual}
+    manual_interval_h: 24
+  stp:
+    label: Sewage treatment plant
+    required: [run-status, common-alarm]
+    optional: [tank-level]
+    how: {default: io_module}
+  cold_room:
+    label: Cold room / freezer
+    required: [equipment-temp]
+    optional: [door-status, common-alarm]
+    how: {default: mqtt, equipment-temp: mqtt}
+    manual_interval_h: 8
+  crac:
+    label: Server room cooling (CRAC)
+    required: [return-air-temp]
+    optional: [supply-air-temp, zone-humidity, common-alarm]
+    how: {default: snmp}
+  ev_charger:
+    label: EV charger
+    required: [electric-power]
+    optional: [fault-status]
+    how: {default: vendor_api}
+  solar_inverter:
+    label: Solar inverter
+    required: [electric-power]
+    optional: [electric-energy, fault-status]
+    how: {default: bms}
+  fire_panel:
+    label: Fire alarm panel
+    required: [common-alarm, fault-status]
+    optional: []
+    how: {default: bms}
+  gas_detection:
+    label: Gas detection
+    required: [[gas-level, common-alarm]]
+    optional: []
+    how: {default: io_module}
+  access_door:
+    label: Access-controlled door
+    required: []
+    optional: [door-status]
+    how: {default: event}
+  people_counter:
+    label: People counter
+    required: [occupancy-count]
+    optional: []
+    how: {default: event}
+
+# Plain-words advice for each way of connecting, used in "what to add next".
+how_to:
+  bms: add the point to the BMS point list (bacnet / modbus / opcua)
+  io_module: wire its contact or 4-20 mA signal to a Modbus I/O module (docs/connect/io_modules.md)
+  snmp: read it over SNMP from the device's network card
+  mqtt: fit a wireless sensor and read it over MQTT
+  manual: add it to a reading round — a technician reads it on WhatsApp (docs/connect/people.md)
+  event: feed the system's events (access control, people counters)
+  vendor_api: use the vendor's API if it has one, else report it on WhatsApp
