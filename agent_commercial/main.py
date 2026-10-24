@@ -1099,14 +1099,12 @@ class OpsCopilot:
         """Start with Modbus TCP connection"""
         logger.info("Starting Modbus mode...")
 
-        host = self.modbus_config.get("host", "127.0.0.1")
-        port = self.modbus_config.get("port", 502)
-        unit_id = self.modbus_config.get("unit_id", 1)
-
-        self.modbus_adapter = ModbusAdapter(host=host, port=port, unit_id=unit_id)
+        from agent_commercial.modbus_adapter import modbus_adapter_from_config
+        self.modbus_adapter = modbus_adapter_from_config(self.modbus_config)
+        where = self.modbus_adapter._where()
         success = await self.modbus_adapter.connect()
         if not success:
-            logger.error(f"Failed to connect to Modbus device at {host}:{port}")
+            logger.error(f"Failed to connect to Modbus device at {where}")
             self._bms_connected = False
             self.data_source = "UNAVAILABLE"
             # HARD-FAIL: never silently replace a failed live connection with
@@ -1114,7 +1112,7 @@ class OpsCopilot:
             # back to the simulator if explicitly allowed, and mark it SIMULATED.
             if not self.modbus_config.get("allow_offline"):
                 raise RuntimeError(
-                    f"Modbus connection to {host}:{port} failed. Fix the connection, "
+                    f"Modbus connection to {where} failed. Fix the connection, "
                     "use mode='simulator', or set modbus_config['allow_offline']=True "
                     "to run on SIMULATED data (clearly flagged, not live)."
                 )
@@ -1127,7 +1125,7 @@ class OpsCopilot:
             self._bms_connected = True
 
         count = 0
-        if "registers" in self.modbus_config:
+        if "registers" in self.modbus_config or "io_modules" in self.modbus_config:
             count = self.modbus_adapter.load_points_from_config(self.modbus_config)
             logger.info(f"Loaded {count} Modbus register points")
         if count == 0 and os.getenv("ARVIS_ENV", "development").lower() == "production":
@@ -1835,7 +1833,8 @@ class OpsCopilot:
         from agent_commercial.semantics import get_role_registry
         registry = get_role_registry(self.state_engine)
         entries = list((self.bacnet_config.get("points_config") or {}).get("points") or [])
-        entries += list(self.modbus_config.get("registers") or [])
+        from agent_commercial.modbus_adapter import modbus_register_entries
+        entries += modbus_register_entries(self.modbus_config)
         entries += list((getattr(self, "opcua_config", None) or {}).get("points") or [])
         from agent_commercial.sources import KINDS
         for spec in getattr(self, "sources_config", None) or []:

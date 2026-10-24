@@ -1,0 +1,11 @@
+# Digital inputs (dry contacts) on a Modbus I/O module.
+# Any volt-free contact — a lift's "fault" relay, a pump's "running" auxiliary, a
+# float switch, a panel's "common alarm" — becomes a 0/1 point. Channel n is read
+# from address_base + n. Check the module's manual for its base address (and
+# whether it exposes inputs as discrete inputs or coils).
+name: Digital inputs (dry contacts)
+kind: digital
+register_type: discrete
+data_type: uint16
+address_base: 0
+address_step: 1

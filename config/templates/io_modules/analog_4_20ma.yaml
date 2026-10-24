@@ -1,0 +1,13 @@
+# Analog inputs, 4-20 mA (or 0-10 V) on a Modbus I/O module.
+# A transmitter's current loop — tank level, pressure, temperature, flow — becomes
+# a value in engineering units: each channel declares the range its transmitter
+# covers (e.g. range: [0, 100] for a level in %), and ARVIS maps the module's raw
+# counts onto it. raw_range is the module's counts at 4 mA and 20 mA — check its
+# manual (common values: [4000, 20000] µA, [0, 65535], [819, 4095]).
+name: Analog inputs 4-20 mA
+kind: analog
+register_type: input
+data_type: uint16
+address_base: 0
+address_step: 1
+raw_range: [4000, 20000]

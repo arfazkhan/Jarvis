@@ -180,8 +180,13 @@ async def _bacnet_post_wire(ops: Any, adapter: Any, cfg: Dict[str, Any], connect
 
 
 def _modbus_build(cfg: Dict[str, Any]) -> Any:
-    from agent_commercial.modbus_adapter import ModbusAdapter
-    return ModbusAdapter(host=cfg.get("host", "127.0.0.1"), port=cfg.get("port", 502), unit_id=cfg.get("unit_id", 1))
+    from agent_commercial.modbus_adapter import modbus_adapter_from_config
+    return modbus_adapter_from_config(cfg)
+
+
+def _modbus_entries(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+    from agent_commercial.modbus_adapter import modbus_register_entries
+    return modbus_register_entries(cfg)
 
 
 def _opcua_build(cfg: Dict[str, Any]) -> Any:
@@ -192,7 +197,6 @@ def _opcua_build(cfg: Dict[str, Any]) -> Any:
 register_source("bacnet", build=_bacnet_build, points_config=lambda cfg: cfg.get("points_config") or {"points": []},
                 point_entries=lambda cfg: list((cfg.get("points_config") or {}).get("points") or []),
                 post_wire=_bacnet_post_wire, default_poll=60.0)
-register_source("modbus", build=_modbus_build, points_config=lambda cfg: cfg,
-                point_entries=lambda cfg: list(cfg.get("registers") or []))
+register_source("modbus", build=_modbus_build, points_config=lambda cfg: cfg, point_entries=_modbus_entries)
 register_source("opcua", build=_opcua_build, points_config=lambda cfg: cfg,
                 point_entries=lambda cfg: list(cfg.get("points") or []))

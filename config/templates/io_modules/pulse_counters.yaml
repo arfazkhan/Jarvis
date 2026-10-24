@@ -1,0 +1,10 @@
+# Pulse counters on a Modbus I/O module.
+# A meter with a pulse output — water, gas, energy, BTU — becomes a running total:
+# each channel declares per_pulse (e.g. 0.01 m³ per pulse, 1 kWh per pulse).
+# Counters are 32-bit: two registers per channel.
+name: Pulse counters
+kind: counter
+register_type: holding
+data_type: uint32
+address_base: 0
+address_step: 2

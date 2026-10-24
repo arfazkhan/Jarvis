@@ -49,7 +49,7 @@ from typing import Dict, List, Optional, Any, Callable
 import warnings
 
 try:
-    from pymodbus.client import AsyncModbusTcpClient
+    from pymodbus.client import AsyncModbusSerialClient, AsyncModbusTcpClient
     from pymodbus.exceptions import ModbusException
     PYMODBUS_AVAILABLE = True
 except ImportError:
@@ -164,15 +164,30 @@ class ModbusAdapter:
 
     def __init__(
         self,
-        host: str,
+        host: str = "",
         port: int = 502,
         unit_id: int = 1,
         timeout: float = 5.0,
+        transport: str = "tcp",
+        serial_port: str = "",
+        baudrate: int = 9600,
+        parity: str = "N",
+        stopbits: int = 1,
+        bytesize: int = 8,
     ):
+        """transport "tcp" (host/port) or "rtu": Modbus RTU over a serial line
+        (RS-485) — meters, gensets, drives and I/O modules that have no Ethernet."""
+        self.transport = (transport or "tcp").lower()
+        if self.transport not in ("tcp", "rtu"):
+            raise ValueError(f"Modbus transport must be tcp or rtu, not {transport!r}")
+        if self.transport == "rtu" and not serial_port:
+            raise ValueError("Modbus RTU needs serial_port (e.g. /dev/ttyUSB0 or COM3)")
         self.host = host
         self.port = port
         self.unit_id = unit_id
         self.timeout = timeout
+        self.serial_port, self.baudrate, self.parity = serial_port, int(baudrate), str(parity).upper()
+        self.stopbits, self.bytesize = int(stopbits), int(bytesize)
 
         self._client: Optional[Any] = None
         self._is_connected = False
@@ -194,25 +209,35 @@ class ModbusAdapter:
             "last_read": None,
         }
 
-        logger.info(f"ModbusAdapter initialized ({host}:{port} unit={unit_id})")
+        logger.info(f"ModbusAdapter initialized ({self._where()} unit={unit_id})")
+
+    def _where(self) -> str:
+        if self.transport == "rtu":
+            return f"RTU {self.serial_port} {self.baudrate} {self.bytesize}{self.parity}{self.stopbits}"
+        return f"{self.host}:{self.port}"
 
     async def connect(self) -> bool:
         if not PYMODBUS_AVAILABLE:
             logger.error("pymodbus not installed. Cannot connect.")
             return False
         try:
-            self._client = AsyncModbusTcpClient(
-                host=self.host,
-                port=self.port,
-                timeout=self.timeout,
-            )
+            if self.transport == "rtu":
+                self._client = AsyncModbusSerialClient(
+                    port=self.serial_port, baudrate=self.baudrate, parity=self.parity,
+                    stopbits=self.stopbits, bytesize=self.bytesize, timeout=self.timeout)
+            else:
+                self._client = AsyncModbusTcpClient(
+                    host=self.host,
+                    port=self.port,
+                    timeout=self.timeout,
+                )
             connected = await self._client.connect()
             if connected:
                 self._is_connected = True
-                logger.info(f"Modbus connected to {self.host}:{self.port}")
+                logger.info(f"Modbus connected to {self._where()}")
                 return True
             else:
-                logger.error(f"Modbus connection failed to {self.host}:{self.port}")
+                logger.error(f"Modbus connection failed to {self._where()}")
                 return False
         except Exception as e:
             logger.error(f"Modbus connect error: {e}")
@@ -346,10 +371,11 @@ class ModbusAdapter:
         self._freshness.register(point.point_id)
 
     def load_points_from_config(self, config: Dict[str, Any]) -> int:
-        """Load register map from config dict."""
+        """Load register map from config dict: `registers`, plus any `io_modules`
+        (Modbus I/O boxes wired to dumb equipment — see io_modules.py)."""
         count = 0
         default_unit_id = config.get("unit_id", self.unit_id)
-        for reg in config.get("registers", []):
+        for reg in modbus_register_entries(config):
             try:
                 self.add_point(_point_from_config(reg, default_unit_id))
                 count += 1
@@ -408,6 +434,23 @@ class ModbusAdapter:
             "stale_points": self._freshness.stale_points,
             "polling_active": self._poll_task is not None and not self._poll_task.done(),
         }
+
+
+def modbus_register_entries(config: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Every register a Modbus config describes: the explicit `registers` plus the
+    expanded `io_modules` (template + what is wired to each channel)."""
+    regs = list(config.get("registers") or [])
+    if config.get("io_modules"):
+        from agent_commercial.io_modules import expand
+        regs += expand(config["io_modules"])
+    return regs
+
+
+def modbus_adapter_from_config(cfg: Dict[str, Any]) -> "ModbusAdapter":
+    return ModbusAdapter(host=cfg.get("host", "127.0.0.1"), port=cfg.get("port", 502), unit_id=cfg.get("unit_id", 1),
+                         timeout=float(cfg.get("timeout", 5.0)), transport=cfg.get("transport", "tcp"),
+                         serial_port=cfg.get("serial_port", ""), baudrate=cfg.get("baudrate", 9600),
+                         parity=cfg.get("parity", "N"), stopbits=cfg.get("stopbits", 1), bytesize=cfg.get("bytesize", 8))
 
 
 def _point_from_config(reg: Dict[str, Any], default_unit_id: int) -> ModbusPoint:
