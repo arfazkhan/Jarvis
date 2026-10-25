@@ -231,3 +231,5 @@ def _lazy(kind: str, module: str, default_poll: float = 30.0) -> None:
 _lazy("mqtt", "agent_commercial.sources.mqtt_source")
 _lazy("snmp", "agent_commercial.sources.snmp_source", default_poll=60.0)
 _lazy("rest", "agent_commercial.sources.rest_source", default_poll=120.0)
+_lazy("mbus", "agent_commercial.sources.mbus_source", default_poll=900.0)
+_lazy("knx", "agent_commercial.sources.knx_source", default_poll=60.0)

@@ -46,3 +46,19 @@ sources:
     points:
       - {point_id: LIFT-2/INSVC, path: /v1/units/2/status, value: "$.inService"}
       - {point_id: LIFT-2/FAULT, path: /v1/units/2/status, value: "$.fault", alarm_when: {op: "==", value: 1}}
+
+  - id: btu                       # tenant cooling (BTU) meters on M-Bus, through a TCP level converter
+    kind: mbus
+    required: false
+    host: 10.10.0.80
+    port: 10001
+    poll_interval: 900
+    meters:
+      - {address: 1, equipment_id: MTR-BTU-T1, type: cooling}
+
+  - id: knx                       # lighting / rooms on KNX, listening to the IP router (sends nothing)
+    kind: knx
+    required: false
+    mode: routing
+    devices:
+      - {template: dali_light, equipment_id: LGT-L5-01, ga: {STATUS: 1/4/3, LEVEL: 1/2/3, FAULT: 1/7/3}}

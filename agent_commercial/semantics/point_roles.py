@@ -113,6 +113,7 @@ class PointRole(str, Enum):
     DC_PRIMARY_RETURN_TEMP = "dc-primary-return-temp"
     DC_PRIMARY_FLOW = "dc-primary-flow"
     THERMAL_POWER = "thermal-power"
+    THERMAL_ENERGY = "thermal-energy"         # heat / cooling (BTU) meter, kWh
     # ── Meters ────────────────────────────────────────────────────────────
     ELECTRIC_POWER = "electric-power"
     ELECTRIC_ENERGY = "electric-energy"
@@ -142,6 +143,7 @@ class PointRole(str, Enum):
     WATER_FLOW = "water-flow"
     OCCUPANCY_COUNT = "occupancy-count"        # people in a zone
     SCHEDULED_OCCUPANCY = "scheduled-occupancy"  # booked / scheduled (calendar), 0/1
+    LIGHT_LEVEL = "light-level"                # dimming level, 0–1
 
 
 _Q = Quantity
@@ -176,6 +178,7 @@ ROLE_QUANTITY: Dict[PointRole, Quantity] = {
     PointRole.DC_PRIMARY_SUPPLY_TEMP: _Q.TEMPERATURE,
     PointRole.DC_PRIMARY_RETURN_TEMP: _Q.TEMPERATURE,
     PointRole.DC_PRIMARY_FLOW: _Q.WATERFLOW, PointRole.THERMAL_POWER: _Q.THERMAL_POWER,
+    PointRole.THERMAL_ENERGY: _Q.ENERGY,
     PointRole.ELECTRIC_POWER: _Q.POWER, PointRole.ELECTRIC_ENERGY: _Q.ENERGY,
     PointRole.WATER_VOLUME: _Q.VOLUME,
     PointRole.RUN_STATUS: _Q.BINARY, PointRole.FAULT_STATUS: _Q.BINARY, PointRole.IN_SERVICE: _Q.BINARY,
@@ -189,7 +192,7 @@ ROLE_QUANTITY: Dict[PointRole, Quantity] = {
     PointRole.ELECTRIC_CURRENT: _Q.CURRENT, PointRole.SUPPLY_FREQUENCY: _Q.FREQUENCY,
     PointRole.RUN_HOURS: _Q.DURATION, PointRole.EQUIPMENT_TEMP: _Q.TEMPERATURE,
     PointRole.WATER_FLOW: _Q.WATERFLOW, PointRole.OCCUPANCY_COUNT: _Q.COUNT,
-    PointRole.SCHEDULED_OCCUPANCY: _Q.BINARY,
+    PointRole.SCHEDULED_OCCUPANCY: _Q.BINARY, PointRole.LIGHT_LEVEL: _Q.FRACTION,
 }
 assert set(ROLE_QUANTITY) == set(PointRole), "every role needs a quantity"
 
@@ -213,7 +216,8 @@ def parse_role(value: Any) -> Optional[PointRole]:
 _KIND_BY_TYPE = {
     "air_handling_unit": "ahu", "variable_air_volume": "vav", "fan_coil_unit": "fcu",
     "chiller": "chiller", "pump": "pump", "cooling_tower": "cooling_tower",
-    "electric_meter": "meter", "water_meter": "meter", "gas_meter": "meter",
+    "electric_meter": "meter", "water_meter": "meter", "gas_meter": "meter", "heat_meter": "meter",
+    "lighting_panel": "lighting", "lighting": "lighting",
     # the rest of the building
     "lift": "lift", "escalator": "escalator", "generator": "generator", "ups": "ups",
     "transformer": "transformer", "ats": "ats", "water_tank": "water_tank", "booster_pump": "booster_pump",
@@ -232,6 +236,7 @@ _KIND_BY_PREFIX = (
     ("FP", "fire_pump"), ("JP", "fire_pump"), ("STP", "stp"), ("CRAC", "crac"), ("COLD", "cold_room"),
     ("EV", "ev_charger"), ("PV", "solar_inverter"),
     ("FACP", "fire_panel"), ("FAP", "fire_panel"), ("GD", "gas_detection"), ("DOOR", "access_door"),
+    ("LGT", "lighting"), ("LTG", "lighting"), ("DALI", "lighting"),
 )
 
 

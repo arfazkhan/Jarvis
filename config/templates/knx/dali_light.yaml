@@ -1,0 +1,12 @@
+# A DALI light (or DALI group) as a KNX-DALI gateway exposes it.
+# Gateways (ABB DG/S, MDT, Siemens N 141, ...) give each ballast / group these
+# objects; the group addresses are the installation's, set per device:
+#   devices: [{template: dali_light, equipment_id: LGT-L5-01, ga: {STATUS: 1/4/3, LEVEL: 1/2/3, FAULT: 1/7/3}}]
+# Only the objects given a group address become points.
+label: DALI light through a KNX-DALI gateway
+objects:
+  - {suffix: STATUS, dpt: "1.001", role: run-status}                      # on / off feedback
+  - {suffix: LEVEL, dpt: "5.001", unit: "%", role: light-level}           # brightness feedback
+  - {suffix: FAULT, dpt: "1.005", role: fault-status,                     # lamp / ballast (ECG) failure
+     alarm_when: {op: "==", value: 1, severity: low, message: "Lamp or driver failure"}}
+  - {suffix: POWER, dpt: "14.056", unit: W}                               # some gateways report power per group

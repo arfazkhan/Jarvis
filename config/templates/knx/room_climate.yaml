@@ -1,0 +1,10 @@
+# A KNX room controller / thermostat (fan coils, chilled ceilings, underfloor).
+#   devices: [{template: room_climate, equipment_id: FCU-501, ga: {TEMP: 3/1/10, SETPOINT: 3/2/10, VALVE: 3/3/10}}]
+label: KNX room climate controller
+objects:
+  - {suffix: TEMP, dpt: "9.001", unit: "°C", role: zone-temp, max_silence_s: 3600}   # usually sent cyclically
+  - {suffix: SETPOINT, dpt: "9.001", unit: "°C", role: zone-temp-sp}
+  - {suffix: VALVE, dpt: "5.001", unit: "%", role: cooling-valve}
+  - {suffix: HUMIDITY, dpt: "9.007", unit: "%RH", role: zone-humidity}
+  - {suffix: CO2, dpt: "9.008", unit: ppm, role: zone-co2}
+  - {suffix: PRESENCE, dpt: "1.018", role: occupancy}

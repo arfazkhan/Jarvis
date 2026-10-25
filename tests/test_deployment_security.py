@@ -88,6 +88,29 @@ def test_the_rest_source_only_ever_gets():
     assert not verbs, f"rest_source.py uses {verbs}"
 
 
+def _sends_outside(path, sender: str, calls: tuple) -> list:
+    """Calls named `calls` anywhere in the module except inside the function `sender`."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    inside = set()
+    for fn in ast.walk(tree):
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name == sender:
+            inside |= {id(n) for n in ast.walk(fn)}
+    return [n.lineno for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, (ast.Attribute, ast.Name))
+            and getattr(n.func, "attr", getattr(n.func, "id", None)) in calls and id(n) not in inside]
+
+
+def test_mbus_and_knx_send_only_through_their_allowlist():
+    """M-Bus: every frame is built in _send (link reset / data request only — never SND_UD).
+    KNX: every datagram leaves through _send (tunnel upkeep only — never a TUNNELLING_REQUEST)."""
+    from agent_commercial.sources import knx_source, mbus_source
+    src = ROOT / "agent_commercial" / "sources"
+    assert not _sends_outside(src / "mbus_source.py", "_send", ("short_frame",))
+    assert not _sends_outside(src / "knx_source.py", "_send", ("sendto", "_header"))
+    assert set(mbus_source.ALLOWED_C) == {0x40, 0x5B, 0x7B}                 # SND_NKE, REQ_UD2 (± FCB)
+    assert knx_source.TUNNELLING_REQUEST not in knx_source.ALLOWED_TO_SEND
+    assert knx_source.ROUTING_INDICATION not in knx_source.ALLOWED_TO_SEND
+
+
 def test_the_scan_actually_catches_a_write(tmp_path):
     """Guard against the scanner silently matching nothing."""
     tree = ast.parse("client.write_register(1, 2)\nfrom bacpypes3.apdu import WritePropertyRequest\n"

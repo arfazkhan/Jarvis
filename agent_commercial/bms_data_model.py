@@ -34,6 +34,7 @@ class EquipmentType(Enum):
     METER_ELECTRIC = "electric_meter"
     METER_WATER = "water_meter"
     METER_GAS = "gas_meter"
+    METER_HEAT = "heat_meter"          # heat / cooling (BTU) meter
     LIGHTING_PANEL = "lighting_panel"
     BMS_CONTROLLER = "bms_controller"
     SENSOR = "sensor"

@@ -4,7 +4,7 @@
 #           list means "any one of these")
 # optional: what makes ARVIS sharper (more fault checks, better diagnosis)
 # how:      the usual way to connect each role on a site —
-#           bms | io_module | snmp | mqtt | manual | event | vendor_api — `default` for the rest
+#           bms | io_module | snmp | mqtt | knx | mbus | manual | event | vendor_api — `default` for the rest
 # manual_interval_h: how often a person should read it if it has to be read by hand
 #
 # coverage.py compares this with what a building actually has: each role is
@@ -52,7 +52,7 @@ kinds:
     how: {default: bms}
   meter:
     label: Meter
-    required: [[electric-power, electric-energy, water-volume, thermal-power]]
+    required: [[electric-power, electric-energy, water-volume, thermal-power, thermal-energy]]
     optional: []
     how: {default: bms, water-volume: io_module}
     manual_interval_h: 24
@@ -147,6 +147,11 @@ kinds:
     required: [[gas-level, common-alarm]]
     optional: []
     how: {default: io_module}
+  lighting:
+    label: Lighting (circuit, DALI group)
+    required: [[run-status, light-level]]
+    optional: [fault-status, electric-power]
+    how: {default: knx}
   access_door:
     label: Access-controlled door
     required: []
@@ -167,3 +172,5 @@ how_to:
   manual: add it to a reading round — a technician reads it on WhatsApp (docs/connect/people.md)
   event: feed the system's events (access control, people counters)
   vendor_api: use the vendor's API if it has one, else report it on WhatsApp
+  knx: listen to it on the KNX bus through the IP router or interface (docs/connect/knx_mbus.md)
+  mbus: read the meter over M-Bus through a level converter / gateway (docs/connect/knx_mbus.md)

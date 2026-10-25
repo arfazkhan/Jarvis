@@ -13,6 +13,8 @@ ARVIS is **read-only** on every rung: it never writes to a building system.
 | 5. People | Gauges, mechanical meters, anything read by eye | WhatsApp readings, gauge photos, reading rounds, logbooks | [people.md](people.md) |
 | 6. Events | Access control, people counters, room bookings | Webhook, CSV, calendar files | [events.md](events.md) |
 | 7. History and vendors | Trend exports, utility bills, vendor cloud APIs | Import, REST | [history_vendors.md](history_vendors.md) |
+| 8. Meters, lighting, rooms | BTU / water / electricity meters on M-Bus; KNX lighting, blinds, room controllers; DALI through its gateway | M-Bus, KNX (listen-only) | [knx_mbus.md](knx_mbus.md) |
+| — | EV chargers | the CSMS's API, Modbus, the circuit meter — not OCPP ([why](ev_chargers.md)) | [ev_chargers.md](ev_chargers.md) |
 
 ## Systems with only a vendor cloud
 
