@@ -110,7 +110,6 @@ class GSASDataExtractor:
         """Structured extraction from text."""
         doc_id = str(uuid.uuid4())[:8]
         
-        # Simulate LLM call
         logger.info(f"Extracting structured data from {document_type} using LLM")
         
         extracted_data = {}

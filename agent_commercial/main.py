@@ -42,7 +42,7 @@ from agent_commercial.alarm_engine import AlarmEngine
 from agent_commercial.energy_analyzer import EnergyAnalyzer
 from agent_commercial.predictive_maintenance import PredictiveMaintenanceEngine
 from agent_commercial.bacnet_adapter import BACnetAdapter, BACnetSimulatorAdapter, BACnetPoint
-from agent_commercial.modbus_adapter import ModbusAdapter, ModbusSimulatorAdapter
+from agent_commercial.modbus_adapter import ModbusAdapter
 from agent_commercial.api.routes import create_api
 from agent_commercial.tools_schema import BMSToolHandler, get_bms_tools, get_ops_copilot_prompt
 from agent_commercial.briefing_engine import BriefingGenerator
@@ -1126,19 +1126,14 @@ class OpsCopilot:
             logger.error(f"Failed to connect to Modbus device at {where}")
             self._bms_connected = False
             self.data_source = "UNAVAILABLE"
-            # HARD-FAIL: never silently replace a failed live connection with
-            # simulated data — that serves fake readings as if real. Only fall
-            # back to the simulator if explicitly allowed, and mark it SIMULATED.
+            # No simulator fallback: allow_offline starts degraded with NO data and the
+            # adapter keeps reconnecting (with backoff); it never serves made-up readings.
             if not self.modbus_config.get("allow_offline"):
                 raise RuntimeError(
-                    f"Modbus connection to {where} failed. Fix the connection, "
-                    "use mode='simulator', or set modbus_config['allow_offline']=True "
-                    "to run on SIMULATED data (clearly flagged, not live)."
+                    f"Modbus connection to {where} failed. Fix the connection, or set "
+                    "modbus.allow_offline: true to start degraded (no data until it connects)."
                 )
-            logger.warning("Modbus allow_offline set — running on SIMULATED data (NOT live)")
-            self.modbus_adapter = ModbusSimulatorAdapter()
-            await self.modbus_adapter.connect()
-            self.data_source = "SIMULATED"
+            logger.warning(f"Modbus {where} unreachable — starting degraded, retrying in the background")
         else:
             # Connected ≠ live data: LIVE is set on the first GOOD reading.
             self._bms_connected = True
